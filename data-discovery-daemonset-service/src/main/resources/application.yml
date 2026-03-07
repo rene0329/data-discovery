@@ -52,3 +52,8 @@ logging:
         level:
                 org.example: DEBUG
                 io.fabric8.kubernetes.client: INFO
+
+management:
+        health:
+                redis:
+                        enabled: false
