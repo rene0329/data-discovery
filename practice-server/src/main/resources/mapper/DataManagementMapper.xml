@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="org.example.mapper.DataManagementMapper">
+
+    <resultMap id="BaseResultMap" type="org.example.entity.DataManagement">
+        <id column="data_id" property="dataId"/>
+        <result column="data_name" property="dataName"/>
+        <result column="file_path" property="filePath"/>
+        <result column="data_size" property="dataSize"/>
+        <result column="last_modified_time" property="lastModifiedTime"/>
+        <result column="file_type" property="fileType"/>
+        <result column="md5_hash" property="md5Hash"/>
+        <result column="data_node_id" property="dataNodeId"/>
+        <result column="data_server" property="dataServer"/>
+        <result column="data_heat" property="dataHeat"/>
+        <result column="data_status" property="dataStatus"/>
+        <result column="backup_server" property="backupServer"/>
+        <result column="data_count" property="dataCount"/>
+        <result column="data_description" property="dataDescription"/>
+        <result column="requiredCpu" property="requiredCpu"/>
+        <result column="requiredMemory" property="requiredMemory"/>
+    </resultMap>
+
+    <update id="save">
+        update data_management
+        <set>
+            <if test="dataHeat != null">data_heat = #{dataHeat},</if>
+        </set>
+        where data_name = #{dataName}
+    </update>
+
+    <select id="getDataServerbyDataName" resultType="String">
+        SELECT data_server
+        FROM data_management
+        WHERE data_name = #{dataName}
+    </select>
+
+    <select id="list" resultType="org.example.entity.DataManagement">
+        select * from data_management where data_status = 1
+        <if test="query != null and query != ''">
+            and (
+            data_name like concat('%', #{query}, '%')
+            or data_description like concat('%', #{query}, '%')
+            )
+        </if>
+    </select>
+
+    <select id="adminList" resultType="org.example.entity.DataManagement">
+        select * from data_management where 1=1
+        <if test="query != null and query != ''">
+            and (
+            data_name like concat('%', #{query}, '%')
+            or data_description like concat('%', #{query}, '%')
+            )
+        </if>
+    </select>
+
+    <select id="getCentralityNodes" resultType="org.example.entity.NodeManagement">
+        SELECT nm.*
+        FROM node_management nm
+        WHERE nm.type IN ('存储节点', '计算存储节点')
+        ORDER BY
+        (SELECT COUNT(*) FROM edge_management em WHERE em.source_id = nm.node_id) DESC
+    </select>
+
+    <select id="getAllDataByHeat" resultType="org.example.entity.DataManagement">
+        SELECT * FROM data_management
+        ORDER BY data_heat DESC
+    </select>
+
+    <update id="updateDataHeat" parameterType="map">
+        UPDATE data_management
+        SET data_heat = #{newHeat}
+        WHERE data_name = #{dataName}
+    </update>
+
+    <update id="updateBackupServer">
+        UPDATE data_management
+        SET backup_server = #{backupServer}
+        WHERE data_id = #{dataId}
+    </update>
+
+    <update id="updateDataStatus">
+        UPDATE data_management
+        SET data_status = 1-data_status
+        WHERE data_name= #{data_name}
+    </update>
+
+    <select id="getAllFilePathsForNode" resultType="java.lang.String">
+        SELECT file_path FROM data_management WHERE data_node_id = #{dataNodeId}
+    </select>
+
+    <select id="findByDataNodeIdAndFilePath" resultMap="BaseResultMap">
+        SELECT * FROM data_management
+        WHERE data_node_id = #{dataNodeId} AND file_path = #{filePath}
+    </select>
+
+    <update id="updateDataServer" parameterType="org.example.entity.DataManagement">
+        UPDATE data_management
+        SET data_server = #{dataServer},
+            data_node_id = #{dataNodeId}
+        WHERE data_name = #{dataName}
+    </update>
+
+    <!-- 更新数据块的 heat 值 -->
+    <update id="incrementDataCount" parameterType="String">
+        UPDATE data_management
+        SET data_count = data_count + 1
+        WHERE data_name = #{dataName}
+    </update>
+
+    <select id="getAllData" resultType="org.example.entity.DataManagement">
+        SELECT * FROM data_management
+    </select>
+
+    <insert id="insertFile" parameterType="org.example.entity.DataManagement" useGeneratedKeys="true" keyProperty="dataId">
+        INSERT INTO data_management (
+            data_name,
+            file_path,
+            data_size,
+            last_modified_time,
+            file_type,
+            md5_hash,
+            data_node_id,
+            data_server,
+            data_heat,
+            data_status,
+            backup_server,
+            data_count,
+            data_description,
+            requiredCpu,
+            requiredMemory
+        ) VALUES (
+            #{dataName},
+            #{filePath},
+            #{dataSize},
+            #{lastModifiedTime},
+            #{fileType},
+            #{md5Hash},
+            #{dataNodeId},
+            #{dataServer},
+            #{dataHeat},
+            #{dataStatus},
+            #{backupServer},
+            #{dataCount},
+            #{dataDescription},
+            #{requiredCpu},
+            #{requiredMemory}
+        )
+    </insert>
+
+    <update id="updateFile" parameterType="org.example.entity.DataManagement">
+        UPDATE data_management
+        SET
+            data_name = #{dataName},
+            file_path = #{filePath},
+            data_size = #{dataSize},
+            last_modified_time = #{lastModifiedTime},
+            file_type = #{fileType},
+            md5_hash = #{md5Hash},
+            data_node_id = #{dataNodeId},
+            data_server = #{dataServer},
+            data_heat = #{dataHeat},
+            data_status = #{dataStatus},
+            backup_server = #{backupServer},
+            data_count = #{dataCount},
+            data_description = #{dataDescription},
+            requiredCpu = #{requiredCpu},
+            requiredMemory = #{requiredMemory}
+        WHERE data_id = #{dataId}
+    </update>
+
+    <delete id="deleteFile" parameterType="int">
+        DELETE FROM data_management WHERE data_id = #{dataId}
+    </delete>
+</mapper>

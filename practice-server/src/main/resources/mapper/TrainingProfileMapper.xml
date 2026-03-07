@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="org.example.mapper.TrainingProfileMapper">
+
+    <resultMap id="TrainingProfileResultMap" type="org.example.entity.TrainingProfile">
+        <id property="id" column="id"/>
+        <result property="profileId" column="profile_id"/>
+        <result property="taskType" column="task_type"/>
+        <result property="modelType" column="model_type"/>
+        <result property="image" column="image"/>
+        <result property="entrypoint" column="entrypoint"/>
+        <result property="dataPathTemplate" column="data_path_template"/>
+        <result property="defaultCpu" column="default_cpu"/>
+        <result property="defaultMem" column="default_mem"/>
+        <result property="active" column="active"/>
+    </resultMap>
+
+    <select id="findByDatasetName" resultMap="TrainingProfileResultMap">
+        SELECT p.*
+        FROM training_profile p
+        JOIN dataset_profile_binding b ON b.profile_id = p.profile_id
+        WHERE b.dataset_name = #{datasetName}
+          AND p.active = 1
+        LIMIT 1
+    </select>
+
+    <select id="findDefaultByTaskType" resultMap="TrainingProfileResultMap">
+        SELECT *
+        FROM training_profile
+        WHERE task_type = #{taskType}
+          AND active = 1
+        ORDER BY id ASC
+        LIMIT 1
+    </select>
+
+</mapper>

@@ -1,0 +1,54 @@
+server:
+        port: 8080
+
+app:
+        data:
+                directory: /data
+
+# 添加路径匹配策略（解决 Springfox/Knife4j 兼容问题）
+spring:
+        mvc:
+                pathmatch:
+                        matching-strategy: ant_path_matcher
+
+        profiles:
+                active: dev
+        datasource:
+                druid:
+                        driver-class-name: com.mysql.cj.jdbc.Driver
+                        url: jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8
+                        username: root
+                        password: ibdiibdi
+        main:
+                allow-circular-references: true
+
+mybatis:
+        mapper-locations: classpath:mapper/*.xml
+        type-aliases-package: org.example.entity
+        configuration:
+                map-underscore-to-camel-case: true
+
+
+# Kubernetes 配置
+kubernetes:
+        config:
+                path: C:/Users/xuty/.kube/config
+
+# 节点名称（本地测试时设置为远程集群的真实节点名）
+node:
+        name: ${NODE_NAME:master-141}
+
+# 文件发现配置
+file:
+        discovery:
+                data-directory: C:/test-data
+                enable-md5: false
+                md5-max-size-mb: 100
+                scan:
+                        interval:
+                                ms: 60000  # 1分钟扫描一次
+
+logging:
+        level:
+                org.example: DEBUG
+                io.fabric8.kubernetes.client: INFO

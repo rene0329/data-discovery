@@ -1,0 +1,116 @@
+server:
+  port: 8080
+
+spring:
+  profiles:
+    active: prod # 在K8s中通常激活生产环境profile
+  main:
+    allow-circular-references: true # 这个配置可以保留
+  application:
+    name: practice-server # 应用名称，用于日志和K8s标签
+
+  datasource:
+    druid: # 或者使用 hikari，你的application-dev.yml中是hikari
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      url: jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8
+      username: root
+      password: ibdiibdi
+    # 你的 application-dev.yml 中有 Hikari 配置，如果项目中使用的是 Hikari，请使用以下配置块并注释掉 Druid
+    # hikari:
+    #   driver-class-name: com.mysql.cj.jdbc.Driver
+    #   url: jdbc:mysql://mysql-service.default.svc.cluster.local:3306/Subject4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8
+    #   connection-timeout: 30000
+    #   maximum-pool-size: 10
+    #   minimum-idle: 5
+
+
+  redis:
+    host: redis-service.default.svc.cluster.local # 假设Redis在K8s内部，Service名为redis-service
+    port: 6379
+    database: 10
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+    timeout: 5000ms
+
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: org.example.entity
+  configuration:
+    map-underscore-to-camel-case: true
+
+logging:
+  level:
+    root: INFO
+    org.example: DEBUG # 为你的项目包设置更详细的日志级别，方便调试
+    io.fabric8: WARN # 减少fabric8的日志输出，避免刷屏
+    com.sky.mapper: debug # 调整为适合K8s的日志级别
+    com.sky.service: info
+    com.sky.controller: info
+
+# ===================================================================
+# 你的自定义配置 (原先在 practice 块中，现在平铺，以便 @Value("${dispatch.*}") 直接获取)
+# ===================================================================
+
+# 对应 K8sJobFactory 中的 @Value("${dispatch.kubeconfig.path}")
+# 在K8s中，K8sJobFactory会优先In-Cluster，这个路径不会被实际使用
+# 在本地开发时，如果In-Cluster失败，会尝试加载此路径
+dispatch:
+  kubeconfig:
+    path: C:/Users/xuty/.kube/config # 本地开发时使用的kubeconfig路径
+  cluster:
+    domain: cluster.local # 对应 K8sJobFactory 中的 @Value("${dispatch.cluster.domain}")
+  job:
+    image:
+      init: busybox:1.35 # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.init}")
+      main: python:3.9-slim # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.main}")
+    wget:
+      limit-rate: 10m             # init container wget 限速，单位同 wget 原生格式(k/m/g)，0 表示不限速
+  central-node:
+    name: "aks-nodepool1-54677688-vmss000002" # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
+  # data-discovery DaemonSet 服务配置
+  # 要求 DaemonSet 的 Pod 配置 hostname=<nodeName>, subdomain=data-discovery-svc
+  # 并建立对应的 Headless Service，则可通过 <nodeName>.data-discovery-svc.default.svc.cluster.local 寻址
+  data-discovery:
+    service: data-discovery-svc   # K8s Headless Service 名称
+    namespace: default
+    port: 8080
+  scheduler:
+    in-place-baseline-ms: 50      # 亲和性调度目标为源节点本身时的虚拟传输时间(ms)，避免除零
+
+
+# 原 practice.jwt.*，现在直接定义
+jwt:
+  admin-secret-key: itcast # 敏感信息，会被 Secret 覆盖
+  admin-ttl: 7200000
+  admin-token-name: token
+  user-secret-key: itheima # 敏感信息，会被 Secret 覆盖
+  user-ttl: 7200000
+  user-token-name: authentication
+
+# 原 practice.wechat.*，现在直接定义
+wechat:
+  appid: wx6bd13dcb6bb751d1 # 敏感信息，会被 Secret 覆盖
+  secret: 6a684d18952df9bc41641daf46f9c1ae # 敏感信息，会被 Secret 覆盖
+
+# 原 practice.alioss.*，现在直接定义
+alioss:
+  endpoint: oss-cn-shanghai.aliyuncs.com # 敏感信息，会被 Secret 覆盖
+  access-key-id: LTAI5tJ8qZNh5mVFbFpQkkmw # 敏感信息，会被 Secret 覆盖
+  access-key-secret: niZZZOFDWcjZw9IooRjaqX7C5fDKRu # 敏感信息，会被 Secret 覆盖
+  bucket-name: sky-itcast-ygj # 敏感信息，会被 Secret 覆盖
+
+# 你的 app.orchestrator.job-wait-timeout-minutes (K8sJobFactory 中没有直接使用，但可以在代码中读取)
+app:
+  orchestrator:
+    job-wait-timeout-minutes: 10
+
+  heat-update:
+    alpha: 0.99
+    k: 0.05
+    lambda0: 0.05
+    beta: 0.3
+    time: 10
+    threshold: 10

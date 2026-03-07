@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="org.example.mapper.TaskManagementMapper">
+
+
+    <insert id="submitData" useGeneratedKeys="true" keyProperty="taskId">
+        insert into task_management (task_name, selected_data, status, create_time, T1, T2, rating, schedule)
+        values (#{taskName}, #{selectedData}, #{status}, #{createTime}, #{T1}, #{T2}, #{rating}, #{schedule})
+    </insert>
+    <select id="list" resultType="org.example.entity.TaskManagement">
+        select * from task_management where 1=1
+        <if test="query != null and query != ''">
+            and (
+            task_id like concat('%', #{query}, '%')
+            or status like concat('%', #{query}, '%')
+            or selected_data like concat('%', #{query}, '%')
+            )
+        </if>
+    </select>
+
+    <!-- 根据 dataName 获取 data_server（node1） -->
+    <select id="getDataServerByDataName" resultType="String">
+        SELECT data_server
+        FROM data_management
+        WHERE data_name = #{dataName}
+    </select>
+
+    <!-- 获取 node_id 对应的 node_name -->
+    <select id="getNodeNameById" resultType="java.lang.String">
+        SELECT node_name
+        FROM node_management
+        WHERE node_id = #{nodeId}
+    </select>
+
+    <!-- 通过 nodeName 获取 nodeId -->
+    <select id="getNodeIdByName" resultType="Integer">
+        SELECT node_id
+        FROM node_management
+        WHERE node_name = #{nodeName}
+    </select>
+
+    <!-- 通过 TaskId 获取 Task 对象 -->
+    <select id="getTaskByTaskId" resultType="TaskManagement" parameterType="int">
+        SELECT *
+        FROM task_management
+        WHERE task_id = #{taskId}
+    </select>
+
+    <!-- 根据 dataName 获取 data_size -->
+    <select id="getDataSizeByDataName" resultType="Double">
+        SELECT data_size
+        FROM data_management
+        WHERE data_name = #{dataName}
+    </select>
+
+    <!-- 计算传输到最近 compute 节点的时间 t1 -->
+    <select id="calculateT1" resultType="java.lang.Double">
+        SELECT (latency + (#{dataSize} / bandwidth)) AS t1
+        FROM edge_management
+        WHERE source_id = #{sourceId}
+        AND target_id = #{targetId}
+        ORDER BY latency + (#{dataSize} / bandwidth) ASC
+        LIMIT 1
+    </select>
+
+    <!-- 计算传输到中心节点 (node_id = 1) 的时间 t2 -->
+    <select id="calculateT2" resultType="java.lang.Double">
+        SELECT (latency + (#{dataSize} / bandwidth)) AS t2
+        FROM edge_management
+        WHERE source_id = #{sourceId}
+        AND target_id = 1
+        ORDER BY latency + (#{dataSize} / bandwidth) ASC
+        LIMIT 1
+    </select>
+
+    <!-- 获取离 node1 最近的 compute 节点 -->
+    <select id="getClosestComputeNode" resultType="java.lang.Integer">
+        SELECT target_id AS nodeId
+        FROM edge_management
+        WHERE source_id = #{nodeId}
+        AND target_id IN (SELECT node_id FROM node_management WHERE type = '计算节点')
+        ORDER BY (latency + (#{dataSize} / bandwidth)) ASC
+        LIMIT 1
+    </select>
+
+
+    <select id="getBandWidthBySourceId" parameterType="map" resultType="java.lang.String">
+        SELECT bandwidth
+        FROM real_edge_management
+        WHERE source_id = #{sourceId}
+        AND target_id = #{targetId}
+    </select>
+
+    <update id="updateTask" parameterType="TaskManagement">
+        UPDATE task_management
+        SET
+        T1 = #{T1},
+        T2 = #{T2},
+        rating = #{rating},
+        schedule = #{schedule},
+        status = #{status}
+<!--        update_time = NOW()-->
+        WHERE task_id = #{taskId}
+    </update>
+
+    <delete id="deleteAllTasks">
+        DELETE FROM task_management;
+    </delete>
+
+</mapper>

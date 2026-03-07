@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: data-discovery-daemonset
+  namespace: default
+  labels:
+    app: data-discovery
+spec:
+  selector:
+    matchLabels:
+      app: data-discovery
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: data-discovery
+    spec:
+      # 不指定 serviceAccountName，使用命名空间内的 default SA
+      # default SA 没有 nodes/list 权限，但 KubernetesConfig 已做容错处理，不影响启动
+      tolerations:
+        # 若需要在 master/control-plane 节点也运行，保留这两条；否则删除
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+
+      # ── 节点选择（DaemonSet 默认在所有节点都起一个 Pod）──────────────────
+      # 如果只想在部分节点上运行，取消注释并修改标签值；
+      # 给目标节点打标签：kubectl label node <node-name> role=data-node
+      # nodeSelector:
+      #   role: data-node
+
+      containers:
+        - name: data-discovery
+          # ⚠️ 替换为实际构建并推送的镜像地址
+          image: <YOUR_REGISTRY>/data-discovery-daemonset-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+
+          env:
+            # 节点名称：由 K8s 自动注入当前 Pod 所在节点名，与 node_management 表对应
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+            # 生产模式：真实扫描文件；改为 dev 则使用 Mock 数据
+            - name: SPRING_PROFILES_ACTIVE
+              value: "prod"
+
+            # 数据扫描目录（与下方 volumeMounts.mountPath 保持一致）
+            - name: FILE_DISCOVERY_DATA_DIRECTORY
+              value: "/dataset"
+
+            # 扫描间隔（毫秒）
+            - name: FILE_DISCOVERY_SCAN_INTERVAL_MS
+              value: "60000"
+
+            # MySQL 连接（直接填写，无需 Secret）
+            - name: SPRING_DATASOURCE_DRUID_URL
+              value: "jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
+            - name: SPRING_DATASOURCE_DRUID_USERNAME
+              value: "root"
+            - name: SPRING_DATASOURCE_DRUID_PASSWORD
+              value: "ibdiibdi"
+
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          livenessProbe:
+            httpGet:
+              path: /data-discovery/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /data-discovery/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+          volumeMounts:
+            - name: host-dataset
+              mountPath: /dataset          # Pod 内路径，与 FILE_DISCOVERY_DATA_DIRECTORY 一致
+
+      volumes:
+        - name: host-dataset
+          hostPath:
+            path: /dataset                 # 宿主机上的实际路径
+            type: DirectoryOrCreate

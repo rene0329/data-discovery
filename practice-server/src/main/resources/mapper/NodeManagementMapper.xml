@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="org.example.mapper.NodeManagementMapper">
+
+<!--    <select id="networkConstruction" resultType="org.example.entity.NodeManagement">-->
+<!--        select * from node_management where 1=1-->
+<!--        <if test="query != null and query != ''">-->
+<!--            and (node_name like concat('%', #{query}, '%'))-->
+<!--            or  (cluster like concat('%', #{query}, '%'))-->
+<!--        </if>-->
+<!--    </select>-->
+
+    <select id="getNodeIpByDataServer" resultType="String">
+        SELECT internal_ip
+        FROM node_management
+        WHERE node_name = #{dataServer}
+    </select>
+
+    <select id="getNodeIpById" resultType="String">
+        SELECT internal_ip
+        FROM node_management
+        WHERE node_id = #{nodeId}
+    </select>
+
+    <select id="networkConfiguration" resultType="org.example.entity.NodeManagement">
+        select * from node_management where 1=1
+        <if test="query != null and query != ''">
+            and (
+            node_name like concat('%', #{query}, '%')
+            or cluster like concat('%', #{query}, '%')
+            )
+        </if>
+    </select>
+
+    <update id="updateSystemInfo">
+        UPDATE node_management
+        SET current_cpu = #{cpu},
+        current_memory = #{memUsage}
+        WHERE node_id = #{nodeId}
+    </update>
+
+    <select id="getNodeIdByIp" resultType="Integer">
+        SELECT node_id
+        FROM node_management
+        WHERE internal_ip = #{nodeIp}
+        OR external_ip = #{nodeIp}
+        LIMIT 1
+    </select>
+
+    <select id="getDataCountByNode" resultType="Integer">
+        SELECT COUNT(*)
+        FROM data_management
+        WHERE data_server = #{nodeName}
+    </select>
+
+    <!-- 清空所有数据的存储位置 -->
+    <update id="clearAllDataServers">
+        UPDATE data_management
+        SET data_server = NULL, backup_server = NULL
+    </update>
+
+    <select id="getAvailableComputeNodes" resultType="int">
+        SELECT
+        n.node_id
+        FROM
+        edge_management e
+        JOIN
+        node_management n
+        ON
+        e.target_id = n.node_id
+        WHERE
+        e.source_id = #{storageNodeId}
+        AND
+        n.type = '计算节点';
+    </select>
+
+    <select id="getAllComputeNodes" resultType="int">
+        SELECT
+        n.node_id
+        FROM
+        node_management n
+        WHERE
+        n.type = '计算节点'
+        AND n.node_id != 1;
+<!--        AND n.node_id != 6;-->
+    </select>
+
+    <select id="getCurrentMemoryById" resultType="double">
+        SELECT current_memory
+        FROM node_management
+        WHERE node_id = #{nodeId}
+    </select>
+
+    <select id="getMaxMemoryById" resultType="double">
+        SELECT max_memory
+        FROM node_management
+        WHERE node_id = #{nodeId}
+    </select>
+
+    <update id="updateNodeMemoryUsage">
+        UPDATE node_management
+        SET current_memory = current_memory + #{usedMemory}
+        WHERE node_id = #{nodeId}
+    </update>
+
+    <!-- 查询边是否存在 -->
+    <select id="edgeExists"  resultType="int">
+        SELECT COUNT(*) FROM real_edge_management
+        WHERE source_id = #{node1Id}
+        AND target_id = #{nodeId}
+    </select>
+    <!-- 请将以下内容添加到您的 NodeManagementMapper.xml 文件中 -->
+
+    <!-- 插入新节点，支持所有字段 -->
+    <insert id="insertNode" parameterType="org.example.entity.NodeManagement" useGeneratedKeys="true" keyProperty="nodeId">
+        INSERT INTO node_management (
+        node_name, external_ip, internal_ip, type, cluster,
+        max_cpu, max_memory, current_cpu, current_memory,
+        num_dataset, last_update_time
+        )
+        VALUES (
+        #{nodeName}, #{externalIp}, #{internalIp}, #{type}, #{cluster},
+        #{maxCpu}, #{maxMemory}, #{currentCpu}, #{currentMemory},
+        #{numDataset}, #{lastUpdateTime}
+        )
+    </insert>
+
+    <!-- 更新现有节点，支持所有字段（基于 node_name） -->
+    <update id="updateNodeFromK8s" parameterType="org.example.entity.NodeManagement">
+        UPDATE node_management
+        SET
+        external_ip = #{externalIp},
+        internal_ip = #{internalIp},
+        type = #{type},
+        cluster = #{cluster},
+        max_cpu = #{maxCpu},
+        max_memory = #{maxMemory},
+        current_cpu = #{currentCpu},
+        current_memory = #{currentMemory},
+        num_dataset = #{numDataset},
+        last_update_time = #{lastUpdateTime}
+        WHERE
+        node_name = #{nodeName}
+    </update>
+
+    <!-- 删除节点 -->
+    <delete id="deleteByName" parameterType="java.lang.String">
+        DELETE FROM node_management WHERE node_name = #{nodeName}
+    </delete>
+
+
+</mapper>

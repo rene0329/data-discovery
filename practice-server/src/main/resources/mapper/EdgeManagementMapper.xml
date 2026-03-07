@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="org.example.mapper.EdgeManagementMapper">
+
+    <!-- 定义 resultMap，确保包含了 EdgeManagement 实体中的所有字段，包括新增的 -->
+    <resultMap id="EdgeManagementResultMap" type="org.example.entity.EdgeManagement">
+        <id property="edgeId" column="edge_id"/>
+        <result property="sourceId" column="source_id"/>
+        <result property="targetId" column="target_id"/>
+        <result property="bandwidth" column="bandwidth"/>
+        <result property="latency" column="latency"/>
+        <result property="status" column="status"/>
+    </resultMap>
+
+    <!-- 现有 links 方法的SQL实现，确保使用了新的resultMap -->
+    <select id="links" resultMap="EdgeManagementResultMap">
+        SELECT * FROM edge_management
+    </select>
+
+    <!--
+        以下方法现在已通过接口上的注解实现，因此在XML中无需重复定义。
+        如果您有其他需要复杂SQL或动态SQL的方法，可以在这里添加。
+        例如：
+        <insert id="insertEdge" useGeneratedKeys="true" keyProperty="edgeId">
+            INSERT INTO edge_management (source_id, target_id, bandwidth, latency, status, measurement_time)
+            VALUES (#{sourceId}, #{targetId}, #{bandwidth}, #{latency}, #{status}, #{measurementTime})
+        </insert>
+    -->
+</mapper>

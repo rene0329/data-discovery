@@ -1,0 +1,3 @@
+local:
+  node:
+    name: local-test-node

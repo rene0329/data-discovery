@@ -1,0 +1,61 @@
+// src/main/java/org/example/controller/admin/NetworkMetricsController.java
+package org.example.controller.admin;
+
+import org.example.dto.NetworkMetricDto; // <--- 使用您项目的 DTO
+import org.example.dto.NetworkEdgeDto; // <--- 使用新创建的 DTO
+import org.example.service.NetworkMetricsService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/api/network") // <--- 注意这里的 RequestMapping 前缀
+public class NetworkMetricsController {
+
+    private static final Logger log = LoggerFactory.getLogger(NetworkMetricsController.class);
+
+    @Autowired
+    private NetworkMetricsService networkMetricsService;
+
+    /**
+     * Endpoint for network-probe-daemonset to report network metrics.
+     *
+     * @param metricsDtoList List of NetworkMetricDto
+     * @return ResponseEntity indicating success or failure.
+     */
+    @PostMapping("/metrics")
+    public ResponseEntity<String> receiveNetworkMetrics(@RequestBody List<NetworkMetricDto> metricsDtoList) {
+        log.info("Received {} network metrics from DaemonSet.", metricsDtoList != null ? metricsDtoList.size() : 0);
+        try {
+            networkMetricsService.processNetworkMetrics(metricsDtoList); // <--- 调用修正后的 Service 方法
+            log.info("Successfully processed network metrics.");
+            return ResponseEntity.ok("Network metrics received and processed.");
+        } catch (Exception e) {
+            log.error("Failed to process network metrics.", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Failed to process network metrics: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Endpoint for frontend to query all current network edges with their metrics,
+     * including source and target node names.
+     *
+     * @return ResponseEntity containing a list of NetworkEdgeDto objects.
+     */
+    @GetMapping("/allMetrics")
+    public ResponseEntity<List<NetworkEdgeDto>> getAllNetworkMetrics() { // <--- 返回类型修正为 List<NetworkEdgeDto>
+        try {
+            List<NetworkEdgeDto> edges = networkMetricsService.getAllEdgesWithNodeNames(); // <--- 调用修正后的 Service 方法
+            log.debug("Returning {} network edges to frontend.", edges.size());
+            return ResponseEntity.ok(edges);
+        } catch (Exception e) {
+            log.error("Failed to retrieve all network metrics.", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(null);
+        }
+    }
+}

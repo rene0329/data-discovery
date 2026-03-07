@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: data-discovery-config
+  namespace: default
+data:
+  # Spring Profile：prod 时才真实扫描文件；dev 时返回 Mock 数据
+  SPRING_PROFILES_ACTIVE: "prod"
+  # 宿主机数据目录（必须与 DaemonSet volumes.hostPath.path 一致）
+  DATA_DIRECTORY: "/data"
+  # 扫描间隔（毫秒），60000 = 1 分钟
+  SCAN_INTERVAL_MS: "60000"
+  # 是否启用 MD5 计算
+  ENABLE_MD5: "false"
+  MD5_MAX_SIZE_MB: "100"
+  # 服务端口
+  SERVER_PORT: "8080"

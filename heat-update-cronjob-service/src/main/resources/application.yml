@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: heat-update-cronjob-service
+  profiles:
+    active: dev  # 激活 dev 配置文件（可选，如果有 application-dev.yml）
+
+  # 数据库连接池配置（必须完整定义，否则失败）
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://172.19.232.133:3306/Subject4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8  # 替换为你的实际 URL
+    username: root
+    password: ibdiibdi  # 敏感信息建议用环境变量，如 ${DB_PASSWORD}
+
+# MyBatis 配置（确保 Mapper 可以扫描）
+mybatis:
+  mapper-locations: classpath:mapper/*.xml  # 如果有 XML Mapper 文件
+  type-aliases-package: org.example.entity  # 实体类包路径
+  configuration:
+    map-underscore-to-camel-case: true  # 驼峰映射
+
+# 自定义业务配置（热度参数）
+app:
+  heat-update:
+    alpha: 0.99
+    k: 0.05
+    lambda0: 0.05
+    beta: 0.3
+    time: 10
+    threshold: 10
+
+# 日志配置（可选，调试用）
+logging:
+  level:
+    root: INFO
+    org.example: DEBUG
+    org.mybatis: DEBUG  # 查看 MyBatis SQL 执行
+    com.alibaba.druid: DEBUG  # 查看 Druid 连接池

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<mapper namespace="org.example.mapper.MigrationTaskMapper">
+
+    <insert id="insert" parameterType="org.example.entity.MigrationTask" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO migration_task (
+            task_id,
+            data_id,
+            source_node_id,
+            target_node_id,
+            status,
+            retry_count,
+            error_message,
+            started_at,
+            finished_at,
+            checksum_before,
+            checksum_after,
+            bytes_total,
+            bytes_done
+        ) VALUES (
+            #{taskId},
+            #{dataId},
+            #{sourceNodeId},
+            #{targetNodeId},
+            #{status},
+            #{retryCount},
+            #{errorMessage},
+            #{startedAt},
+            #{finishedAt},
+            #{checksumBefore},
+            #{checksumAfter},
+            #{bytesTotal},
+            #{bytesDone}
+        )
+    </insert>
+
+    <update id="updateLifecycle" parameterType="org.example.entity.MigrationTask">
+        UPDATE migration_task
+        <set>
+            <if test="status != null">status = #{status},</if>
+            <if test="retryCount != null">retry_count = #{retryCount},</if>
+            <if test="errorMessage != null">error_message = #{errorMessage},</if>
+            <if test="startedAt != null">started_at = #{startedAt},</if>
+            <if test="finishedAt != null">finished_at = #{finishedAt},</if>
+            <if test="checksumBefore != null">checksum_before = #{checksumBefore},</if>
+            <if test="checksumAfter != null">checksum_after = #{checksumAfter},</if>
+            <if test="bytesTotal != null">bytes_total = #{bytesTotal},</if>
+            <if test="bytesDone != null">bytes_done = #{bytesDone},</if>
+            updated_at = NOW()
+        </set>
+        WHERE id = #{id}
+    </update>
+
+</mapper>

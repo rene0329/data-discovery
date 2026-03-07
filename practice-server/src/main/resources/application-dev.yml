@@ -1,0 +1,116 @@
+practice:
+  # ===================================================================
+  # Spring Boot 基础配置
+  # ===================================================================
+  server:
+    port: 8080 # 应用服务端口
+
+  spring:
+    # 应用名称，会显示在日志中
+    application:
+      name: practice-server
+
+    # 激活的配置文件，可以是 dev, test, prod
+    profiles:
+      active: dev
+
+    # 数据库连接池配置 (迁移到标准前缀)
+    datasource:
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      url: jdbc:mysql://172.19.232.133:3306/Subject4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8
+      username: root
+      password: ibdiibdi
+      # 推荐加入连接池配置，以提高性能和稳定性
+      hikari:
+        connection-timeout: 30000
+        maximum-pool-size: 10
+        minimum-idle: 5
+
+    # Redis 配置 (迁移到标准前缀)
+    redis:
+      host: localhost
+      port: 6379
+      database: 10
+      # 推荐加入连接池和超时配置
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+      timeout: 5000ms
+
+  # ===================================================================
+  # 自定义业务配置 (将所有业务相关配置统一管理)
+  # ===================================================================
+  app:
+    # 调度任务编排器相关配置
+    orchestrator:
+      # 中心化调度目标节点名称 (您已在代码中使用 @Value 获取)
+      central-node-name: "aks-nodepool1-54677688-vmss000002"
+      # K8s Job 等待的超时时间（分钟）
+      job-wait-timeout-minutes: 10
+
+    # 数据热度更新算法相关参数 (从 HeatUpdateService 中抽离)
+    heat-update:
+      alpha: 0.99      # 动量因子
+      k: 0.05          # 手动更新影响因子
+      lambda0: 0.05    # 自动更新影响因子
+      beta: 0.3        # 指数衰减因子
+      time: 10         # 时间参数
+      threshold: 10    # 热度更新的阈值
+
+    # K8s 配置 (扩展为新 K8sFactory 设计，支持多集群、超时和代理)
+    k8s:
+      # 通用 K8s 配置
+      timeout:
+        connection: 60000   # 连接超时（毫秒）
+        request: 120000     # 请求超时（毫秒）
+        watch-reconnect: 5000 # Watcher 重连间隔（毫秒）
+
+      # 临时测试标志: true 时使用默认 ~/.kube/config 或 in-cluster; false 时使用 clusters 路径
+      use-default-kubeconfig: true
+
+      # Job 模板配置 (测试同步时可忽略)
+      job-template:
+        namespace: "default"
+        image: "your-repo/data-processor:latest"
+        image-pull-policy: "IfNotPresent"
+        service-account-name: "default"
+        backoff-limit: 2
+        init-container-name: "data-transfer-container"
+
+      # 多集群连接配置 (当 use-default-kubeconfig=false 时使用)
+      clusters:
+        - name: "aks-cluster-1"
+          kubeconfig-path: "/path/to/your/.kube/config-cluster-1"  # 远程服务器上的绝对路径
+          enabled: true
+        - name: "aks-cluster-2"
+          kubeconfig-path: "/path/to/your/.kube/config-cluster-2"
+          enabled: true
+
+  # ===================================================================
+  # 第三方服务配置 (保留您的原有配置)
+  # ===================================================================
+  # 微信配置
+  wechat:
+    appid: wx6bd13dcb6bb751d1
+    secret: 6a684d18952df9bc41641daf46f9c1ae
+
+  # 阿里云OSS配置
+  alioss:
+    endpoint: oss-cn-shanghai.aliyuncs.com
+    access-key-id: LTAI5tJ8qZNh5mVFbFpQkkmw
+    access-key-secret: niZZZOFDWcjZw9IooRjaqX7C5fDKRu
+    bucket-name: sky-itcast-ygj
+
+  # ===================================================================
+  # 日志配置
+  # ===================================================================
+  logging:
+    level:
+      # 根日志级别
+      root: INFO
+      # 为您的项目包设置更详细的日志级别，方便调试
+      org.example: DEBUG
+      # 调整一些框架的日志级别，避免日志刷屏
+      io.fabric8: WARN
