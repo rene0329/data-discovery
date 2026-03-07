@@ -97,7 +97,7 @@ public class K8sJobFactory {
             @Value("${dispatch.data-discovery.service:data-discovery-svc}") String discoveryService,
             @Value("${dispatch.data-discovery.namespace:default}") String discoveryNamespace,
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
-            @Value("${dispatch.job.wget.limit-rate:10m}") String wgetLimitRate
+            @Value("${dispatch.job.wget.limit-rate:}") String wgetLimitRate
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
