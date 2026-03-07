@@ -175,6 +175,7 @@ public class K8sJobFactory {
     public JobCreationResult createDataProcessingJob(String jobName,
                                                      String sourceNodeName,
                                                      String dataFileName,
+                                                     String dataFilePath,
                                                      String overrideTargetNode,
                                                      Double cpuRequest,
                                                      Double memoryRequest) {
@@ -240,11 +241,16 @@ public class K8sJobFactory {
         }
 
         // data-discovery 使用 hostNetwork: true，Pod IP = 节点 IP，直接用 internalIp 访问，不依赖 DNS
+        // 下载路径使用 DB 中的 filePath（完整宿主机路径），去掉 dataDirectory 前缀得到相对路径
         String sourceIp = sourceNodeInfo.getInternalIp();
         if (sourceIp == null || sourceIp.isEmpty()) {
             throw new IllegalStateException("源节点 " + sourceNodeName + " 未配置 internalIp，无法构建数据下载 URL");
         }
-        String dataSourceUrl = String.format("http://%s:%d/data-discovery/download/%s", sourceIp, discoveryPort, dataFileName);
+        // filePath 形如 /dataset/catdog/npz/catdog.npz，去掉开头的 / 作为 URL 路径中的相对部分
+        String downloadRelPath = (dataFilePath != null && !dataFilePath.isEmpty())
+                ? dataFilePath.replaceAll("^\/+", "")
+                : dataFileName;
+        String dataSourceUrl = String.format("http://%s:%d/data-discovery/download/%s", sourceIp, discoveryPort, downloadRelPath);
         log.info("执行阶段: 将在集群 '{}' 中创建Job，数据源URL为: {}", bestNode.getClusterId(), dataSourceUrl);
 
         Job jobToCreate = new JobBuilder()

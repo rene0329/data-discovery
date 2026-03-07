@@ -166,7 +166,7 @@ public class K8sTaskOrchestratorService {
         KubernetesClient client = null;
         MigrationTask migrationTask = null;
         try {
-            JobCreationResult jobResult = k8sJobFactory.createDataProcessingJob(jobName, sourceNodeInfo.getNodeName(), dataInfo.getDataName(), targetNode, dataInfo.getRequiredCpu(), dataInfo.getRequiredMemory());
+            JobCreationResult jobResult = k8sJobFactory.createDataProcessingJob(jobName, sourceNodeInfo.getNodeName(), dataInfo.getDataName(), dataInfo.getFilePath(), targetNode, dataInfo.getRequiredCpu(), dataInfo.getRequiredMemory());
 
             client = jobResult.getClient();
             Job job = jobResult.getJob();

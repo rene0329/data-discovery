@@ -68,11 +68,14 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.HandlerMapping;
 
+import javax.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -250,11 +253,16 @@ public class DataDiscoveryController {
 
     /**
      * 文件下载接口 —— 供 K8s Job init container(wget) 拉取原始数据文件。
-     * URL: GET /data-discovery/download/{filename}
+     * URL: GET /data-discovery/download/**
      * 对应 K8sJobFactory 中的 dataSourceUrl。
      */
-    @GetMapping(value = "/download/{filename:.+}", produces = MediaType.APPLICATION_OCTET_STREAM_VALUE)
-    public ResponseEntity<Resource> downloadFile(@PathVariable String filename) {
+    @GetMapping(value = "/download/**", produces = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    public ResponseEntity<Resource> downloadFile(HttpServletRequest request) {
+        // 提取 /download/ 之后的完整路径（含子目录和扩展名）
+        String filename = (String) request.getAttribute(HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
+        String bestPattern = (String) request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        filename = new AntPathMatcher().extractPathWithinPattern(bestPattern, filename);
+
         Path filePath = Paths.get(dataDirectory).resolve(filename).normalize();
 
         // 安全检查：防止路径穿越
