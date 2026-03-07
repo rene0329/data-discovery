@@ -248,7 +248,7 @@ public class K8sJobFactory {
         }
         // filePath 形如 /dataset/catdog/npz/catdog.npz，去掉开头的 / 作为 URL 路径中的相对部分
         String downloadRelPath = (dataFilePath != null && !dataFilePath.isEmpty())
-                ? dataFilePath.replaceAll("^\/+", "")
+                ? dataFilePath.replaceAll("^/+", "")
                 : dataFileName;
         String dataSourceUrl = String.format("http://%s:%d/data-discovery/download/%s", sourceIp, discoveryPort, downloadRelPath);
         log.info("执行阶段: 将在集群 '{}' 中创建Job，数据源URL为: {}", bestNode.getClusterId(), dataSourceUrl);
