@@ -110,3 +110,9 @@ app:
     beta: 0.3
     time: 10
     threshold: 10
+
+# 禁用 Redis 健康检查（Redis 未实际使用，避免连接失败导致 /actuator/health 报 DOWN）
+management:
+  health:
+    redis:
+      enabled: false
