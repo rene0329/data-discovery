@@ -67,7 +67,7 @@ dispatch:
       init: busybox:1.35 # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.init}")
       main: python:3.9-slim # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.main}")
     wget:
-      limit-rate: 10m             # init container wget 限速，单位同 wget 原生格式(k/m/g)，0 表示不限速
+      limit-rate: 0               # init container wget 限速，0 表示不限速（busybox wget 不支持 --limit-rate）
   central-node:
     name: "master-215" # 中心节点，需在 node_management 表中存在 # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
