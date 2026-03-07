@@ -239,9 +239,12 @@ public class K8sJobFactory {
             throw new IllegalStateException("找不到目标集群 '" + bestNode.getClusterId() + "' 的客户端。");
         }
 
-        String dataSourceUrl = String.format(
-                "http://%s.%s.%s.svc.%s:%d/data-discovery/download/%s",
-                sourceNodeName, discoveryService, discoveryNamespace, clusterDomain, discoveryPort, dataFileName);
+        // data-discovery 使用 hostNetwork: true，Pod IP = 节点 IP，直接用 internalIp 访问，不依赖 DNS
+        String sourceIp = sourceNodeInfo.getInternalIp();
+        if (sourceIp == null || sourceIp.isEmpty()) {
+            throw new IllegalStateException("源节点 " + sourceNodeName + " 未配置 internalIp，无法构建数据下载 URL");
+        }
+        String dataSourceUrl = String.format("http://%s:%d/data-discovery/download/%s", sourceIp, discoveryPort, dataFileName);
         log.info("执行阶段: 将在集群 '{}' 中创建Job，数据源URL为: {}", bestNode.getClusterId(), dataSourceUrl);
 
         Job jobToCreate = new JobBuilder()
