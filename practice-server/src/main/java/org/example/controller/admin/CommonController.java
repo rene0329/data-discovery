@@ -45,15 +45,9 @@ public class CommonController {
     private final K8sTaskOrchestratorService k8sTaskOrchestratorService;
     private final RestTemplate restTemplate;
 
-    // data-discovery DaemonSet 寻址配置（与 K8sJobFactory 共用同一套 @Value）
-    @Value("${dispatch.data-discovery.service:data-discovery-svc}")
-    private String discoveryService;
-    @Value("${dispatch.data-discovery.namespace:default}")
-    private String discoveryNamespace;
+    // data-discovery DaemonSet 寻址配置
     @Value("${dispatch.data-discovery.port:8080}")
     private int discoveryPort;
-    @Value("${dispatch.cluster.domain:cluster.local}")
-    private String clusterDomain;
 
     @Autowired
     public CommonController(
@@ -72,12 +66,15 @@ public class CommonController {
     }
 
     /**
-     * 构建 data-discovery DaemonSet Headless Service URL。
-     * 格式: http://{nodeName}.{service}.{namespace}.svc.{domain}:{port}
+     * 构建 data-discovery DaemonSet URL。
+     * 使用 hostNetwork 模式：Pod IP = 节点 internal_ip，Pod 重启后 IP 不变。
      */
     private String discoveryBaseUrl(String nodeName) {
-        return String.format("http://%s.%s.%s.svc.%s:%d",
-                nodeName, discoveryService, discoveryNamespace, clusterDomain, discoveryPort);
+        String ip = nodeManagementMapper.getNodeIpByDataServer(nodeName);
+        if (ip == null || ip.isEmpty()) {
+            throw new IllegalStateException("找不到节点 " + nodeName + " 的 IP，请检查 node_management 表");
+        }
+        return String.format("http://%s:%d", ip, discoveryPort);
     }
 
     /**
@@ -314,7 +311,7 @@ public class CommonController {
         }
         long totalComputeNodes = 0;
         for (String t : nodeTypeMap.values()) {
-            if ("计算节点".equals(t) || "计算存储节点".equals(t)) totalComputeNodes++;
+            if ("compute".equals(t) || "compute-storage".equals(t)) totalComputeNodes++;
         }
         Map<Integer, Set<Integer>> adjacency = new HashMap<>();
         for (EdgeManagement e : edgeManagementMapper.selectAllEdges()) {
@@ -328,7 +325,7 @@ public class CommonController {
             long cn = 0;
             for (Integer nb : neighbors) {
                 String t = nodeTypeMap.get(nb);
-                if ("计算节点".equals(t) || "计算存储节点".equals(t)) cn++;
+                if ("compute".equals(t) || "compute-storage".equals(t)) cn++;
             }
             proxScoreMap.put(sn.getNodeId(), (double) cn / totalComputeNodes);
         }

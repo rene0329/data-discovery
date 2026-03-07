@@ -34,7 +34,7 @@ public interface NodeManagementMapper {
      * 查询所有具备计算能力的节点（纯计算节点 + 计算存储双角色节点），供 K8sJobFactory 调度使用。
      * 不依赖 K8s label，以 DB 记录为准，支持双角色节点。
      */
-    @Select("SELECT * FROM node_management WHERE type IN ('计算节点', '计算存储节点')")
+    @Select("SELECT * FROM node_management WHERE type IN ('compute', 'compute-storage')")
     List<NodeManagement> getComputeCapableNodes();
 
     // 获取所有节点

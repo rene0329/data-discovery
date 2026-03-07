@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: data-discovery-daemonset
-  namespace: default
+  namespace: topic4-1
   labels:
     app: data-discovery
 spec:
@@ -29,16 +29,28 @@ spec:
           operator: Exists
           effect: NoSchedule
 
-      # ── 节点选择（DaemonSet 默认在所有节点都起一个 Pod）──────────────────
-      # 如果只想在部分节点上运行，取消注释并修改标签值；
-      # 给目标节点打标签：kubectl label node <node-name> role=data-node
-      # nodeSelector:
-      #   role: data-node
+      # ── 节点选择：只在打了 node-role=storage 或 node-role=compute-storage 标签的节点运行 ──
+      # 打标签命令：kubectl label node <node-name> node-role=storage
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role
+                    operator: In
+                    values:
+                      - storage
+                      - compute-storage
+
+      # hostNetwork=true：Pod 直接使用宿主机网络，Pod IP = 节点 IP，重启后 IP 不变
+      # 这样 practice-server 可以通过 node_management.internal_ip 稳定寻址，无需 DNS
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet  # hostNetwork 下保持集群 DNS 可用
 
       containers:
         - name: data-discovery
           # ⚠️ 替换为实际构建并推送的镜像地址
-          image: <YOUR_REGISTRY>/data-discovery-daemonset-service:latest
+          image: ghcr.io/rene0329/data-discovery:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

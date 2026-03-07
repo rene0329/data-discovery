@@ -1,0 +1,53 @@
+name: Build and Push practice-server Image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'practice-server/**'
+      - 'practice-common/**'
+      - 'practice-pojo/**'
+      - '.github/workflows/publish-practice-server.yml'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-practice-server
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'temurin'
+          cache: maven
+
+      # 编译 practice-server 及其依赖模块（practice-common, practice-pojo）
+      - name: Build with Maven
+        run: mvn -pl practice-server -am package -DskipTests
+
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: practice-server
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest

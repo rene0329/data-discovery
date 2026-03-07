@@ -59,7 +59,7 @@
     <select id="getCentralityNodes" resultType="org.example.entity.NodeManagement">
         SELECT nm.*
         FROM node_management nm
-        WHERE nm.type IN ('存储节点', '计算存储节点')
+        WHERE nm.type IN ('storage', 'compute-storage')
         ORDER BY
         (SELECT COUNT(*) FROM edge_management em WHERE em.source_id = nm.node_id) DESC
     </select>

@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: practice-server
+  namespace: topic4-1
+  labels:
+    app: practice-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: practice-server
+  template:
+    metadata:
+      labels:
+        app: practice-server
+    spec:
+      containers:
+        - name: practice-server
+          image: ghcr.io/rene0329/practice-server-practice-server:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "prod"
+
+            # MySQL
+            - name: SPRING_DATASOURCE_DRUID_URL
+              value: "jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
+            - name: SPRING_DATASOURCE_DRUID_USERNAME
+              value: "root"
+            - name: SPRING_DATASOURCE_DRUID_PASSWORD
+              value: "ibdiibdi"
+
+            # Redis（与 application.yml 中 host 保持一致）
+            - name: SPRING_REDIS_HOST
+              value: "redis-service.default.svc.cluster.local"
+            - name: SPRING_REDIS_PORT
+              value: "6379"
+            - name: SPRING_REDIS_DATABASE
+              value: "10"
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10

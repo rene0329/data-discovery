@@ -190,15 +190,21 @@ public class K8sNodeMapperImpl implements K8sNodeMapper {
     }
 
     private String extractRole(Map<String, String> labels) {
-        return Optional.ofNullable(labels)
-                .flatMap(lbls -> lbls.entrySet().stream()
-                        .filter(entry -> entry.getKey().startsWith("node-role.kubernetes.io/"))
-                        .map(entry -> {
-                            String roleKey = entry.getKey().substring("node-role.kubernetes.io/".length());
-                            String roleValue = entry.getValue();
-                            return roleValue != null && !roleValue.isEmpty() ? roleValue : roleKey;
-                        })
-                        .findFirst())
+        if (labels == null) return "worker";
+        // 优先读自定义标签 node-role（值即为中文类型，如"存储节点"）
+        String customRole = labels.get("node-role");
+        if (customRole != null && !customRole.isEmpty()) {
+            return customRole;
+        }
+        // 回退到 K8s 标准标签 node-role.kubernetes.io/<role>
+        return labels.entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith("node-role.kubernetes.io/"))
+                .map(entry -> {
+                    String roleKey = entry.getKey().substring("node-role.kubernetes.io/".length());
+                    String roleValue = entry.getValue();
+                    return roleValue != null && !roleValue.isEmpty() ? roleValue : roleKey;
+                })
+                .findFirst()
                 .orElse("worker");
     }
 

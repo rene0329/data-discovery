@@ -72,7 +72,7 @@
         WHERE
         e.source_id = #{storageNodeId}
         AND
-        n.type = '计算节点';
+        n.type = 'compute';
     </select>
 
     <select id="getAllComputeNodes" resultType="int">
@@ -81,7 +81,7 @@
         FROM
         node_management n
         WHERE
-        n.type = '计算节点'
+        n.type = 'compute'
         AND n.node_id != 1;
 <!--        AND n.node_id != 6;-->
     </select>

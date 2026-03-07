@@ -70,13 +70,9 @@ dispatch:
       limit-rate: 10m             # init container wget 限速，单位同 wget 原生格式(k/m/g)，0 表示不限速
   central-node:
     name: "aks-nodepool1-54677688-vmss000002" # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
-  # data-discovery DaemonSet 服务配置
-  # 要求 DaemonSet 的 Pod 配置 hostname=<nodeName>, subdomain=data-discovery-svc
-  # 并建立对应的 Headless Service，则可通过 <nodeName>.data-discovery-svc.default.svc.cluster.local 寻址
+  # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
   data-discovery:
-    service: data-discovery-svc   # K8s Headless Service 名称
-    namespace: default
-    port: 8080
+    port: 8080  # Pod 监听端口，与 containerPort 保持一致
   scheduler:
     in-place-baseline-ms: 50      # 亲和性调度目标为源节点本身时的虚拟传输时间(ms)，避免除零
 
