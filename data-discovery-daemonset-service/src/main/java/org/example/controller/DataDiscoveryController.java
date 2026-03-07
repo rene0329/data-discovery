@@ -202,7 +202,8 @@ public class DataDiscoveryController {
         // 安全检查：防止路径穿越
         if (!target.startsWith(Paths.get(dataDirectory).normalize())) {
             log.warn("拒绝路径穿越上传请求: {}", relativePath);
-            return ResponseEntity.badRequest().body(Map.of("error", "path traversal rejected"));
+            Map<String, Object> err = new HashMap<>(); err.put("error", "path traversal rejected");
+            return ResponseEntity.badRequest().body(err);
         }
         try {
             Files.createDirectories(target.getParent());
@@ -215,7 +216,8 @@ public class DataDiscoveryController {
             return ResponseEntity.ok(result);
         } catch (IOException e) {
             log.error("文件上传失败: {}", relativePath, e);
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            Map<String, Object> err = new HashMap<>(); err.put("error", e.getMessage());
+            return ResponseEntity.internalServerError().body(err);
         }
     }
 
@@ -229,7 +231,8 @@ public class DataDiscoveryController {
 
         if (!filePath.startsWith(Paths.get(dataDirectory).normalize())) {
             log.warn("拒绝路径穿越删除请求: {}", filename);
-            return ResponseEntity.badRequest().body(Map.of("error", "path traversal rejected"));
+            Map<String, Object> err = new HashMap<>(); err.put("error", "path traversal rejected");
+            return ResponseEntity.badRequest().body(err);
         }
         try {
             boolean deleted = Files.deleteIfExists(filePath);
@@ -240,7 +243,8 @@ public class DataDiscoveryController {
             return ResponseEntity.ok(result);
         } catch (IOException e) {
             log.error("删除文件失败: {}", filename, e);
-            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+            Map<String, Object> err = new HashMap<>(); err.put("error", e.getMessage());
+            return ResponseEntity.internalServerError().body(err);
         }
     }
 
