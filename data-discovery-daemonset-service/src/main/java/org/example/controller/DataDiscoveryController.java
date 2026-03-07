@@ -263,9 +263,10 @@ public class DataDiscoveryController {
         String bestPattern = (String) request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
         filename = new AntPathMatcher().extractPathWithinPattern(bestPattern, filename);
 
-        Path filePath = Paths.get(dataDirectory).resolve(filename).normalize();
+        // filename 已含 dataDirectory 名称（如 "dataset/catdog/..."），从根路径解析得到绝对路径
+        Path filePath = Paths.get("/").resolve(filename).normalize();
 
-        // 安全检查：防止路径穿越
+        // 安全检查：防止路径穿越，确保仍在 dataDirectory 目录下
         if (!filePath.startsWith(Paths.get(dataDirectory).normalize())) {
             log.warn("拒绝路径穿越请求: {}", filename);
             return ResponseEntity.badRequest().build();
