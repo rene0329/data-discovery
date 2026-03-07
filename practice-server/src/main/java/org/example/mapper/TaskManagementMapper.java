@@ -51,4 +51,10 @@ public interface TaskManagementMapper {
     @Update("ALTER TABLE task_management AUTO_INCREMENT = 1")
     void resetAutoIncrement();
 
+    // 调度展示：返回有 schedule 内容的任务
+    List<TaskManagement> listWithSchedule(String query);
+
+    // 性能分析：返回有 T1/T2/rating 数据的任务
+    List<TaskManagement> listWithAnalysis(String query);
+
 }

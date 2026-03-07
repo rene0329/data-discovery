@@ -69,7 +69,7 @@ dispatch:
     wget:
       limit-rate: 10m             # init container wget 限速，单位同 wget 原生格式(k/m/g)，0 表示不限速
   central-node:
-    name: "aks-nodepool1-54677688-vmss000002" # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
+    name: "master-215" # 中心节点，需在 node_management 表中存在 # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
   data-discovery:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致

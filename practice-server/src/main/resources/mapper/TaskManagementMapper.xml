@@ -108,4 +108,22 @@
         DELETE FROM task_management;
     </delete>
 
+    <select id="listWithSchedule" resultType="org.example.entity.TaskManagement">
+        SELECT * FROM task_management
+        WHERE schedule IS NOT NULL AND schedule != ''
+        <if test="query != null and query != ''">
+            AND task_name LIKE CONCAT('%', #{query}, '%')
+        </if>
+        ORDER BY create_time DESC
+    </select>
+
+    <select id="listWithAnalysis" resultType="org.example.entity.TaskManagement">
+        SELECT * FROM task_management
+        WHERE T1 IS NOT NULL AND T2 IS NOT NULL AND rating IS NOT NULL
+        <if test="query != null and query != ''">
+            AND task_name LIKE CONCAT('%', #{query}, '%')
+        </if>
+        ORDER BY create_time DESC
+    </select>
+
 </mapper>

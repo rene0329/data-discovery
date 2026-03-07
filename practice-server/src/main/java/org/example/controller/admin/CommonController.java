@@ -581,25 +581,27 @@ public class CommonController {
     }
 
     /**
-     * 调度计划列表（占位：返回空列表分页结构）。
+     * 调度计划列表：返回有调度方案的任务（schedule 非空）。
      */
     @GetMapping("/scheduleList")
-    public ResponseEntity<ApiResponse<PageResult<Object>>> scheduleList(
+    public ResponseEntity<ApiResponse<PageResult<TaskManagement>>> scheduleList(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "8") int pageSize,
             @RequestParam(defaultValue = "") String query) {
-        return ResponseEntity.ok(ApiResponse.ok(PageResult.of(new ArrayList<>(), page, pageSize)));
+        List<TaskManagement> list = taskManagementMapper.listWithSchedule(query);
+        return ResponseEntity.ok(ApiResponse.ok(PageResult.of(list, page, pageSize)));
     }
 
     /**
-     * 性能分析数据（占位：返回空列表）。
+     * 性能分析数据：返回有 T1/T2/rating 数据的任务。
      */
     @GetMapping("/analysisData")
-    public ResponseEntity<ApiResponse<PageResult<Object>>> analysisData(
+    public ResponseEntity<ApiResponse<PageResult<TaskManagement>>> analysisData(
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "8") int pageSize,
             @RequestParam(defaultValue = "") String query) {
-        return ResponseEntity.ok(ApiResponse.ok(PageResult.of(new ArrayList<>(), page, pageSize)));
+        List<TaskManagement> list = taskManagementMapper.listWithAnalysis(query);
+        return ResponseEntity.ok(ApiResponse.ok(PageResult.of(list, page, pageSize)));
     }
 
     /**
