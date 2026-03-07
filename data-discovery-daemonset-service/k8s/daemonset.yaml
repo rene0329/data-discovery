@@ -42,9 +42,6 @@ spec:
                       - storage
                       - compute-storage
 
-      imagePullSecrets:
-        - name: ghcr-secret
-
       # hostNetwork=true：Pod 直接使用宿主机网络，Pod IP = 节点 IP，重启后 IP 不变
       # 这样 practice-server 可以通过 node_management.internal_ip 稳定寻址，无需 DNS
       hostNetwork: true
@@ -54,7 +51,7 @@ spec:
         - name: data-discovery
           # ⚠️ 替换为实际构建并推送的镜像地址
           image: ghcr.io/rene0329/data-discovery:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               name: http
