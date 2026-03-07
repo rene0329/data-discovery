@@ -207,6 +207,15 @@ public class K8sJobFactory {
             throw new IllegalStateException("没有任何可用的Kubernetes集群客户端，无法调度Job。");
         }
 
+        // 若 DB 中 cluster 字段为空，单集群环境下自动使用唯一可用客户端的 key
+        String fallbackClusterId = clusterClients.size() == 1 ? clusterClients.keySet().iterator().next() : null;
+        if ((sourceClusterId == null || sourceClusterId.isEmpty()) && fallbackClusterId != null) {
+            sourceClusterId = fallbackClusterId;
+        }
+        if ((overrideTargetClusterId == null || overrideTargetClusterId.isEmpty()) && overrideTargetNode != null && !overrideTargetNode.isEmpty() && fallbackClusterId != null) {
+            overrideTargetClusterId = fallbackClusterId;
+        }
+
         CandidateNode bestNode;
         if (overrideTargetNode != null && !overrideTargetNode.isEmpty() && overrideTargetClusterId != null && !overrideTargetClusterId.isEmpty()) {
             log.info("调度决策被覆盖: Job '{}' 将被强制调度到集群 '{}' 的节点 '{}'", jobName, overrideTargetClusterId, overrideTargetNode);
@@ -341,10 +350,19 @@ public class K8sJobFactory {
         List<CandidateNode> allNodes = new ArrayList<>();
         // 直接从 DB 查询所有具备计算能力的节点（含双角色节点），不再依赖 K8s label
         List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
+        String singleClusterKey = clusterClients.size() == 1 ? clusterClients.keySet().iterator().next() : null;
         for (NodeManagement nm : computeNodes) {
             String clusterId = nm.getCluster();
+            // DB cluster 字段为空时，单集群环境下自动回退到唯一集群
+            if (clusterId == null || clusterId.isEmpty()) {
+                if (singleClusterKey != null) {
+                    clusterId = singleClusterKey;
+                } else {
+                    continue;
+                }
+            }
             // 该节点所在集群必须有可用的 K8s 客户端（防止跨集群找不到 kubeconfig）
-            if (clusterId == null || !clusterClients.containsKey(clusterId)) {
+            if (!clusterClients.containsKey(clusterId)) {
                 continue;
             }
             double maxCpu = nm.getMaxCpu() != null ? nm.getMaxCpu() : 0.0;
