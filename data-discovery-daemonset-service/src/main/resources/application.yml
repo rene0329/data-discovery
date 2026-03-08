@@ -11,6 +11,11 @@ spring:
                 pathmatch:
                         matching-strategy: ant_path_matcher
 
+        servlet:
+                multipart:
+                        max-file-size: 4096MB
+                        max-request-size: 4096MB
+
         profiles:
                 active: dev
         datasource:
