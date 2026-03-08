@@ -71,7 +71,8 @@
 
     <update id="updateDataHeat" parameterType="map">
         UPDATE data_management
-        SET data_heat = #{newHeat}
+        SET data_heat = #{newHeat},
+            data_count = 0
         WHERE data_name = #{dataName}
     </update>
 
