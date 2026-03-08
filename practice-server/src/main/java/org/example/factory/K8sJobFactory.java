@@ -58,6 +58,10 @@ public class K8sJobFactory {
     @Value("${dispatch.scheduler.weight.datasetPenalty:0.05}")
     private double datasetPenalty;
 
+    /** 数据亲和性加分：候选节点 = 数据所在源节点时额外加分，确保亲和性调度稳定选中源节点 */
+    @Value("${dispatch.scheduler.weight.dataAffinityBonus:5.0}")
+    private double dataAffinityBonus;
+
     @Value("${dispatch.scheduler.threshold.cpuHeadroom:0.1}")
     private double cpuHeadroom;
 
@@ -228,7 +232,7 @@ public class K8sJobFactory {
                 throw new IllegalStateException("在所有已知的集群中，没有找到任何可用的'compute'角色的节点。");
             }
             log.info("汇集阶段完成: 从 {} 个集群中找到 {} 个可用的计算节点。", clusterClients.size(), allAvailableNodes.size());
-            bestNode = selectBestNode(allAvailableNodes, sourceClusterId);
+            bestNode = selectBestNode(allAvailableNodes, sourceClusterId, sourceNodeName);
             if (bestNode == null) {
                 throw new IllegalStateException("决策阶段失败: 无法从可用节点中选择一个最佳节点。");
             }
@@ -392,20 +396,22 @@ public class K8sJobFactory {
         return allNodes;
     }
 
-    private double scoreNode(CandidateNode node, String sourceClusterId) {
+    private double scoreNode(CandidateNode node, String sourceClusterId, String dataSourceNodeName) {
         double base = node.getClusterId().equals(sourceClusterId) ? sameClusterBonus : -crossClusterPenalty;
         double cpuTerm = node.getMaxCpu() > 0 ? weightCpuFreePct * (node.getCpuFree() / node.getMaxCpu()) : 0.0;
         double memTerm = node.getMaxMemGi() > 0 ? weightMemFreePct * (node.getMemFreeGi() / node.getMaxMemGi()) : 0.0;
         double datasetTerm = datasetPenalty * node.getDatasetCount();
-        return base + cpuTerm + memTerm - datasetTerm;
+        // 数据亲和性加分：候选节点与数据所在节点相同时，给予大权重加分，确保亲和性调度稳定选择数据源节点
+        double affinityTerm = (dataSourceNodeName != null && dataSourceNodeName.equals(node.getName())) ? dataAffinityBonus : 0.0;
+        return base + cpuTerm + memTerm - datasetTerm + affinityTerm;
     }
 
-    private CandidateNode selectBestNode(List<CandidateNode> availableNodes, String sourceClusterId) {
+    private CandidateNode selectBestNode(List<CandidateNode> availableNodes, String sourceClusterId, String dataSourceNodeName) {
         if (availableNodes.isEmpty()) {
             return null;
         }
         return availableNodes.stream()
-                .sorted((a, b) -> Double.compare(scoreNode(b, sourceClusterId), scoreNode(a, sourceClusterId)))
+                .sorted((a, b) -> Double.compare(scoreNode(b, sourceClusterId, dataSourceNodeName), scoreNode(a, sourceClusterId, dataSourceNodeName)))
                 .findFirst()
                 .orElse(null);
     }
