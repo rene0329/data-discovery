@@ -379,7 +379,33 @@ public class K8sJobFactory {
     }
 
     /**
-     * 构建 init container curl 命令（curlimages/curl 镜像，原生支持 --limit-rate）。
+     * 将 "--limit-rate" 字符串（如 "5m"、"8m"、"100k"）解析为字节/秒整数。
+     * 支持后缀 k/m/g（大小写均可），无法解析时返回 0。
+     */
+    private static long parseLimitRateToBytes(String rate) {
+        if (rate == null || rate.isEmpty()) return 0;
+        String r = rate.trim().toLowerCase();
+        try {
+            if (r.endsWith("g")) return Long.parseLong(r.substring(0, r.length() - 1)) * 1024L * 1024 * 1024;
+            if (r.endsWith("m")) return Long.parseLong(r.substring(0, r.length() - 1)) * 1024L * 1024;
+            if (r.endsWith("k")) return Long.parseLong(r.substring(0, r.length() - 1)) * 1024L;
+            return Long.parseLong(r);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * 根据文件大小和源/目节点的限速配置，估算传输所需毫秒数。
+     * 用于"原地调度"场景下替换固定基础时间。
+     */
+    public long calculateBaselineMs(long fileSizeBytes, String srcNode, String dstNode) {
+        String rate = resolveLimitRate(srcNode, dstNode);
+        long rateBytes = parseLimitRateToBytes(rate);
+        return rateBytes > 0 ? (fileSizeBytes * 1000L / rateBytes) : 0;
+    }
+
+
      * limitRate 为 null 或空时不限速，否则附加 --limit-rate 参数。
      * 同时在 stdout 输出 TRANSFER_MS=<ms>，供 Java 从 pod 日志中精确提取传输时间。
      */

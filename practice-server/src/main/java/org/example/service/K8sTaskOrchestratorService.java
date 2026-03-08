@@ -181,10 +181,13 @@ public class K8sTaskOrchestratorService {
             // 【原地检测】亲和性调度结果为数据所在源节点本身 → 数据已在最优节点，无需迁移
             // 直接返回基础时间，避免发起无意义的 K8s Job 并防止后续速率计算除零
             if ("affinity".equals(type) && sourceNodeInfo.getNodeName().equals(selectedTargetNodeName)) {
+                long fileSizeBytes = dataInfo.getDataSize() != null ? dataInfo.getDataSize() : 0L;
+                long baseline = k8sJobFactory.calculateBaselineMs(fileSizeBytes, selectedTargetNodeName, selectedTargetNodeName);
+                if (baseline <= 0) baseline = inPlaceBaselineMs;
                 log.info("数据项[{}] 亲和性调度目标 = 源节点 {}（原地），跳过 K8s Job，返回基础时间 {}ms",
-                        dataInfo.getDataName(), selectedTargetNodeName, inPlaceBaselineMs);
+                        dataInfo.getDataName(), selectedTargetNodeName, baseline);
                 if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
-                return inPlaceBaselineMs;
+                return baseline;
             }
 
             NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(selectedTargetNodeName);
@@ -334,8 +337,8 @@ public class K8sTaskOrchestratorService {
         TaskManagement finalTask = taskManagementMapper.getTaskByTaskId(taskId);
         if (finalTask != null) {
             double rating = totalT1 > 0 ? (totalT2 / totalT1) : 0;
-            String finalSchedule = "分布式调度方案:\n" + String.join("\n", scheduleT1List) +
-                    "\n中心化调度方案:\n" + String.join("\n", scheduleT2List);
+            String finalSchedule = "分布式调度方案:" + String.join("\n", scheduleT1List) +
+                    "\n中心化调度方案:" + String.join("\n", scheduleT2List);
 
             finalTask.setT1(totalT1);
             finalTask.setT2(totalT2);
