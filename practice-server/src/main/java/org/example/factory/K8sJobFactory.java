@@ -8,8 +8,10 @@ import io.fabric8.kubernetes.client.DefaultKubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import lombok.extern.slf4j.Slf4j;
+import org.example.entity.EdgeManagement;
 import org.example.entity.NodeManagement;
 import org.example.entity.TrainingProfile;
+import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TrainingProfileMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,6 +25,7 @@ import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,6 +38,7 @@ public class K8sJobFactory {
     private final String kubeconfigPath;
     private final NodeManagementMapper nodeManagementMapper;
     private final TrainingProfileMapper trainingProfileMapper;
+    private final EdgeManagementMapper edgeManagementMapper;
     private final String clusterDomain;
     private final String initContainerImage;
     private final String mainContainerImage;
@@ -74,6 +78,14 @@ public class K8sJobFactory {
     @Value("${dispatch.scheduler.weight.dataAffinityBonus:5.0}")
     private double dataAffinityBonus;
 
+    /** 网络延迟惩罚权重：延迟越高的节点评分越低，促使亲和性调度优先选择距数据更近的节点 */
+    @Value("${dispatch.scheduler.weight.networkLatency:0.3}")
+    private double weightNetworkLatency;
+
+    /** 延迟归一化参考值（ms），超过此值时惩罚权值=1.0 */
+    @Value("${dispatch.scheduler.networkLatency.refMs:20.0}")
+    private double networkLatencyRefMs;
+
     @Value("${dispatch.scheduler.threshold.cpuHeadroom:0.1}")
     private double cpuHeadroom;
 
@@ -91,8 +103,9 @@ public class K8sJobFactory {
         private final double cpuFree;
         private final double memFreeGi;
         private final int datasetCount;
-        public CandidateNode(String name, String clusterId, double maxCpu, double maxMemGi, double cpuFree, double memFreeGi, int datasetCount) {
-            this.name = name; this.clusterId = clusterId; this.maxCpu = maxCpu; this.maxMemGi = maxMemGi; this.cpuFree = cpuFree; this.memFreeGi = memFreeGi; this.datasetCount = datasetCount;
+        private final double latencyMs; // 数据源节点到本节点的网络延迟(ms)，0=未知
+        public CandidateNode(String name, String clusterId, double maxCpu, double maxMemGi, double cpuFree, double memFreeGi, int datasetCount, double latencyMs) {
+            this.name = name; this.clusterId = clusterId; this.maxCpu = maxCpu; this.maxMemGi = maxMemGi; this.cpuFree = cpuFree; this.memFreeGi = memFreeGi; this.datasetCount = datasetCount; this.latencyMs = latencyMs;
         }
         public String getName() { return name; }
         public String getClusterId() { return clusterId; }
@@ -101,6 +114,7 @@ public class K8sJobFactory {
         public double getCpuFree() { return cpuFree; }
         public double getMemFreeGi() { return memFreeGi; }
         public int getDatasetCount() { return datasetCount; }
+        public double getLatencyMs() { return latencyMs; }
     }
     // <-- CandidateNode 定义结束
 
@@ -116,11 +130,13 @@ public class K8sJobFactory {
             @Value("${dispatch.data-discovery.namespace:default}") String discoveryNamespace,
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
             @Value("${dispatch.job.curl.limit-rate.default:}") String wgetLimitRate,
-            @Value("${dispatch.training.n-epochs:15}") int nEpochs
+            @Value("${dispatch.training.n-epochs:15}") int nEpochs,
+            EdgeManagementMapper edgeManagementMapper
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
         this.trainingProfileMapper = trainingProfileMapper;
+        this.edgeManagementMapper = edgeManagementMapper;
         this.clusterDomain = clusterDomain;
         this.initContainerImage = initContainerImage;
         this.mainContainerImage = mainContainerImage;
@@ -241,10 +257,10 @@ public class K8sJobFactory {
         CandidateNode bestNode;
         if (overrideTargetNode != null && !overrideTargetNode.isEmpty() && overrideTargetClusterId != null && !overrideTargetClusterId.isEmpty()) {
             log.info("调度决策被覆盖: Job '{}' 将被强制调度到集群 '{}' 的节点 '{}'", jobName, overrideTargetClusterId, overrideTargetNode);
-            bestNode = new CandidateNode(overrideTargetNode, overrideTargetClusterId, 0.0, 0.0, 0.0, 0.0, 0);
+            bestNode = new CandidateNode(overrideTargetNode, overrideTargetClusterId, 0.0, 0.0, 0.0, 0.0, 0, 0.0);
         } else {
             log.info("===== [智能调度流程开始] Job: {} =====", jobName);
-            List<CandidateNode> allAvailableNodes = gatherAvailableNodes(effectiveCpu, effectiveMem);
+            List<CandidateNode> allAvailableNodes = gatherAvailableNodes(effectiveCpu, effectiveMem, sourceNodeName);
             if (allAvailableNodes.isEmpty()) {
                 throw new IllegalStateException("在所有已知的集群中，没有找到任何可用的'compute'角色的节点。");
             }
@@ -437,11 +453,31 @@ public class K8sJobFactory {
                 + "echo \"TRANSFER_MS=$(echo $_t | awk '{printf \"%d\", $1*1000}')\"";
     }
 
-    private List<CandidateNode> gatherAvailableNodes(double cpuRequest, double memoryRequestGi) {
+    private List<CandidateNode> gatherAvailableNodes(double cpuRequest, double memoryRequestGi, String sourceNodeName) {
         List<CandidateNode> allNodes = new ArrayList<>();
         // 直接从 DB 查询所有具备计算能力的节点（含双角色节点），不再依赖 K8s label
         List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
         String singleClusterKey = clusterClients.size() == 1 ? clusterClients.keySet().iterator().next() : null;
+
+        // 构建「数据源节点 → 各候选节点」的延迟图（nodeId → latencyMs）
+        Map<Integer, Double> latencyToNode = new HashMap<>();
+        try {
+            NodeManagement srcInfo = nodeManagementMapper.getNodeByName(sourceNodeName);
+            if (srcInfo != null && srcInfo.getNodeId() != null) {
+                int srcId = srcInfo.getNodeId();
+                for (EdgeManagement e : edgeManagementMapper.selectAllEdges()) {
+                    if (e.getLatency() == null) continue;
+                    if (e.getSourceId() != null && e.getSourceId() == srcId && e.getTargetId() != null) {
+                        latencyToNode.put(e.getTargetId(), e.getLatency());
+                    } else if (e.getTargetId() != null && e.getTargetId() == srcId && e.getSourceId() != null) {
+                        latencyToNode.put(e.getSourceId(), e.getLatency());
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("构建网络延迟图时出错，将忽略网络延迟因子: {}", ex.getMessage());
+        }
+
         for (NodeManagement nm : computeNodes) {
             String clusterId = nm.getCluster();
             // DB cluster 字段为空时，单集群环境下自动回退到唯一集群
@@ -471,7 +507,8 @@ public class K8sJobFactory {
             boolean memOk = memFreeGi >= memoryRequestGi * (1.0 + memHeadroom);
             if (cpuOk && memOk) {
                 int datasetCount = nm.getNumDataset() != null ? nm.getNumDataset() : 0;
-                allNodes.add(new CandidateNode(nm.getNodeName(), clusterId, maxCpu, maxMemGi, cpuFree, memFreeGi, datasetCount));
+                double latencyMs = nm.getNodeId() != null ? latencyToNode.getOrDefault(nm.getNodeId(), 0.0) : 0.0;
+                allNodes.add(new CandidateNode(nm.getNodeName(), clusterId, maxCpu, maxMemGi, cpuFree, memFreeGi, datasetCount, latencyMs));
             }
         }
         return allNodes;
@@ -484,7 +521,9 @@ public class K8sJobFactory {
         double datasetTerm = datasetPenalty * node.getDatasetCount();
         // 数据亲和性加分：候选节点与数据所在节点相同时，给予大权重加分，确保亲和性调度稳定选择数据源节点
         double affinityTerm = (dataSourceNodeName != null && dataSourceNodeName.equals(node.getName())) ? dataAffinityBonus : 0.0;
-        return base + cpuTerm + memTerm - datasetTerm + affinityTerm;
+        // 网络延迟惩罚：延迟越高评分越低，促使亲和性调度选择距数据源更近（低延迟）的节点
+        double latencyTerm = node.getLatencyMs() > 0 ? weightNetworkLatency * (node.getLatencyMs() / networkLatencyRefMs) : 0.0;
+        return base + cpuTerm + memTerm - datasetTerm + affinityTerm - latencyTerm;
     }
 
     private CandidateNode selectBestNode(List<CandidateNode> availableNodes, String sourceClusterId, String dataSourceNodeName) {
