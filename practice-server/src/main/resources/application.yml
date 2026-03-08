@@ -80,6 +80,8 @@ dispatch:
   scheduler:
     in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
     in-place-rate: 12m             # 原地调度模拟本地读取速率；交集分析: 12m使 40→215路径ratio≈1.2, 141→215路径ratio≈2.4
+  training:
+    n-epochs: 1                    # 训练轮数，注入到训练容器 N_EPOCHS 环境变量
 
 
 # 原 practice.jwt.*，现在直接定义

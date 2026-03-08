@@ -80,6 +80,8 @@ public class K8sJobFactory {
     @Value("${dispatch.scheduler.threshold.memHeadroom:0.1}")
     private double memHeadroom;
 
+    private int nEpochs;
+
     // <-- 这里是 CandidateNode 的定义，已添加回来
     private static class CandidateNode {
         private final String name;
@@ -113,7 +115,8 @@ public class K8sJobFactory {
             @Value("${dispatch.data-discovery.service:data-discovery-svc}") String discoveryService,
             @Value("${dispatch.data-discovery.namespace:default}") String discoveryNamespace,
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
-            @Value("${dispatch.job.curl.limit-rate.default:}") String wgetLimitRate
+            @Value("${dispatch.job.curl.limit-rate.default:}") String wgetLimitRate,
+            @Value("${dispatch.training.n-epochs:15}") int nEpochs
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -125,6 +128,7 @@ public class K8sJobFactory {
         this.discoveryNamespace = discoveryNamespace;
         this.discoveryPort = discoveryPort;
         this.wgetLimitRate = wgetLimitRate;
+        this.nEpochs = nEpochs;
     }
 
     @PostConstruct
@@ -306,6 +310,7 @@ public class K8sJobFactory {
                 .addNewEnv().withName("DATA_NAME").withValue(dataFileName).endEnv()
                 .addNewEnv().withName("DATA_PATH").withValue(selectedDataPath).endEnv()
                 .addNewEnv().withName("OUTPUT_DIR").withValue("/data/output").endEnv()
+                .addNewEnv().withName("N_EPOCHS").withValue(String.valueOf(nEpochs)).endEnv()
                 .withNewResources()
                 .addToRequests("cpu", new Quantity(String.valueOf(effectiveCpu)))
                 .addToRequests("memory", new Quantity(String.valueOf(effectiveMem) + "Gi"))
