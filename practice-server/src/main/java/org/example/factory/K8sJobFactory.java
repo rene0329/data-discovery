@@ -267,7 +267,7 @@ public class K8sJobFactory {
         CandidateNode bestNode;
         if (overrideTargetNode != null && !overrideTargetNode.isEmpty() && overrideTargetClusterId != null && !overrideTargetClusterId.isEmpty()) {
             log.info("调度决策被覆盖: Job '{}' 将被强制调度到集群 '{}' 的节点 '{}'", jobName, overrideTargetClusterId, overrideTargetNode);
-            bestNode = new CandidateNode(overrideTargetNode, overrideTargetClusterId, 0.0, 0.0, 0.0, 0.0, 0, 0.0);
+            bestNode = new CandidateNode(overrideTargetNode, overrideTargetClusterId, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0);
         } else {
             log.info("===== [智能调度流程开始] Job: {} =====", jobName);
             List<CandidateNode> allAvailableNodes = gatherAvailableNodes(effectiveCpu, effectiveMem, sourceNodeName);
