@@ -10,8 +10,8 @@ spec:
   schedule: "*/5 * * * *"
   # 同一时间最多允许 1 个 Job 并发运行
   concurrencyPolicy: Forbid
-  # 保留最近 3 次成功和 1 次失败的 Job，便于排查
-  successfulJobsHistoryLimit: 3
+  # 成功的 Job 不保留，失败的保留 1 次便于排查
+  successfulJobsHistoryLimit: 0
   failedJobsHistoryLimit: 1
   # 如果错过触发时间超过 120 秒，跳过本次
   startingDeadlineSeconds: 120
@@ -21,6 +21,8 @@ spec:
       backoffLimit: 2
       # Job 超过 300 秒自动终止，防止卡死
       activeDeadlineSeconds: 300
+      # Job 完成后 60 秒自动删除 Pod（双保险）
+      ttlSecondsAfterFinished: 60
       template:
         metadata:
           labels:
