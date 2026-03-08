@@ -289,8 +289,16 @@ public class CommonController {
      */
     @Transactional
     @GetMapping("/saveAll")
-    public ResponseEntity<ApiResponse<List<DataManagement>>> saveAll() {
-        log.info("开始多因子热敏制导存储分配（含物理迁移）...");
+    public ResponseEntity<ApiResponse<List<DataManagement>>> saveAll(
+            @RequestParam(defaultValue = "heat") String mode) {
+        int taskCount = taskManagementMapper.countTasks();
+        if ("heat".equals(mode) && taskCount > 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("task_management 有数据时不可使用热敏存储，请先清空任务或使用原位汇聚"));
+        }
+        if ("aggregation".equals(mode) && taskCount == 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("task_management 无数据时不可使用原位汇聚，请先提交任务或使用热敏存储"));
+        }
+        log.info("开始多因子热敏制导存储分配（含物理迁移），mode={}...", mode);
 
         // ── 1. 可存储节点（存储节点 + 计算存储双角色节点）
         List<NodeManagement> storageNodes = dataManagementMapper.getCentralityNodes();
