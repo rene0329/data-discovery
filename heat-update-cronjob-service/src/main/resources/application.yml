@@ -3,6 +3,8 @@ spring:
     name: heat-update-cronjob-service
   profiles:
     active: dev  # 激活 dev 配置文件（可选，如果有 application-dev.yml）
+  main:
+    allow-circular-references: true  # PageHelperAutoConfiguration 循环依赖，Spring Boot 2.6+ 默认禁止，需显式允许
 
   # 数据库连接池配置（必须完整定义，否则失败）
   datasource:
