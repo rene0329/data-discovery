@@ -211,9 +211,10 @@ public class K8sNodeMapperImpl implements K8sNodeMapper {
     }
 
     private String extractClusterName(Map<String, String> labels) {
+        // 自建集群无 AKS 专属 label，优先读自定义 label，兜底写固定集群名
         return Optional.ofNullable(labels)
-                .map(lbls -> lbls.get("kubernetes.azure.com/cluster"))
-                .orElse(null);
+                .map(lbls -> lbls.getOrDefault("cluster-name", "topic4-cluster"))
+                .orElse("topic4-cluster");
     }
 
     private Integer extractNumDataset(Map<String, String> labels) {
