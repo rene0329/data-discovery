@@ -30,6 +30,7 @@ import org.springframework.http.MediaType;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
+import java.nio.file.Paths;
 import org.example.vo.ApiResponse;
 import org.example.vo.PageResult;
 
@@ -85,39 +86,46 @@ public class CommonController {
      *                     若为 false，仅复制不删除（备份/copy）。
      * @return true=迁移成功；false=失败（调用方应保留旧 data_server）
      */
-    private boolean migrateFile(String dataName, String sourceNode, String targetNode, boolean deleteSource) {
-        String downloadUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/download/" + dataName;
+    private boolean migrateFile(String dataName, String filePath, String sourceNode, String targetNode, boolean deleteSource) {
+        if (filePath == null || filePath.isEmpty()) {
+            log.warn("物理迁移: 数据项 '{}' filePath 为空，无法定位文件，跳过迁移", dataName);
+            return false;
+        }
+        // filePath 为绝对路径（如 /dataset/catdog/npz/catdog.npz），去掉首 / 得到相对路径
+        String relativePath = filePath.startsWith("/") ? filePath.substring(1) : filePath;
+        String fileName = Paths.get(relativePath).getFileName().toString();
+        String downloadUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/download/" + relativePath;
         String uploadUrl   = discoveryBaseUrl(targetNode) + "/data-discovery/upload";
         try {
             // 1. 下载文件到内存（适合中小文件；大文件可考虑流式改造）
             byte[] fileBytes = restTemplate.getForObject(downloadUrl, byte[].class);
             if (fileBytes == null || fileBytes.length == 0) {
-                log.warn("物理迁移: 从 {} 下载 {} 得到空响应，跳过迁移", sourceNode, dataName);
+                log.warn("物理迁移: 从 {} 下载 {} 得到空响应，跳过迁移", sourceNode, relativePath);
                 return false;
             }
-            // 2. 上传到目标节点
+            // 2. 上传到目标节点，path 参数使用相同相对路径，保持目录结构一致
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
             MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
             body.add("file", new ByteArrayResource(fileBytes) {
-                @Override public String getFilename() { return dataName; }
+                @Override public String getFilename() { return fileName; }
             });
-            body.add("path", dataName);
+            body.add("path", relativePath);
             restTemplate.postForObject(uploadUrl, new HttpEntity<>(body, headers), Map.class);
-            log.info("物理迁移成功: {} {} -> {} ({} bytes)", dataName, sourceNode, targetNode, fileBytes.length);
+            log.info("物理迁移成功: {} {} -> {} ({} bytes)", relativePath, sourceNode, targetNode, fileBytes.length);
             // 3. 删除源节点文件（move 语义）
             if (deleteSource) {
-                String deleteUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/delete/" + dataName;
+                String deleteUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/delete/" + relativePath;
                 try {
                     restTemplate.delete(deleteUrl);
-                    log.info("已删除源节点 {} 上的文件: {}", sourceNode, dataName);
+                    log.info("已删除源节点 {} 上的文件: {}", sourceNode, relativePath);
                 } catch (Exception ex) {
-                    log.warn("删除源文件失败（非致命）: {} @ {}: {}", dataName, sourceNode, ex.getMessage());
+                    log.warn("删除源文件失败（非致命）: {} @ {}: {}", relativePath, sourceNode, ex.getMessage());
                 }
             }
             return true;
         } catch (Exception e) {
-            log.error("物理迁移失败: {} {} -> {}: {}", dataName, sourceNode, targetNode, e.getMessage());
+            log.error("物理迁移失败: {} {} -> {}: {}", relativePath, sourceNode, targetNode, e.getMessage());
             return false;
         }
     }
@@ -376,7 +384,7 @@ public class CommonController {
             boolean needsMove = oldServer != null && !oldServer.isEmpty() && !oldServer.equals(newServer);
 
             if (needsMove) {
-                boolean ok = migrateFile(data.getDataName(), oldServer, newServer, true);
+                boolean ok = migrateFile(data.getDataName(), data.getFilePath(), oldServer, newServer, true);
                 if (!ok) {
                     log.warn("物理迁移失败，'{}' 保留在原节点 {}，跳过 DB 更新", data.getDataName(), oldServer);
                     skippedCount++;
@@ -426,21 +434,12 @@ public class CommonController {
 
             String oldBackup = oldBackupMap.get(data.getDataName());
             String newBackup = backupBest.getNodeName();
-            // 仅当备份目标改变 或 从未备份过时，才需要物理复制（从主节点复制一份）
-            boolean backupNeedsMove = primaryNode != null && !primaryNode.isEmpty()
-                    && !newBackup.equals(oldBackup);
 
-            if (backupNeedsMove) {
-                boolean ok = migrateFile(data.getDataName(), primaryNode, newBackup, false);
-                if (!ok) {
-                    log.warn("备份物理复制失败，'{}' 保留旧备份节点 {}", data.getDataName(), oldBackup);
-                    continue;
-                }
-            }
-
+            // 备份只落库，不做物理文件传输（避免与 DaemonSet 扫描冲突产生重复记录）
             data.setBackupServer(newBackup);
             dataManagementMapper.updateBackupServer(data);
-            log.info("备份 '{}' → {}", data.getDataName(), newBackup);
+            log.info("备份（仅落库）'{}' → {}{}", data.getDataName(), newBackup,
+                    newBackup.equals(oldBackup) ? "（未变更）" : "（已变更）");
         }
 
         log.info("分配完成：共 {} 条数据，物理迁移 {} 个，失败保留 {} 个，存储节点 {} 个",
