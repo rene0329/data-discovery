@@ -226,10 +226,13 @@ public class DataDiscoveryController {
 
     /**
      * 文件删除接口 —— 供 practice-server saveAll 物理迁移后删除源节点旧文件。
-     * URL: DELETE /data-discovery/delete/{filename}
+     * URL: DELETE /data-discovery/delete/**  （支持多级路径，如 dataset/yelp/npz/yelp.npz）
      */
-    @DeleteMapping("/delete/{filename:.+}")
-    public ResponseEntity<Map<String, Object>> deleteFile(@PathVariable String filename) {
+    @DeleteMapping("/delete/**")
+    public ResponseEntity<Map<String, Object>> deleteFile(HttpServletRequest request) {
+        String prefix = "/data-discovery/delete/";
+        String uri = request.getRequestURI();
+        String filename = uri.contains(prefix) ? uri.substring(uri.indexOf(prefix) + prefix.length()) : "";
         Path filePath = Paths.get(dataDirectory).resolve(filename).normalize();
 
         if (!filePath.startsWith(Paths.get(dataDirectory).normalize())) {
