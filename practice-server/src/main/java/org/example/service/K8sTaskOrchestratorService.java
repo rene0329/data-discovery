@@ -356,7 +356,7 @@ public class K8sTaskOrchestratorService {
     private void updateTaskStatusToFailed(Integer taskId, String errorMessage) {
         TaskManagement failedTask = new TaskManagement();
         failedTask.setTaskId(taskId);
-        failedTask.setStatus("执行失败: " + errorMessage);
+        failedTask.setStatus("执行失败");
         taskManagementMapper.updateTask(failedTask);
     }
 
