@@ -257,7 +257,7 @@ import java.util.List;
 import java.util.Map; // <-- 可能需要这个
 import java.util.concurrent.ConcurrentHashMap; // <-- 可能需要这个
 
-//@Service
+@Service
 public class NodeSyncService {
 
     private static final Logger log = LoggerFactory.getLogger(NodeSyncService.class);
