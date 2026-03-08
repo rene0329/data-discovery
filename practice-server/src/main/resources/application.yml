@@ -79,7 +79,7 @@ dispatch:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致
   scheduler:
     in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
-    in-place-rate: 8m              # 原地调度模拟本地读取速率；8m使 40→215路径ratio≈1.34, 141→215路径ratio≈2.6
+    in-place-rate: 15m             # 原地调度模拟本地读取速率；需 > 最快网络路径(10m)，15m使 40→215路径ratio≈1.37
   training:
     n-epochs: 1                    # 训练轮数，注入到训练容器 N_EPOCHS 环境变量
 
