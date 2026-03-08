@@ -7,6 +7,7 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import org.example.entity.NodeManagement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -16,6 +17,7 @@ import java.util.Optional;
 /**
  * K8sNodeMapper 的默认实现，负责把 K8s Node 及其 Metrics 映射到 NodeManagement。
  */
+@Primary
 @Component
 public class K8sNodeMapperImpl implements K8sNodeMapper {
 
