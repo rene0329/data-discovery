@@ -228,12 +228,13 @@ public class K8sJobFactory {
             throw new IllegalStateException("没有任何可用的Kubernetes集群客户端，无法调度Job。");
         }
 
-        // 若 DB 中 cluster 字段为空，单集群环境下自动使用唯一可用客户端的 key
+        // 若 DB 中 cluster 字段为空、或与 clusterClients 中的 key 不匹配，单集群环境下自动回退到唯一可用客户端的 key
         String fallbackClusterId = clusterClients.size() == 1 ? clusterClients.keySet().iterator().next() : null;
-        if ((sourceClusterId == null || sourceClusterId.isEmpty()) && fallbackClusterId != null) {
+        if ((sourceClusterId == null || sourceClusterId.isEmpty() || !clusterClients.containsKey(sourceClusterId)) && fallbackClusterId != null) {
             sourceClusterId = fallbackClusterId;
         }
-        if ((overrideTargetClusterId == null || overrideTargetClusterId.isEmpty()) && overrideTargetNode != null && !overrideTargetNode.isEmpty() && fallbackClusterId != null) {
+        if (overrideTargetNode != null && !overrideTargetNode.isEmpty() && fallbackClusterId != null
+                && (overrideTargetClusterId == null || overrideTargetClusterId.isEmpty() || !clusterClients.containsKey(overrideTargetClusterId))) {
             overrideTargetClusterId = fallbackClusterId;
         }
 
@@ -452,8 +453,13 @@ public class K8sJobFactory {
                 }
             }
             // 该节点所在集群必须有可用的 K8s 客户端（防止跨集群找不到 kubeconfig）
+            // 单集群环境下，若 DB 中 cluster 名与客户端 key 不匹配，自动回退到唯一客户端
             if (!clusterClients.containsKey(clusterId)) {
-                continue;
+                if (singleClusterKey != null) {
+                    clusterId = singleClusterKey;
+                } else {
+                    continue;
+                }
             }
             double maxCpu = nm.getMaxCpu() != null ? nm.getMaxCpu() : 0.0;
             double maxMemGi = nm.getMaxMemory() != null ? nm.getMaxMemory() : 0.0;
