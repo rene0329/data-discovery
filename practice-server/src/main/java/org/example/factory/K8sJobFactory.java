@@ -348,13 +348,16 @@ public class K8sJobFactory {
 
     private String inferTaskType(String datasetName) {
         String n = datasetName == null ? "" : datasetName.toLowerCase();
-        if (n.contains("rating") || n.contains("recsys") || n.contains("recommend")) {
+        if (n.contains("rating") || n.contains("recsys") || n.contains("recommend")
+                || n.contains("ciao") || n.contains("epinion") || n.contains("yelp") || n.contains("bpr")) {
             return "recsys";
         }
-        if (n.contains("emotion") || n.contains("sentiment") || n.endsWith(".csv") || n.contains("text")) {
+        if (n.contains("emotion") || n.contains("sentiment") || n.endsWith(".csv") || n.contains("text")
+                || n.contains("nlpcc") || n.contains("gru")) {
             return "text";
         }
-        if (n.contains("cat") || n.contains("dog") || n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.contains("image")) {
+        if (n.contains("cat") || n.contains("dog") || n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.contains("image")
+                || n.contains("resnet") || n.contains("catdog")) {
             return "image";
         }
         return "text";
