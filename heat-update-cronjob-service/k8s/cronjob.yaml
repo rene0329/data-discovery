@@ -6,8 +6,8 @@ metadata:
   labels:
     app: heat-update
 spec:
-  # 每天凌晨 2:00 执行（UTC），按需调整
-  schedule: "0 2 * * *"
+  # 每 5 分钟执行一次
+  schedule: "*/5 * * * *"
   # 同一时间最多允许 1 个 Job 并发运行
   concurrencyPolicy: Forbid
   # 保留最近 3 次成功和 1 次失败的 Job，便于排查
