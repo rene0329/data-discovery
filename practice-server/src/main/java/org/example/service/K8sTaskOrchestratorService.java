@@ -54,9 +54,13 @@ public class K8sTaskOrchestratorService {
     private final Executor dataProcessingExecutor;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
-    /** 当亲和性调度的目标节点就是数据所在源节点时，跳过实际 Job 直接返回此基础时间(ms)，避免除零且符合原地存储假设。*/
+    /** 当亲和性调度的目标节点就是数据所在源节点时，跳过实际 Job 直接返回此基础时间(ms)，当文件大小为0时兜底使用。*/
     @Value("${dispatch.scheduler.in-place-baseline-ms:50}")
     private long inPlaceBaselineMs;
+
+    /** 原地调度场景下模拟本地磁盘读取速率，用于按文件大小估算原地传输时间，使加速比更合理。*/
+    @Value("${dispatch.scheduler.in-place-rate:100m}")
+    private String inPlaceRate;
 
     @Autowired
     public K8sTaskOrchestratorService(
@@ -182,10 +186,10 @@ public class K8sTaskOrchestratorService {
             // 直接返回基础时间，避免发起无意义的 K8s Job 并防止后续速率计算除零
             if ("affinity".equals(type) && sourceNodeInfo.getNodeName().equals(selectedTargetNodeName)) {
                 long fileSizeBytes = dataInfo.getDataSize() != null ? dataInfo.getDataSize() : 0L;
-                long baseline = k8sJobFactory.calculateBaselineMs(fileSizeBytes, selectedTargetNodeName, selectedTargetNodeName);
+                long baseline = k8sJobFactory.calculateBaselineMsWithRate(fileSizeBytes, inPlaceRate);
                 if (baseline <= 0) baseline = inPlaceBaselineMs;
-                log.info("数据项[{}] 亲和性调度目标 = 源节点 {}（原地），跳过 K8s Job，返回基础时间 {}ms",
-                        dataInfo.getDataName(), selectedTargetNodeName, baseline);
+                log.info("数据项[{}] 亲和性调度目标 = 源节点 {}（原地），跳过 K8s Job，本地读取速率 {} 估算时间 {}ms",
+                        dataInfo.getDataName(), selectedTargetNodeName, inPlaceRate, baseline);
                 if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
                 return baseline;
             }

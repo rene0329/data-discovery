@@ -406,6 +406,15 @@ public class K8sJobFactory {
     }
 
     /**
+     * 用指定速率（如 "100m"）估算 fileSizeBytes 字节本地读取所需毫秒数。
+     * 用于原地调度基础时间计算，模拟本地磁盘 I/O 而非网络传输速率。
+     */
+    public long calculateBaselineMsWithRate(long fileSizeBytes, String rate) {
+        long rateBytes = parseLimitRateToBytes(rate);
+        return rateBytes > 0 ? (fileSizeBytes * 1000L / rateBytes) : 0;
+    }
+
+    /**
      * 构建 init container curl 命令（curlimages/curl 镜像，原生支持 --limit-rate）。
      * 使用 curl --write-out '%{time_total}' 获取微秒级传输时间，精度 ~1ms，
      * 避免依赖 /proc/uptime（仅 10ms 精度）。

@@ -78,7 +78,8 @@ dispatch:
   data-discovery:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致
   scheduler:
-    in-place-baseline-ms: 50      # 亲和性调度目标为源节点本身时的虚拟传输时间(ms)，避免除零
+    in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
+    in-place-rate: 100m            # 原地调度模拟本地磁盘读取速率，调大则 T1 更小、加速比更大
 
 
 # 原 practice.jwt.*，现在直接定义
