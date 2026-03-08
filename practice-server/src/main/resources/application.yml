@@ -82,8 +82,11 @@ dispatch:
     in-place-rate: 15m             # 原地调度模拟本地读取速率；需 > 最快网络路径(10m)，15m使 40→215路径ratio≈1.37
     weight:
       networkLatency: 0.3          # 网络延迟惩罚权重（越大越倾向选低延迟节点）
+      bandwidth: 0.3               # 带宽奖励权重（越大越倾向选高带宽路径，对大文件传输更重要）
     networkLatency:
       refMs: 20.0                  # 延迟归一化参考值(ms)，等于当前拓扑中最大边延迟(141↔215=20ms)
+    bandwidth:
+      refMbps: 10.0                # 带宽归一化参考值，等于当前拓扑中最大边带宽(141↔40=10)
   training:
     n-epochs: 1                    # 训练轮数，注入到训练容器 N_EPOCHS 环境变量
 

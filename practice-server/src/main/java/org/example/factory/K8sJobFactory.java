@@ -86,6 +86,14 @@ public class K8sJobFactory {
     @Value("${dispatch.scheduler.networkLatency.refMs:20.0}")
     private double networkLatencyRefMs;
 
+    /** 带宽评分权重：带宽越高的节点评分越高，促使调度器优先选择高带宽链路 */
+    @Value("${dispatch.scheduler.weight.bandwidth:0.3}")
+    private double weightBandwidth;
+
+    /** 带宽归一化参考值（Mbps），等于当前拓扑中最大边带宽 */
+    @Value("${dispatch.scheduler.bandwidth.refMbps:10.0}")
+    private double bandwidthRefMbps;
+
     @Value("${dispatch.scheduler.threshold.cpuHeadroom:0.1}")
     private double cpuHeadroom;
 
@@ -103,9 +111,10 @@ public class K8sJobFactory {
         private final double cpuFree;
         private final double memFreeGi;
         private final int datasetCount;
-        private final double latencyMs; // 数据源节点到本节点的网络延迟(ms)，0=未知
-        public CandidateNode(String name, String clusterId, double maxCpu, double maxMemGi, double cpuFree, double memFreeGi, int datasetCount, double latencyMs) {
-            this.name = name; this.clusterId = clusterId; this.maxCpu = maxCpu; this.maxMemGi = maxMemGi; this.cpuFree = cpuFree; this.memFreeGi = memFreeGi; this.datasetCount = datasetCount; this.latencyMs = latencyMs;
+        private final double latencyMs;    // 数据源节点到本节点的网络延迟(ms)，0=未知
+        private final double bandwidthMbps; // 数据源节点到本节点的带宽，0=未知
+        public CandidateNode(String name, String clusterId, double maxCpu, double maxMemGi, double cpuFree, double memFreeGi, int datasetCount, double latencyMs, double bandwidthMbps) {
+            this.name = name; this.clusterId = clusterId; this.maxCpu = maxCpu; this.maxMemGi = maxMemGi; this.cpuFree = cpuFree; this.memFreeGi = memFreeGi; this.datasetCount = datasetCount; this.latencyMs = latencyMs; this.bandwidthMbps = bandwidthMbps;
         }
         public String getName() { return name; }
         public String getClusterId() { return clusterId; }
@@ -115,6 +124,7 @@ public class K8sJobFactory {
         public double getMemFreeGi() { return memFreeGi; }
         public int getDatasetCount() { return datasetCount; }
         public double getLatencyMs() { return latencyMs; }
+        public double getBandwidthMbps() { return bandwidthMbps; }
     }
     // <-- CandidateNode 定义结束
 
@@ -459,18 +469,24 @@ public class K8sJobFactory {
         List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
         String singleClusterKey = clusterClients.size() == 1 ? clusterClients.keySet().iterator().next() : null;
 
-        // 构建「数据源节点 → 各候选节点」的延迟图（nodeId → latencyMs）
+        // 构建「数据源节点 → 各候选节点」的延迟图和带宽图（nodeId → ms / Mbps）
         Map<Integer, Double> latencyToNode = new HashMap<>();
+        Map<Integer, Double> bandwidthToNode = new HashMap<>();
         try {
             NodeManagement srcInfo = nodeManagementMapper.getNodeByName(sourceNodeName);
             if (srcInfo != null && srcInfo.getNodeId() != null) {
                 int srcId = srcInfo.getNodeId();
                 for (EdgeManagement e : edgeManagementMapper.selectAllEdges()) {
                     if (e.getLatency() == null) continue;
+                    int peerId = -1;
                     if (e.getSourceId() != null && e.getSourceId() == srcId && e.getTargetId() != null) {
-                        latencyToNode.put(e.getTargetId(), e.getLatency());
+                        peerId = e.getTargetId();
                     } else if (e.getTargetId() != null && e.getTargetId() == srcId && e.getSourceId() != null) {
-                        latencyToNode.put(e.getSourceId(), e.getLatency());
+                        peerId = e.getSourceId();
+                    }
+                    if (peerId > 0) {
+                        latencyToNode.put(peerId, e.getLatency());
+                        if (e.getBandwidth() != null) bandwidthToNode.put(peerId, e.getBandwidth().doubleValue());
                     }
                 }
             }
@@ -508,7 +524,12 @@ public class K8sJobFactory {
             if (cpuOk && memOk) {
                 int datasetCount = nm.getNumDataset() != null ? nm.getNumDataset() : 0;
                 double latencyMs = nm.getNodeId() != null ? latencyToNode.getOrDefault(nm.getNodeId(), 0.0) : 0.0;
-                allNodes.add(new CandidateNode(nm.getNodeName(), clusterId, maxCpu, maxMemGi, cpuFree, memFreeGi, datasetCount, latencyMs));
+                double bandwidthMbps = nm.getNodeId() != null ? bandwidthToNode.getOrDefault(nm.getNodeId(), 0.0) : 0.0;
+                log.info("候选节点 '{}' (nodeId={}): latency={}ms, bandwidth={}, cpuFree={}/{}, memFree={}/{}",
+                        nm.getNodeName(), nm.getNodeId(), latencyMs, bandwidthMbps,
+                        String.format("%.1f", cpuFree), String.format("%.0f", maxCpu),
+                        String.format("%.1f", memFreeGi), String.format("%.0f", maxMemGi));
+                allNodes.add(new CandidateNode(nm.getNodeName(), clusterId, maxCpu, maxMemGi, cpuFree, memFreeGi, datasetCount, latencyMs, bandwidthMbps));
             }
         }
         return allNodes;
@@ -523,7 +544,17 @@ public class K8sJobFactory {
         double affinityTerm = (dataSourceNodeName != null && dataSourceNodeName.equals(node.getName())) ? dataAffinityBonus : 0.0;
         // 网络延迟惩罚：延迟越高评分越低，促使亲和性调度选择距数据源更近（低延迟）的节点
         double latencyTerm = node.getLatencyMs() > 0 ? weightNetworkLatency * (node.getLatencyMs() / networkLatencyRefMs) : 0.0;
-        return base + cpuTerm + memTerm - datasetTerm + affinityTerm - latencyTerm;
+        // 带宽奖励：带宽越高评分越高，促使调度器优先选择高吞吐量路径（对大文件传输影响更大）
+        double bandwidthTerm = (node.getBandwidthMbps() > 0 && bandwidthRefMbps > 0)
+                ? weightBandwidth * Math.min(node.getBandwidthMbps(), bandwidthRefMbps) / bandwidthRefMbps
+                : 0.0;
+        double score = base + cpuTerm + memTerm - datasetTerm + affinityTerm - latencyTerm + bandwidthTerm;
+        log.info("节点 '{}' 评分: {} [base={} cpu={} mem={} dst_pen=-{} affinity={} lat=-{} bw=+{}]",
+                node.getName(), String.format("%.4f", score),
+                String.format("%.3f", base), String.format("%.3f", cpuTerm), String.format("%.3f", memTerm),
+                String.format("%.3f", datasetTerm), String.format("%.3f", affinityTerm),
+                String.format("%.3f", latencyTerm), String.format("%.3f", bandwidthTerm));
+        return score;
     }
 
     private CandidateNode selectBestNode(List<CandidateNode> availableNodes, String sourceClusterId, String dataSourceNodeName) {
