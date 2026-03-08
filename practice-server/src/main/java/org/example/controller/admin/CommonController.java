@@ -728,12 +728,50 @@ public class CommonController {
      */
     @GetMapping("/networkTopology")
     public ResponseEntity<ApiResponse<Map<String, Object>>> networkTopology() {
+        List<NodeManagement> nodeList = nodeManagementMapper.networkConstruction();
+
+        // 构建 nodeId -> nodeName 映射，供边查找
+        Map<Integer, String> nodeIdToName = new HashMap<>();
+        List<Map<String, Object>> nodePayload = new ArrayList<>();
+        int total = nodeList.size();
+        double cx = 400, cy = 300, radius = 180;
+        for (int i = 0; i < total; i++) {
+            NodeManagement node = nodeList.get(i);
+            nodeIdToName.put(node.getNodeId(), node.getNodeName());
+            // 圆形自动布局，从顶部开始顺时针排列
+            double angle = 2 * Math.PI * i / Math.max(total, 1) - Math.PI / 2;
+            Map<String, Object> nodeMap = new HashMap<>();
+            nodeMap.put("id", node.getNodeName());
+            nodeMap.put("label", node.getNodeName());
+            nodeMap.put("x", (int)(cx + radius * Math.cos(angle)));
+            nodeMap.put("y", (int)(cy + radius * Math.sin(angle)));
+            nodeMap.put("width", 110);
+            nodeMap.put("height", 44);
+            nodeMap.put("cpu", node.getCurrentCpu() != null ? node.getCurrentCpu() : 0);
+            nodeMap.put("disk", 0);
+            nodePayload.add(nodeMap);
+        }
+
+        // 将 sourceId/targetId 转换为节点名，供前端渲染
+        List<EdgeManagement> edgeList = edgeManagementMapper.links();
+        List<Map<String, Object>> edgePayload = new ArrayList<>();
+        for (int i = 0; i < edgeList.size(); i++) {
+            EdgeManagement edge = edgeList.get(i);
+            String sourceName = nodeIdToName.get(edge.getSourceId());
+            String targetName = nodeIdToName.get(edge.getTargetId());
+            if (sourceName == null || targetName == null) continue;
+            Map<String, Object> edgeMap = new HashMap<>();
+            edgeMap.put("id", "e-" + i);
+            edgeMap.put("source", sourceName);
+            edgeMap.put("target", targetName);
+            edgeMap.put("latency", edge.getLatency() != null ? edge.getLatency() : 0);
+            edgeMap.put("bandwidth", edge.getBandwidth() != null ? edge.getBandwidth() : 0);
+            edgePayload.add(edgeMap);
+        }
+
         Map<String, Object> payload = new HashMap<>();
-        payload.put("nodes", nodeManagementMapper.networkConstruction());
-        List<EdgeManagement> links = edgeManagementMapper.links();
-        payload.put("links", links);
-        // 与前端字段保持一致，保留 links 兼容旧调用
-        payload.put("edges", links);
+        payload.put("nodes", nodePayload);
+        payload.put("edges", edgePayload);
         return ResponseEntity.ok(ApiResponse.ok(payload));
     }
 

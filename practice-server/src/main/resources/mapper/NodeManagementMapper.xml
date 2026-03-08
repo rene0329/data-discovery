@@ -3,13 +3,9 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
 <mapper namespace="org.example.mapper.NodeManagementMapper">
 
-<!--    <select id="networkConstruction" resultType="org.example.entity.NodeManagement">-->
-<!--        select * from node_management where 1=1-->
-<!--        <if test="query != null and query != ''">-->
-<!--            and (node_name like concat('%', #{query}, '%'))-->
-<!--            or  (cluster like concat('%', #{query}, '%'))-->
-<!--        </if>-->
-<!--    </select>-->
+    <select id="networkConstruction" resultType="org.example.entity.NodeManagement">
+        select * from node_management
+    </select>
 
     <select id="getNodeIpByDataServer" resultType="String">
         SELECT internal_ip
