@@ -353,8 +353,8 @@ public class K8sJobFactory {
         String wgetArgs = (wgetLimitRate != null && !wgetLimitRate.isEmpty() && !"0".equals(wgetLimitRate))
                 ? "--limit-rate=" + wgetLimitRate + " -O '" + destPath + "' '" + srcUrl + "'"
                 : "-O '" + destPath + "' '" + srcUrl + "'";
-        return "mkdir -p \"$(dirname '" + destPath + "')\" && _start=$(date +%s%3N) && wget " + wgetArgs
-                + " && echo \"TRANSFER_MS=$(( $(date +%s%3N) - _start ))\"";
+        return "mkdir -p \"$(dirname '" + destPath + "')\" && _start=$(date +%s) && wget " + wgetArgs
+                + " && echo \"TRANSFER_MS=$(( ($(date +%s) - _start) * 1000 ))\"";
     }
 
     private List<CandidateNode> gatherAvailableNodes(double cpuRequest, double memoryRequestGi) {
