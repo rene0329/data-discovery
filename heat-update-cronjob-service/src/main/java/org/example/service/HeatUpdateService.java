@@ -69,7 +69,7 @@ public class HeatUpdateService {
                 // 计算新的热度，确保不低于阈值
                 // count 为本轮调用次数：count>0 热度上升，count=0 热度衰减 lambda
                 double newHeat = Math.max(threshold, alpha * oldHeat + (1 - alpha) * count - lambda);
-                log.debug("{}  oldHeat={:.2f} delta_count={} newHeat={:.2f}", data.getDataName(), oldHeat, count, newHeat);
+                log.debug("{}  oldHeat={} delta_count={} newHeat={}", data.getDataName(), String.format("%.2f", oldHeat), count, String.format("%.2f", newHeat));
 
                 // 更新热度同时清零 count，count 重新累积到下一轮
                 dataManagementMapper.updateDataHeat(data.getDataName(), newHeat);
