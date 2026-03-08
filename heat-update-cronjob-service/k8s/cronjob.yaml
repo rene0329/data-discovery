@@ -6,8 +6,8 @@ metadata:
   labels:
     app: heat-update
 spec:
-  # 每 5 分钟执行一次
-  schedule: "*/5 * * * *"
+  # 每 30 分钟执行一次
+  schedule: "*/30 * * * *"
   # 同一时间最多允许 1 个 Job 并发运行
   concurrencyPolicy: Forbid
   # 成功的 Job 不保留，失败的保留 1 次便于排查
@@ -37,13 +37,15 @@ spec:
               imagePullPolicy: Always
               resources:
                 requests:
-                  memory: "128Mi"
+                  memory: "256Mi"
                   cpu: "100m"
                 limits:
-                  memory: "256Mi"
+                  memory: "512Mi"
                   cpu: "500m"
               # 数据库连接信息通过环境变量注入，避免硬编码在镜像中
               env:
+                - name: JAVA_TOOL_OPTIONS
+                  value: "-Xms128m -Xmx384m"
                 - name: SPRING_DATASOURCE_URL
                   value: "jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
                 - name: SPRING_DATASOURCE_USERNAME
