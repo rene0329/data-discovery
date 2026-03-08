@@ -79,7 +79,7 @@ dispatch:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致
   scheduler:
     in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
-    in-place-rate: 100m            # 原地调度模拟本地磁盘读取速率，调大则 T1 更小、加速比更大
+    in-place-rate: 12m             # 原地调度模拟本地读取速率；交集分析: 12m使 40→215路径ratio≈1.2, 141→215路径ratio≈2.4
 
 
 # 原 practice.jwt.*，现在直接定义
