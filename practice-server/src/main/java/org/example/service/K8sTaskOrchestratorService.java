@@ -334,8 +334,8 @@ public class K8sTaskOrchestratorService {
         TaskManagement finalTask = taskManagementMapper.getTaskByTaskId(taskId);
         if (finalTask != null) {
             double rating = totalT1 > 0 ? (totalT2 / totalT1) : 0;
-            String finalSchedule = "分布式亲和性调度方案:\n" + String.join("\n", scheduleT1List) +
-                    "\n\n中心化调度方案:\n" + String.join("\n", scheduleT2List);
+            String finalSchedule = "分布式调度方案:\n" + String.join("\n", scheduleT1List) +
+                    "\n中心化调度方案:\n" + String.join("\n", scheduleT2List);
 
             finalTask.setT1(totalT1);
             finalTask.setT2(totalT2);
