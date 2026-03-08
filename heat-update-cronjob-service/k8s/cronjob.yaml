@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: heat-update-cronjob
-  namespace: default
+  namespace: topic4-1
   labels:
     app: heat-update
 spec:
@@ -27,18 +27,6 @@ spec:
             app: heat-update
         spec:
           restartPolicy: OnFailure
-
-          # 只在 master-40 或 master-215（计算节点）运行，不占用存储节点资源
-          affinity:
-            nodeAffinity:
-              requiredDuringSchedulingIgnoredDuringExecution:
-                nodeSelectorTerms:
-                  - matchExpressions:
-                      - key: node-role
-                        operator: In
-                        values:
-                          - compute
-                          - compute-storage
 
           containers:
             - name: heat-update
