@@ -1,5 +1,8 @@
 package org.example.config;
 
+// CronJob 无 HTTP 接口，本类已禁用，保留文件以备后用。
+// 如需启用 Swagger，删除本注释并添回 spring-boot-starter-web 依赖。
+/*
 import com.github.xiaoymin.knife4j.spring.annotations.EnableKnife4j;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
@@ -79,3 +82,4 @@ public class Knife4jConfig {  // 或 SwaggerConfig，根据你的命名
         };
     }
 }
+*/

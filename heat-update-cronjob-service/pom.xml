@@ -63,11 +63,7 @@
             <artifactId>lombok</artifactId>
         </dependency>
 
-        <!-- 如果需要 RestTemplate（可选） -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
+        <!-- CronJob 无需 HTTP 接口，不引入 web，避免启动 Tomcat -->
 
         <!-- 测试依赖（可选） -->
         <dependency>

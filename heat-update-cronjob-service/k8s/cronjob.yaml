@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: heat-update-cronjob
+  namespace: default
+  labels:
+    app: heat-update
+spec:
+  # 每天凌晨 2:00 执行（UTC），按需调整
+  schedule: "0 2 * * *"
+  # 同一时间最多允许 1 个 Job 并发运行
+  concurrencyPolicy: Forbid
+  # 保留最近 3 次成功和 1 次失败的 Job，便于排查
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  # 如果错过触发时间超过 120 秒，跳过本次
+  startingDeadlineSeconds: 120
+  jobTemplate:
+    spec:
+      # Job 失败后最多重试 2 次
+      backoffLimit: 2
+      # Job 超过 300 秒自动终止，防止卡死
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app: heat-update
+        spec:
+          restartPolicy: OnFailure
+
+          # 只在 master-40 或 master-215（计算节点）运行，不占用存储节点资源
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: node-role
+                        operator: In
+                        values:
+                          - compute
+                          - compute-storage
+
+          containers:
+            - name: heat-update
+              # GitHub Container Registry 镜像地址（由 publish-heat-update.yml workflow 构建推送）
+              image: ghcr.io/rene0329/data-discovery-heat-update-cronjob:latest
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "500m"
+              # 数据库连接信息通过环境变量注入，避免硬编码在镜像中
+              env:
+                - name: SPRING_DATASOURCE_URL
+                  value: "jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
+                - name: SPRING_DATASOURCE_USERNAME
+                  value: "root"
+                - name: SPRING_DATASOURCE_PASSWORD
+                  # 建议改为 secretKeyRef，示例：
+                  # valueFrom:
+                  #   secretKeyRef:
+                  #     name: db-secret
+                  #     key: password
+                  value: "ibdiibdi"
