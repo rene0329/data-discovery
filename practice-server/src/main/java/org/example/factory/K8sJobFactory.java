@@ -43,6 +43,18 @@ public class K8sJobFactory {
     private final int discoveryPort;
     private final String wgetLimitRate;
 
+    /** 路径级限速: master-141 -> master-40 */
+    @Value("${dispatch.job.curl.limit-rate.141-to-40:}")
+    private String wgetLimitRate141To40;
+
+    /** 路径级限速: master-141 -> master-215 */
+    @Value("${dispatch.job.curl.limit-rate.141-to-215:}")
+    private String wgetLimitRate141To215;
+
+    /** 路径级限速: master-40 -> master-215 */
+    @Value("${dispatch.job.curl.limit-rate.40-to-215:}")
+    private String wgetLimitRate40To215;
+
     @Value("${dispatch.scheduler.weight.cpuFreePct:0.5}")
     private double weightCpuFreePct;
 
@@ -101,7 +113,7 @@ public class K8sJobFactory {
             @Value("${dispatch.data-discovery.service:data-discovery-svc}") String discoveryService,
             @Value("${dispatch.data-discovery.namespace:default}") String discoveryNamespace,
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
-            @Value("${dispatch.job.wget.limit-rate:}") String wgetLimitRate
+            @Value("${dispatch.job.curl.limit-rate.default:}") String wgetLimitRate
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -278,7 +290,7 @@ public class K8sJobFactory {
                 .addNewInitContainer()
                 .withName("data-transfer-container")
                 .withImage(initContainerImage)
-                .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl))
+                .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl, resolveLimitRate(sourceNodeName, bestNode.getName())))
                 .addNewVolumeMount()
                 .withName("shared-data")
                 .withMountPath("/data")
@@ -350,14 +362,32 @@ public class K8sJobFactory {
     }
 
     /**
-     * 构建 init container wget 命令，当 wgetLimitRate 配置非空且非"0"时附加 --limit-rate 参数。
+     * 根据源节点和目标节点解析应使用的 --limit-rate 字符串。
+     * 优先级: 路径级配置 > 全局配置 > 不限速。
+     */
+    private String resolveLimitRate(String srcNode, String destNode) {
+        if (srcNode != null && destNode != null) {
+            if (srcNode.contains("141") && destNode.contains("40") && isValidRate(wgetLimitRate141To40))   return wgetLimitRate141To40;
+            if (srcNode.contains("141") && destNode.contains("215") && isValidRate(wgetLimitRate141To215)) return wgetLimitRate141To215;
+            if (srcNode.contains("40")  && destNode.contains("215") && isValidRate(wgetLimitRate40To215))  return wgetLimitRate40To215;
+        }
+        return isValidRate(wgetLimitRate) ? wgetLimitRate : null;
+    }
+
+    private boolean isValidRate(String rate) {
+        return rate != null && !rate.isEmpty() && !"0".equals(rate);
+    }
+
+    /**
+     * 构建 init container curl 命令（curlimages/curl 镜像，原生支持 --limit-rate）。
+     * limitRate 为 null 或空时不限速，否则附加 --limit-rate 参数。
      * 同时在 stdout 输出 TRANSFER_MS=<ms>，供 Java 从 pod 日志中精确提取传输时间。
      */
-    private String buildWgetCommand(String destPath, String srcUrl) {
-        String wgetArgs = (wgetLimitRate != null && !wgetLimitRate.isEmpty() && !"0".equals(wgetLimitRate))
-                ? "--limit-rate=" + wgetLimitRate + " -O '" + destPath + "' '" + srcUrl + "'"
-                : "-O '" + destPath + "' '" + srcUrl + "'";
-        return "mkdir -p \"$(dirname '" + destPath + "')\" && _start=$(awk '{print int($1*1000)}' /proc/uptime) && wget " + wgetArgs
+    private String buildWgetCommand(String destPath, String srcUrl, String limitRate) {
+        String curlArgs = isValidRate(limitRate)
+                ? "--limit-rate " + limitRate + " -o '" + destPath + "' '" + srcUrl + "'"
+                : "-o '" + destPath + "' '" + srcUrl + "'";
+        return "mkdir -p \"$(dirname '" + destPath + "')\" && _start=$(awk '{print int($1*1000)}' /proc/uptime) && curl -fsSL " + curlArgs
                 + " && echo \"TRANSFER_MS=$(( $(awk '{print int($1*1000)}' /proc/uptime) - _start ))\"";
     }
 
