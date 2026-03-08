@@ -130,7 +130,6 @@
         max_memory = #{maxMemory},
         current_cpu = #{currentCpu},
         current_memory = #{currentMemory},
-        num_dataset = #{numDataset},
         last_update_time = #{lastUpdateTime}
         WHERE
         node_name = #{nodeName}
