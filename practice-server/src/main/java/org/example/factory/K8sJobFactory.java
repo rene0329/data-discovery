@@ -71,7 +71,7 @@ public class K8sJobFactory {
     @Value("${dispatch.scheduler.weight.crossClusterPenalty:0.5}")
     private double crossClusterPenalty;
 
-    @Value("${dispatch.scheduler.weight.datasetPenalty:0.05}")
+    @Value("${dispatch.scheduler.weight.datasetPenalty:0.0}")
     private double datasetPenalty;
 
     /** 数据亲和性加分：候选节点 = 数据所在源节点时额外加分，确保亲和性调度稳定选中源节点 */
