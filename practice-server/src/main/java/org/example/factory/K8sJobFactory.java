@@ -347,12 +347,14 @@ public class K8sJobFactory {
 
     /**
      * 构建 init container wget 命令，当 wgetLimitRate 配置非空且非"0"时附加 --limit-rate 参数。
+     * 同时在 stdout 输出 TRANSFER_MS=<ms>，供 Java 从 pod 日志中精确提取传输时间。
      */
     private String buildWgetCommand(String destPath, String srcUrl) {
         String wgetArgs = (wgetLimitRate != null && !wgetLimitRate.isEmpty() && !"0".equals(wgetLimitRate))
                 ? "--limit-rate=" + wgetLimitRate + " -O '" + destPath + "' '" + srcUrl + "'"
                 : "-O '" + destPath + "' '" + srcUrl + "'";
-        return "mkdir -p \"$(dirname '" + destPath + "')\" && wget " + wgetArgs;
+        return "mkdir -p \"$(dirname '" + destPath + "')\" && _start=$(date +%s%3N) && wget " + wgetArgs
+                + " && echo \"TRANSFER_MS=$(( $(date +%s%3N) - _start ))\"";
     }
 
     private List<CandidateNode> gatherAvailableNodes(double cpuRequest, double memoryRequestGi) {

@@ -264,25 +264,41 @@ public class K8sTaskOrchestratorService {
                 return -1;
             }
             Pod pod = pods.get(0);
+            String podName = pod.getMetadata().getName();
 
-            if (pod.getStatus() == null || pod.getStatus().getInitContainerStatuses() == null) {
-                log.error("Pod {} 的状态或InitContainerStatuses为空，无法测量时间。", pod.getMetadata().getName());
-                return -1;
+            // 从 init container 日志中解析 TRANSFER_MS=<ms>（毫秒精度，由 init container 命令输出）
+            try {
+                String logs = client.pods().inNamespace("default").withName(podName)
+                        .inContainer(initContainerName).getLog();
+                if (logs != null) {
+                    for (String line : logs.split("\n")) {
+                        if (line.startsWith("TRANSFER_MS=")) {
+                            long duration = Long.parseLong(line.substring("TRANSFER_MS=".length()).trim());
+                            log.info("精确测量到 Init Container '{}' 的执行时间为: {} ms", initContainerName, duration);
+                            return duration;
+                        }
+                    }
+                }
+            } catch (Exception logEx) {
+                log.warn("读取 Init Container '{}' 日志失败，回退到 K8s 时间戳: {}", initContainerName, logEx.getMessage());
             }
 
-            for (ContainerStatus status : pod.getStatus().getInitContainerStatuses()) {
-                if (status.getName().equals(initContainerName)) {
-                    ContainerStateTerminated terminatedState = status.getState().getTerminated();
-                    if (terminatedState != null && terminatedState.getFinishedAt() != null && terminatedState.getStartedAt() != null) {
-                        Instant startTime = Instant.parse(terminatedState.getStartedAt());
-                        Instant finishTime = Instant.parse(terminatedState.getFinishedAt());
-                        long duration = Duration.between(startTime, finishTime).toMillis();
-                        log.info("精确测量到 Init Container '{}' 的执行时间为: {} ms", initContainerName, duration);
-                        return duration;
+            // 回退：使用 K8s 时间戳（秒级精度）
+            if (pod.getStatus() != null && pod.getStatus().getInitContainerStatuses() != null) {
+                for (ContainerStatus status : pod.getStatus().getInitContainerStatuses()) {
+                    if (status.getName().equals(initContainerName)) {
+                        ContainerStateTerminated terminatedState = status.getState().getTerminated();
+                        if (terminatedState != null && terminatedState.getFinishedAt() != null && terminatedState.getStartedAt() != null) {
+                            Instant startTime = Instant.parse(terminatedState.getStartedAt());
+                            Instant finishTime = Instant.parse(terminatedState.getFinishedAt());
+                            long duration = Duration.between(startTime, finishTime).toMillis();
+                            log.info("回退测量到 Init Container '{}' 的执行时间为: {} ms (K8s 时间戳，秒级精度)", initContainerName, duration);
+                            return duration;
+                        }
                     }
                 }
             }
-            log.error("在Pod {} 中找不到名为 '{}' 的Init Container的有效起止时间", pod.getMetadata().getName(), initContainerName);
+            log.error("在Pod {} 中找不到名为 '{}' 的 Init Container 的有效时间信息", podName, initContainerName);
             return -1;
         } catch (Exception e) {
             log.error("提取Job {} 的Init Container时长时出错", jobName, e);
