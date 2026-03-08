@@ -3,10 +3,6 @@
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
 <mapper namespace="org.example.mapper.NodeManagementMapper">
 
-    <select id="networkConstruction" resultType="org.example.entity.NodeManagement">
-        select * from node_management
-    </select>
-
     <select id="getNodeIpByDataServer" resultType="String">
         SELECT internal_ip
         FROM node_management
