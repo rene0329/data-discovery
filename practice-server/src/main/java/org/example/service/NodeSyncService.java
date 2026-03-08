@@ -249,6 +249,7 @@ import org.example.factory.K8sJobFactory; // <-- 导入 K8sJobFactory
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -258,6 +259,7 @@ import java.util.Map; // <-- 可能需要这个
 import java.util.concurrent.ConcurrentHashMap; // <-- 可能需要这个
 
 @Service
+@ConditionalOnProperty(name = "app.node-sync.enabled", havingValue = "true", matchIfMissing = false)
 public class NodeSyncService {
 
     private static final Logger log = LoggerFactory.getLogger(NodeSyncService.class);
@@ -308,7 +310,7 @@ public class NodeSyncService {
      * 【新增】定时任务：每 30 秒更新一次节点的实时 Metrics
      * 遍历所有 K8sJobFactory 管理的集群
      */
-    @Scheduled(fixedRate = 30000) // 每 30 秒执行一次
+    @Scheduled(fixedRate = 120000) // 每 30 秒执行一次
     public void updateNodeMetrics() {
         log.debug("定时更新所有集群的节点 Metrics...");
         k8sJobFactory.getClusterClients().forEach((clusterId, client) -> { // <-- 遍历所有客户端

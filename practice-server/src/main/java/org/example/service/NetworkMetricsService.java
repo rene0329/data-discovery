@@ -18,7 +18,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 @Service
+@ConditionalOnProperty(name = "app.node-sync.enabled", havingValue = "true", matchIfMissing = false)
 public class NetworkMetricsService {
 
     private static final Logger log = LoggerFactory.getLogger(NetworkMetricsService.class);

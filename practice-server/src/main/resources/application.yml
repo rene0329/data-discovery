@@ -110,6 +110,9 @@ app:
   orchestrator:
     job-wait-timeout-minutes: 10
 
+  node-sync:
+    enabled: true   # 仅 practice-server 启用，heat-update-cronjob 不设此属性故默认 false
+
   heat-update:
     alpha: 0.99
     k: 0.05
