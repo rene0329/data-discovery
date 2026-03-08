@@ -237,13 +237,8 @@ public class K8sTaskOrchestratorService {
             migrationTask.setStatus("SWITCHING");
             migrationTaskMapper.updateLifecycle(migrationTask);
 
-            // 当前策略：仅亲和性调度路径在成功后切换 data_server
-            if ("affinity".equals(type) && selectedTargetNodeName != null && !selectedTargetNodeName.isEmpty()) {
-                DataManagement toUpdate = new DataManagement();
-                toUpdate.setDataName(dataInfo.getDataName());
-                toUpdate.setDataServer(selectedTargetNodeName);
-                dataManagementMapper.updateDataServer(toUpdate);
-            }
+            // data_server 不在此处更新：亲和性调度只是临时将数据下载到 emptyDir 进行训练，
+            // 并未持久化到目标节点，data_server 应始终反映数据文件真实所在的节点。
 
             migrationTask.setStatus("COMPLETED");
             migrationTask.setFinishedAt(LocalDateTime.now());
