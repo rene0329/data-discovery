@@ -405,16 +405,17 @@ public class K8sJobFactory {
         return rateBytes > 0 ? (fileSizeBytes * 1000L / rateBytes) : 0;
     }
 
-
-     * limitRate 为 null 或空时不限速，否则附加 --limit-rate 参数。
-     * 同时在 stdout 输出 TRANSFER_MS=<ms>，供 Java 从 pod 日志中精确提取传输时间。
+    /**
+     * 构建 init container curl 命令（curlimages/curl 镜像，原生支持 --limit-rate）。
+     * 使用 curl --write-out '%{time_total}' 获取微秒级传输时间，精度 ~1ms，
+     * 避免依赖 /proc/uptime（仅 10ms 精度）。
+     * 在 stdout 输出 TRANSFER_MS=<ms>，供 Java 从 pod 日志中提取。
      */
     private String buildWgetCommand(String destPath, String srcUrl, String limitRate) {
-        String curlArgs = isValidRate(limitRate)
-                ? "--limit-rate " + limitRate + " -o '" + destPath + "' '" + srcUrl + "'"
-                : "-o '" + destPath + "' '" + srcUrl + "'";
-        return "mkdir -p \"$(dirname '" + destPath + "')\" && _start=$(awk '{print int($1*1000)}' /proc/uptime) && curl -fsSL " + curlArgs
-                + " && echo \"TRANSFER_MS=$(( $(awk '{print int($1*1000)}' /proc/uptime) - _start ))\"";
+        String limitRateArg = isValidRate(limitRate) ? " --limit-rate " + limitRate : "";
+        return "mkdir -p \"$(dirname '" + destPath + "')\" && "
+                + "_t=$(curl -fsSL" + limitRateArg + " -o '" + destPath + "' --write-out '%{time_total}' '" + srcUrl + "') && "
+                + "echo \"TRANSFER_MS=$(echo $_t | awk '{printf \"%d\", $1*1000}')\"";
     }
 
     private List<CandidateNode> gatherAvailableNodes(double cpuRequest, double memoryRequestGi) {
