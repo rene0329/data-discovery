@@ -294,6 +294,7 @@ public class K8sJobFactory {
                 .addNewInitContainer()
                 .withName("data-transfer-container")
                 .withImage(initContainerImage)
+                .withImagePullPolicy("IfNotPresent")
                 .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl, resolveLimitRate(sourceNodeName, bestNode.getName())))
                 .addNewVolumeMount()
                 .withName("shared-data")
