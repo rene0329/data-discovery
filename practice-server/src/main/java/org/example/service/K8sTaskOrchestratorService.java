@@ -33,6 +33,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 /**
@@ -134,19 +135,23 @@ public class K8sTaskOrchestratorService {
             return null;
         }
 
-        long t1_ms = executeJobAndMeasureInitContainer(taskId, "affinity", sourceNodeInfo, null, dataInfo);
-        long t2_ms = executeJobAndMeasureInitContainer(taskId, "central", sourceNodeInfo, centralNodeName, dataInfo);
+        AtomicReference<String> affinityNodeOut = new AtomicReference<>(sourceNodeName);
+        AtomicReference<String> centralNodeOut  = new AtomicReference<>(centralNodeName);
+        long t1_ms = executeJobAndMeasureInitContainer(taskId, "affinity", sourceNodeInfo, null, dataInfo, affinityNodeOut);
+        long t2_ms = executeJobAndMeasureInitContainer(taskId, "central", sourceNodeInfo, centralNodeName, dataInfo, centralNodeOut);
 
         if (t1_ms == -1 || t2_ms == -1) {
             log.error("数据项 {} 的Job执行失败", dataItem);
             return null;
         }
 
+        String affinityTarget = affinityNodeOut.get();
+        boolean inPlace = sourceNodeName.equals(affinityTarget);
         DataItemResult result = new DataItemResult();
         result.setT1Seconds(t1_ms / 1000.0);
         result.setT2Seconds(t2_ms / 1000.0);
-        result.setScheduleT1(dataItem + ": " + sourceNodeName + " -> 亲和性调度");
-        result.setScheduleT2(dataItem + ": " + sourceNodeName + " -> " + centralNodeName);
+        result.setScheduleT1(dataItem + ": " + sourceNodeName + " -> " + affinityTarget + (inPlace ? " (原地)" : ""));
+        result.setScheduleT2(dataItem + ": " + sourceNodeName + " -> " + centralNodeOut.get());
         log.info("数据项 {} 处理完成。亲和性调度传输: {}ms, 中心化调度传输: {}ms", dataItem, t1_ms, t2_ms);
         return result;
     }
@@ -158,7 +163,8 @@ public class K8sTaskOrchestratorService {
                                                    String type,
                                                    NodeManagement sourceNodeInfo,
                                                    String targetNode,
-                                                   DataManagement dataInfo) {
+                                                   DataManagement dataInfo,
+                                                   AtomicReference<String> selectedNodeOut) {
 
         String jobName = String.format("%s-%s-%s", type, dataInfo.getDataName().toLowerCase().replace("_", "-"), UUID.randomUUID().toString().substring(0, 8));
         log.info("准备Job: {} (源: {}, 目标: {})", jobName, sourceNodeInfo.getNodeName(), targetNode);
@@ -177,6 +183,7 @@ public class K8sTaskOrchestratorService {
             if ("affinity".equals(type) && sourceNodeInfo.getNodeName().equals(selectedTargetNodeName)) {
                 log.info("数据项[{}] 亲和性调度目标 = 源节点 {}（原地），跳过 K8s Job，返回基础时间 {}ms",
                         dataInfo.getDataName(), selectedTargetNodeName, inPlaceBaselineMs);
+                if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
                 return inPlaceBaselineMs;
             }
 
@@ -235,6 +242,7 @@ public class K8sTaskOrchestratorService {
             migrationTask.setFinishedAt(LocalDateTime.now());
             migrationTaskMapper.updateLifecycle(migrationTask);
 
+            if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
             return getInitContainerDuration(client, jobName, "data-transfer-container");
 
         } catch (Exception e) {
@@ -326,7 +334,7 @@ public class K8sTaskOrchestratorService {
         TaskManagement finalTask = taskManagementMapper.getTaskByTaskId(taskId);
         if (finalTask != null) {
             double rating = totalT1 > 0 ? (totalT2 / totalT1) : 0;
-            String finalSchedule = "亲和性调度方案:\n" + String.join("\n", scheduleT1List) +
+            String finalSchedule = "分布式亲和性调度方案:\n" + String.join("\n", scheduleT1List) +
                     "\n\n中心化调度方案:\n" + String.join("\n", scheduleT2List);
 
             finalTask.setT1(totalT1);
