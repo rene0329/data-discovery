@@ -22,6 +22,10 @@ public class HeatUpdateService {
     @Value("${app.heat-update.alpha:0.99}")
     private double alpha;
 
+    /** 每次访问对热度的直接增量权重；与 alpha 解耦，使 count=1 时热度显著上升 */
+    @Value("${app.heat-update.count-weight:5.0}")
+    private double countWeight;
+
     @Value("${app.heat-update.k:0.05}")
     private double k;
 
@@ -67,8 +71,9 @@ public class HeatUpdateService {
                 double lambda = calculateLambda();
 
                 // 计算新的热度，确保不低于阈值
-                // count 为本轮调用次数：count>0 热度上升，count=0 热度衰减 lambda
-                double newHeat = Math.max(threshold, alpha * oldHeat + (1 - alpha) * count - lambda);
+                // countWeight 为每次访问的直接热度增量，与 EMA 平滑系数 alpha 解耦
+                // count=1 时净增量 ≈ countWeight - lambda - (1-alpha)*oldHeat
+                double newHeat = Math.max(threshold, alpha * oldHeat + countWeight * count - lambda);
                 log.debug("{}  oldHeat={} delta_count={} newHeat={}", data.getDataName(), String.format("%.2f", oldHeat), count, String.format("%.2f", newHeat));
 
                 // 更新热度同时清零 count，count 重新累积到下一轮

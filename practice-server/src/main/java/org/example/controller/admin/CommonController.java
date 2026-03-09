@@ -762,8 +762,14 @@ public class CommonController {
             nodeMap.put("y", (int)(cy + radius * Math.sin(angle)));
             nodeMap.put("width", 110);
             nodeMap.put("height", 44);
-            nodeMap.put("cpu", node.getCurrentCpu() != null ? node.getCurrentCpu() : 0);
-            nodeMap.put("disk", 0);
+            // cpu: 核心数百分比（currentCpu 单位为核，maxCpu 同单位）
+            double cpuPct = (node.getCurrentCpu() != null && node.getMaxCpu() != null && node.getMaxCpu() > 0)
+                    ? node.getCurrentCpu() / node.getMaxCpu() * 100.0 : 0.0;
+            nodeMap.put("cpu", Math.round(cpuPct * 10.0) / 10.0);
+            // disk(内存占用率): currentMemory/maxMemory * 100，单位均为 GB
+            double memPct = (node.getCurrentMemory() != null && node.getMaxMemory() != null && node.getMaxMemory() > 0)
+                    ? node.getCurrentMemory() / node.getMaxMemory() * 100.0 : 0.0;
+            nodeMap.put("disk", Math.round(memPct * 10.0) / 10.0);
             nodePayload.add(nodeMap);
         }
 
