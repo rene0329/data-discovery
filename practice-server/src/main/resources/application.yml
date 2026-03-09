@@ -45,6 +45,8 @@ logging:
   level:
     root: INFO
     org.example: DEBUG # 为你的项目包设置更详细的日志级别，方便调试
+    org.example.service.NodeSyncService: INFO   # NodeSync 定时/watcher 事件太频繁，只保留 INFO+
+    org.example.mapper.K8sNodeMapperImpl: INFO   # 节点指标原始数据太冗余，只保留 INFO+
     io.fabric8: WARN # 减少fabric8的日志输出，避免刷屏
     com.sky.mapper: debug # 调整为适合K8s的日志级别
     com.sky.service: info
