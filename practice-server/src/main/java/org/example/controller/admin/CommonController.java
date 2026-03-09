@@ -284,6 +284,7 @@ public class CommonController {
      *   score = W_CAP  * freeCapRatio     -- 剩余容量比，防止塞满
      *         - W_HEAT * heatLoadRatio    -- 已分配热度占比，防止热数据扎堆
      *         + W_PROX * computeProxScore -- 与计算节点直接相邻度，提升就近访问效率
+     *         + W_ROLE                   -- 节点角色加成：compute-storage 双角色节点可本地训练零网络开销
      * <p>
      * 物理迁移：对每条数据，若新分配节点 ≠ 旧节点，则先通过
      *   GET  {oldNode}/data-discovery/download/{dataName}  下载文件
@@ -364,6 +365,7 @@ public class CommonController {
         final double W_CAP  = 0.4;
         final double W_HEAT = 0.4;
         final double W_PROX = 0.2;
+        final double W_ROLE = 0.3;  // compute-storage 双角色加成，优先将数据存储在可本地训练的节点
         int migratedCount = 0, skippedCount = 0;
 
         // ── 5. 逐条打分 → 物理迁移（若有必要）→ 更新 DB
@@ -380,7 +382,8 @@ public class CommonController {
                 double freeCapRatio  = cap > 0 ? (double)(cap - used) / cap : 0.0;
                 double heatLoadRatio = totalHeat > 0 ? heatAccum.get(sn.getNodeId()) / totalHeat : 0.0;
                 double prox          = proxScoreMap.getOrDefault(sn.getNodeId(), 0.0);
-                double score         = W_CAP * freeCapRatio - W_HEAT * heatLoadRatio + W_PROX * prox;
+                double roleBonus     = "compute-storage".equals(sn.getType()) ? W_ROLE : 0.0;
+                double score         = W_CAP * freeCapRatio - W_HEAT * heatLoadRatio + W_PROX * prox + roleBonus;
 
                 if (score > bestScore) { bestScore = score; best = sn; }
             }
@@ -433,7 +436,8 @@ public class CommonController {
                 double freeCapRatio  = cap > 0 ? (double)(cap - used) / cap : 0.0;
                 double heatLoadRatio = totalHeat > 0 ? heatAccum.get(sn.getNodeId()) / totalHeat : 0.0;
                 double prox          = proxScoreMap.getOrDefault(sn.getNodeId(), 0.0);
-                double score         = W_CAP * freeCapRatio - W_HEAT * heatLoadRatio + W_PROX * prox;
+                double roleBonus     = "compute-storage".equals(sn.getType()) ? W_ROLE : 0.0;
+                double score         = W_CAP * freeCapRatio - W_HEAT * heatLoadRatio + W_PROX * prox + roleBonus;
 
                 if (score > backupScore) { backupScore = score; backupBest = sn; }
             }
