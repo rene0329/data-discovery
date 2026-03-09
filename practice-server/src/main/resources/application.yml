@@ -79,6 +79,7 @@ dispatch:
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
   data-discovery:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致
+    data-directory: /dataset  # 与 DaemonSet FILE_DISCOVERY_DATA_DIRECTORY 一致，用于 upload 路径剥离
   scheduler:
     in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
     in-place-rate: 15m             # 原地调度模拟本地读取速率；需 > 最快网络路径(10m)，15m使 40→215路径ratio≈1.37

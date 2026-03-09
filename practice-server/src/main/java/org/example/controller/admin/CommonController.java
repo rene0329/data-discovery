@@ -50,6 +50,11 @@ public class CommonController {
     @Value("${dispatch.data-discovery.port:8080}")
     private int discoveryPort;
 
+    /** data-discovery 扫描根目录名（与 DaemonSet FILE_DISCOVERY_DATA_DIRECTORY 保持一致）。
+     *  用于 upload 时剥离 filePath 中的根目录前缀，避免双重前缀（/dataset/dataset/...）。 */
+    @Value("${dispatch.data-discovery.data-directory:/dataset}")
+    private String discoveryDataDirectory;
+
     @Autowired
     public CommonController(
             DataManagementMapper dataManagementMapper,
@@ -91,9 +96,16 @@ public class CommonController {
             log.warn("物理迁移: 数据项 '{}' filePath 为空，无法定位文件，跳过迁移", dataName);
             return false;
         }
-        // filePath 为绝对路径（如 /dataset/catdog/npz/catdog.npz），去掉首 / 得到相对路径
+        // filePath 为绝对路径（如 /dataset/yelp/npz/yelp.npz），去掉首 / 得到完整相对路径
         String relativePath = filePath.startsWith("/") ? filePath.substring(1) : filePath;
         String fileName = Paths.get(relativePath).getFileName().toString();
+        // upload 端点的 path 参数是相对于 dataDirectory 的路径（如 yelp/npz/yelp.npz）
+        // 若直接传 relativePath（含 dataset/ 前缀) 会被 upload 端点再次 resolve 到 dataDirectory 下
+        // 导致 /dataset/dataset/yelp/npz/yelp.npz（双重前缀），因此需剥离根目录名
+        String dataDirName = Paths.get(discoveryDataDirectory).getFileName().toString(); // "dataset"
+        String uploadRelPath = relativePath.startsWith(dataDirName + "/")
+                ? relativePath.substring(dataDirName.length() + 1)
+                : relativePath;  // 无前缀时兜底，保持原路径
         String downloadUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/download/" + relativePath;
         String uploadUrl   = discoveryBaseUrl(targetNode) + "/data-discovery/upload";
         try {
@@ -110,7 +122,7 @@ public class CommonController {
             body.add("file", new ByteArrayResource(fileBytes) {
                 @Override public String getFilename() { return fileName; }
             });
-            body.add("path", relativePath);
+            body.add("path", uploadRelPath);  // 相对于 dataDirectory，不含根目录名
             restTemplate.postForObject(uploadUrl, new HttpEntity<>(body, headers), Map.class);
             log.info("物理迁移成功: {} {} -> {} ({} bytes)", relativePath, sourceNode, targetNode, fileBytes.length);
             // 3. 删除源节点文件（move 语义）
