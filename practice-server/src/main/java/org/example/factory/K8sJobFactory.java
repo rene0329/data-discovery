@@ -48,15 +48,15 @@ public class K8sJobFactory {
     private final String wgetLimitRate;
 
     /** 路径级限速: master-141 -> master-40 */
-    @Value("${dispatch.job.curl.limit-rate.141-to-40:}")
+    @Value("${dispatch.job.curl.limit-rate.n141-to-40:}")
     private String wgetLimitRate141To40;
 
     /** 路径级限速: master-141 -> master-215 */
-    @Value("${dispatch.job.curl.limit-rate.141-to-215:}")
+    @Value("${dispatch.job.curl.limit-rate.n141-to-215:}")
     private String wgetLimitRate141To215;
 
     /** 路径级限速: master-40 -> master-215 */
-    @Value("${dispatch.job.curl.limit-rate.40-to-215:}")
+    @Value("${dispatch.job.curl.limit-rate.n40-to-215:}")
     private String wgetLimitRate40To215;
 
     @Value("${dispatch.scheduler.weight.cpuFreePct:0.5}")
@@ -216,6 +216,8 @@ public class K8sJobFactory {
         if (clusterClients.isEmpty()) {
             log.error("K8sJobFactory 初始化失败：既无法使用 In-Cluster 认证，也无法加载外部 kubeconfig 文件。没有可用的 Kubernetes 客户端。");
         }
+        log.info("curl 限速配置: default='{}', n141-to-40='{}', n141-to-215='{}', n40-to-215='{}'",
+                wgetLimitRate, wgetLimitRate141To40, wgetLimitRate141To215, wgetLimitRate40To215);
     }
 
     public JobCreationResult createDataProcessingJob(String jobName,
@@ -322,7 +324,8 @@ public class K8sJobFactory {
                 .withName("data-transfer-container")
                 .withImage(initContainerImage)
                 .withImagePullPolicy("IfNotPresent")
-                .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl, resolveLimitRate(sourceNodeName, bestNode.getName())))
+                .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl,
+                        resolveAndLogLimitRate(sourceNodeName, bestNode.getName(), jobName)))
                 .addNewVolumeMount()
                 .withName("shared-data")
                 .withMountPath("/data")
@@ -395,6 +398,13 @@ public class K8sJobFactory {
         String safeName = dataFileName == null || dataFileName.isEmpty() ? "dataset.bin" : dataFileName;
         String t = (template == null || template.isEmpty()) ? "/data/{dataset}" : template;
         return t.replace("{dataset}", safeName);
+    }
+
+    /** 解析限速并打 INFO 日志，便于运行时验证是否注入成功。 */
+    private String resolveAndLogLimitRate(String srcNode, String destNode, String jobName) {
+        String rate = resolveLimitRate(srcNode, destNode);
+        log.info("Job '{}' curl 限速: {} → {} = '{}'", jobName, srcNode, destNode, rate != null ? rate : "(无限速)");
+        return rate;
     }
 
     /**

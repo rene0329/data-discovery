@@ -71,9 +71,9 @@ dispatch:
     curl:
       limit-rate:
         default: 5m             # 全局兜底限速（未匹配具体路径时生效），同时拉低整体传输速度
-        141-to-40: 8m           # master-141 → master-40（存储节点到计算+存储节点，稍快）
-        141-to-215: 5m          # master-141 → master-215（存储节点到纯计算节点，较慢）
-        40-to-215: 10m          # master-40  → master-215（计算+存储节点到纯计算节点，最快）
+        n141-to-40: 8m          # master-141 → master-40（存储节点到计算+存储节点，稍快）
+        n141-to-215: 5m         # master-141 → master-215（存储节点到纯计算节点，较慢）
+        n40-to-215: 10m         # master-40  → master-215（计算+存储节点到纯计算节点，最快）
   central-node:
     name: "master-215" # 中心节点，需在 node_management 表中存在 # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
