@@ -146,13 +146,16 @@ public class CommonController {
 
         // 1. (快速) 创建总任务记录，初始状态为 "执行中"
         TaskManagement taskManagement = TaskManagement.builder()
-                .taskName("任务" + currentTaskId)
+                .taskName("任务")  // 先用占位名，insert 后用 DB 自增 ID 覆盖
                 .selectedData(selectedDatas.toString())
                 .status("执行中")
                 .createTime(LocalDateTime.now())
                 .build();
         taskManagementMapper.submitData(taskManagement);
         Integer taskId = taskManagement.getTaskId(); // 获取数据库生成的自增ID
+        // 用 DB 自增 ID 更新 taskName，确保 taskName 与 taskId 一致（"任务62" 而非 "任务1741447200"）
+        taskManagement.setTaskName("任务" + taskId);
+        taskManagementMapper.updateTask(taskManagement);
 
         // 2. (快速) 更新相关数据热度
         for (String data : selectedDatas) {

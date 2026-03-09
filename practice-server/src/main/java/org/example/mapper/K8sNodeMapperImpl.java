@@ -51,16 +51,16 @@ public class K8sNodeMapperImpl implements K8sNodeMapper {
 
                 Quantity cpuUsage = usage.get("cpu");
                 if (cpuUsage != null) {
-                    log.info("节点 {} CPU 原始 Quantity: amount='{}', format='{}'", nodeName, cpuUsage.getAmount(), cpuUsage.getFormat());
+                    log.debug("节点 {} CPU 原始 Quantity: amount='{}', format='{}'", nodeName, cpuUsage.getAmount(), cpuUsage.getFormat());
                     currentCpu = parseCpuToCores(cpuUsage);
-                    log.info("节点 {} CPU 转换后: {}", nodeName, currentCpu);
+                    log.debug("节点 {} CPU 转换后: {}", nodeName, currentCpu);
                 }
 
                 Quantity memoryUsage = usage.get("memory");
                 if (memoryUsage != null) {
-                    log.info("节点 {} 内存原始 Quantity: amount='{}', format='{}'", nodeName, memoryUsage.getAmount(), memoryUsage.getFormat());
+                    log.debug("节点 {} 内存原始 Quantity: amount='{}', format='{}'", nodeName, memoryUsage.getAmount(), memoryUsage.getFormat());
                     currentMemoryGiB = parseMemoryToGiB(memoryUsage);
-                    log.info("节点 {} 内存转换后: {}", nodeName, currentMemoryGiB);
+                    log.debug("节点 {} 内存转换后: {}", nodeName, currentMemoryGiB);
                 }
             }
         } catch (Exception e) {
@@ -88,7 +88,7 @@ public class K8sNodeMapperImpl implements K8sNodeMapper {
         });
 
         NodeManagement entity = builder.build();
-        log.info("节点 {} 数据: CPU {}/{}核, Memory {}/{}GiB",
+        log.debug("节点 {} 数据: CPU {}/{}核, Memory {}/{}GiB",
                 nodeName,
                 String.format("%.2f", currentCpu), String.format("%.0f", maxCpu),
                 String.format("%.2f", currentMemoryGiB), String.format("%.0f", maxMemoryGiB));

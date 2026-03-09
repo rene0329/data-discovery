@@ -364,9 +364,12 @@ public class NodeSyncService {
                 String nodeName = node.getMetadata().getName();
                 switch (action) {
                     case ADDED:
-                    case MODIFIED:
                         log.info("Node event: {} for {} in cluster {}", action, nodeName, clusterId);
-                        syncNode(node, client, clusterId); // 将 client 传入 syncNode
+                        syncNode(node, client, clusterId);
+                        break;
+                    case MODIFIED:
+                        log.debug("Node event: MODIFIED for {} in cluster {}", nodeName, clusterId);
+                        syncNode(node, client, clusterId);
                         break;
                     case DELETED:
                         log.info("Node deleted: {} in cluster {}", nodeName, clusterId);
