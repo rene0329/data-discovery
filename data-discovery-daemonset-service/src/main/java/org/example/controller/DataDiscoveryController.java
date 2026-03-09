@@ -233,7 +233,9 @@ public class DataDiscoveryController {
         String prefix = "/data-discovery/delete/";
         String uri = request.getRequestURI();
         String filename = uri.contains(prefix) ? uri.substring(uri.indexOf(prefix) + prefix.length()) : "";
-        Path filePath = Paths.get(dataDirectory).resolve(filename).normalize();
+        // 与 download 端点保持一致：filePath 已含根目录名（如 "dataset/..."），从 "/" 解析而非从 dataDirectory 解析
+        // 若用 Paths.get(dataDirectory).resolve(filename) 会产生三重前缀（/dataset/dataset/dataset/...）
+        Path filePath = Paths.get("/").resolve(filename).normalize();
 
         if (!filePath.startsWith(Paths.get(dataDirectory).normalize())) {
             log.warn("拒绝路径穿越删除请求: {}", filename);
