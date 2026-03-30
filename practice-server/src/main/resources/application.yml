@@ -70,10 +70,10 @@ dispatch:
       main: python:3.9-slim # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.main}")
     curl:
       limit-rate:
-        default: 5m             # 全局兜底限速（未匹配具体路径时生效），同时拉低整体传输速度
-        n141-to-40: 8m          # master-141 → master-40（存储节点到计算+存储节点，稍快）
-        n141-to-215: 5m         # master-141 → master-215（存储节点到纯计算节点，较慢）
-        n40-to-215: 10m         # master-40  → master-215（计算+存储节点到纯计算节点，最快）
+        default: 2560k          # 全局兜底限速（原 5m，减半为 2.5m）
+        n141-to-40: 4096k       # master-141 → master-40（原 8m，减半为 4m）
+        n141-to-215: 2560k      # master-141 → master-215（原 5m，减半为 2.5m）
+        n40-to-215: 5120k       # master-40  → master-215（原 10m，减半为 5m）
   central-node:
     name: "master-215" # 中心节点，需在 node_management 表中存在 # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
@@ -82,7 +82,7 @@ dispatch:
     data-directory: /dataset  # 与 DaemonSet FILE_DISCOVERY_DATA_DIRECTORY 一致，用于 upload 路径剥离
   scheduler:
     in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
-    in-place-rate: 15m             # 原地调度模拟本地读取速率；需 > 最快网络路径(10m)，15m使 40→215路径ratio≈1.37
+    in-place-rate: 7680k           # 原地调度模拟本地读取速率（原 15m，减半为 7.5m）
     weight:
       networkLatency: 0.3          # 网络延迟惩罚权重
       bandwidth: 0.3               # 带宽奖励权重
@@ -115,10 +115,12 @@ alioss:
   access-key-secret: niZZZOFDWcjZw9IooRjaqX7C5fDKRu # 敏感信息，会被 Secret 覆盖
   bucket-name: sky-itcast-ygj # 敏感信息，会被 Secret 覆盖
 
-# 你的 app.orchestrator.job-wait-timeout-minutes (K8sJobFactory 中没有直接使用，但可以在代码中读取)
+# 任务编排执行控制参数
 app:
   orchestrator:
-    job-wait-timeout-minutes: 10
+    job-wait-timeout-minutes: 30
+    job-max-retries: 1
+    job-retry-backoff-seconds: 5
 
   node-sync:
     enabled: true   # 仅 practice-server 启用，heat-update-cronjob 不设此属性故默认 false

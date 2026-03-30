@@ -48,7 +48,11 @@ practice:
       # 中心化调度目标节点名称 (您已在代码中使用 @Value 获取)
       central-node-name: "aks-nodepool1-54677688-vmss000002"
       # K8s Job 等待的超时时间（分钟）
-      job-wait-timeout-minutes: 10
+      job-wait-timeout-minutes: 30
+      # Job 失败后自动重试次数（不含首次执行，1=最多执行2次）
+      job-max-retries: 1
+      # 每次重试前的等待秒数
+      job-retry-backoff-seconds: 5
 
     # 数据热度更新算法相关参数 (从 HeatUpdateService 中抽离)
     heat-update:

@@ -62,6 +62,18 @@ public class K8sTaskOrchestratorService {
     @Value("${dispatch.scheduler.in-place-rate:100m}")
     private String inPlaceRate;
 
+    /** 等待单个 K8s Job 完成的超时时间（分钟）。 */
+    @Value("${app.orchestrator.job-wait-timeout-minutes:30}")
+    private long jobWaitTimeoutMinutes;
+
+    /** Job 失败后的最大重试次数（不含首次执行，1 表示总共最多执行 2 次）。 */
+    @Value("${app.orchestrator.job-max-retries:1}")
+    private int jobMaxRetries;
+
+    /** 重试前的退避时间（秒）。 */
+    @Value("${app.orchestrator.job-retry-backoff-seconds:5}")
+    private long jobRetryBackoffSeconds;
+
     @Autowired
     public K8sTaskOrchestratorService(
             DataManagementMapper dataManagementMapper,
@@ -169,98 +181,184 @@ public class K8sTaskOrchestratorService {
                                                    String targetNode,
                                                    DataManagement dataInfo,
                                                    AtomicReference<String> selectedNodeOut) {
-
-        String jobName = String.format("%s-%s-%s", type, dataInfo.getDataName().toLowerCase().replace("_", "-"), UUID.randomUUID().toString().substring(0, 8));
-        log.info("准备Job: {} (源: {}, 目标: {})", jobName, sourceNodeInfo.getNodeName(), targetNode);
-
-        KubernetesClient client = null;
+        String dataNameForJob = dataInfo.getDataName() == null
+                ? "dataset"
+                : dataInfo.getDataName().toLowerCase().replace("_", "-");
+        int maxRetries = Math.max(0, jobMaxRetries);
+        int totalAttempts = maxRetries + 1;
+        long waitTimeoutMinutes = Math.max(1L, jobWaitTimeoutMinutes);
+        long retryBackoffSeconds = Math.max(0L, jobRetryBackoffSeconds);
+        String lastError = "unknown error";
         MigrationTask migrationTask = null;
-        try {
-            JobCreationResult jobResult = k8sJobFactory.createDataProcessingJob(jobName, sourceNodeInfo.getNodeName(), dataInfo.getDataName(), dataInfo.getFilePath(), targetNode, dataInfo.getRequiredCpu(), dataInfo.getRequiredMemory());
+        for (int attempt = 0; attempt < totalAttempts; attempt++) {
+            String jobName = String.format("%s-%s-%s", type, dataNameForJob, UUID.randomUUID().toString().substring(0, 8));
+            KubernetesClient client = null;
+            try {
+                log.info("准备Job: {} (源: {}, 目标: {}, attempt={}/{})",
+                        jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
 
-            client = jobResult.getClient();
-            Job job = jobResult.getJob();
-            String selectedTargetNodeName = jobResult.getSelectedNodeName();
+                JobCreationResult jobResult = k8sJobFactory.createDataProcessingJob(
+                        jobName,
+                        sourceNodeInfo.getNodeName(),
+                        dataInfo.getDataName(),
+                        dataInfo.getFilePath(),
+                        targetNode,
+                        dataInfo.getRequiredCpu(),
+                        dataInfo.getRequiredMemory());
 
-            // 【原地检测】亲和性调度结果为数据所在源节点本身 → 数据已在最优节点，无需迁移
-            // 直接返回基础时间，避免发起无意义的 K8s Job 并防止后续速率计算除零
-            if ("affinity".equals(type) && sourceNodeInfo.getNodeName().equals(selectedTargetNodeName)) {
-                long fileSizeBytes = dataInfo.getDataSize() != null ? dataInfo.getDataSize() : 0L;
-                long baseline = k8sJobFactory.calculateBaselineMsWithRate(fileSizeBytes, inPlaceRate);
-                if (baseline <= 0) baseline = inPlaceBaselineMs;
-                log.info("数据项[{}] 亲和性调度目标 = 源节点 {}（原地），跳过 K8s Job，本地读取速率 {} 估算时间 {}ms",
-                        dataInfo.getDataName(), selectedTargetNodeName, inPlaceRate, baseline);
+                client = jobResult.getClient();
+                Job job = jobResult.getJob();
+                String selectedTargetNodeName = jobResult.getSelectedNodeName();
+
+                // 【原地检测】亲和性调度结果为数据所在源节点本身 → 数据已在最优节点，无需迁移
+                // 直接返回基础时间，避免发起无意义的 K8s Job 并防止后续速率计算除零
+                if ("affinity".equals(type) && sourceNodeInfo.getNodeName().equals(selectedTargetNodeName)) {
+                    long fileSizeBytes = dataInfo.getDataSize() != null ? dataInfo.getDataSize() : 0L;
+                    long baseline = k8sJobFactory.calculateBaselineMsWithRate(fileSizeBytes, inPlaceRate);
+                    if (baseline <= 0) baseline = inPlaceBaselineMs;
+                    log.info("数据项[{}] 亲和性调度目标 = 源节点 {}（原地），跳过 K8s Job，本地读取速率 {} 估算时间 {}ms",
+                            dataInfo.getDataName(), selectedTargetNodeName, inPlaceRate, baseline);
+                    if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
+                    return baseline;
+                }
+
+                NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(selectedTargetNodeName);
+
+                if (migrationTask == null) {
+                    // 记录迁移任务：PLANNED -> COPYING -> VERIFYING -> SWITCHING -> COMPLETED/FAILED
+                    migrationTask = MigrationTask.builder()
+                            .taskId(taskId)
+                            .dataId(dataInfo.getDataId())
+                            .sourceNodeId(sourceNodeInfo.getNodeId())
+                            .targetNodeId(targetNodeInfo != null ? targetNodeInfo.getNodeId() : sourceNodeInfo.getNodeId())
+                            .status("COPYING")
+                            .retryCount(attempt)
+                            .startedAt(LocalDateTime.now())
+                            .build();
+                    migrationTaskMapper.insert(migrationTask);
+                } else {
+                    migrationTask.setStatus("COPYING");
+                    migrationTask.setRetryCount(attempt);
+                    migrationTask.setStartedAt(LocalDateTime.now());
+                    migrationTaskMapper.updateLifecycle(migrationTask);
+                }
+
+                client.batch().v1().jobs().inNamespace("default").create(job);
+
+                client.batch().v1().jobs().inNamespace("default").withName(jobName)
+                        .waitUntilCondition(j -> j != null && j.getStatus() != null &&
+                                        (j.getStatus().getSucceeded() != null || j.getStatus().getFailed() != null),
+                                waitTimeoutMinutes, TimeUnit.MINUTES);
+
+                Job finalJob = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
+                if (finalJob == null || finalJob.getStatus().getSucceeded() == null || finalJob.getStatus().getSucceeded() < 1) {
+                    lastError = String.format("k8s job failed or timeout after %d minute(s)", waitTimeoutMinutes);
+                    String clusterId = client != null ? getClusterIdFromClient(client) : "unknown-context";
+                    if (attempt < maxRetries) {
+                        log.warn("Job {} 在集群 {} 第 {}/{} 次执行失败或超时，将重试。",
+                                jobName, clusterId, attempt + 1, totalAttempts);
+                        if (migrationTask != null) {
+                            migrationTask.setStatus("RETRYING");
+                            migrationTask.setRetryCount(attempt + 1);
+                            migrationTask.setErrorMessage(lastError);
+                            migrationTaskMapper.updateLifecycle(migrationTask);
+                        }
+                        if (retryBackoffSeconds > 0) {
+                            TimeUnit.SECONDS.sleep(retryBackoffSeconds);
+                        }
+                        continue;
+                    }
+
+                    log.error("Job {} 在集群 {} 中执行失败或超时（已达到最大重试次数）", jobName, clusterId);
+                    if (migrationTask != null) {
+                        migrationTask.setStatus("FAILED");
+                        migrationTask.setRetryCount(attempt);
+                        migrationTask.setErrorMessage(lastError);
+                        migrationTask.setFinishedAt(LocalDateTime.now());
+                        migrationTaskMapper.updateLifecycle(migrationTask);
+                    }
+                    return -1;
+                }
+                log.info("Job {} 在集群 {} 中执行成功，开始提取Init Container执行时间", jobName, getClusterIdFromClient(client));
+
+                migrationTask.setStatus("VERIFYING");
+                migrationTaskMapper.updateLifecycle(migrationTask);
+
+                migrationTask.setStatus("SWITCHING");
+                migrationTaskMapper.updateLifecycle(migrationTask);
+
+                // data_server 不在此处更新：亲和性调度只是临时将数据下载到 emptyDir 进行训练，
+                // 并未持久化到目标节点，data_server 应始终反映数据文件真实所在的节点。
+
+                migrationTask.setStatus("COMPLETED");
+                migrationTask.setRetryCount(attempt);
+                migrationTask.setFinishedAt(LocalDateTime.now());
+                migrationTaskMapper.updateLifecycle(migrationTask);
+
                 if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
-                return baseline;
-            }
+                return getInitContainerDuration(client, jobName, "data-transfer-container");
 
-            NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(selectedTargetNodeName);
-
-            // 记录迁移任务：PLANNED -> COPYING -> VERIFYING -> SWITCHING -> COMPLETED/FAILED
-            migrationTask = MigrationTask.builder()
-                    .taskId(taskId)
-                    .dataId(dataInfo.getDataId())
-                    .sourceNodeId(sourceNodeInfo.getNodeId())
-                    .targetNodeId(targetNodeInfo != null ? targetNodeInfo.getNodeId() : sourceNodeInfo.getNodeId())
-                    .status("PLANNED")
-                    .retryCount(0)
-                    .build();
-            migrationTaskMapper.insert(migrationTask);
-
-            migrationTask.setStatus("COPYING");
-            migrationTask.setStartedAt(LocalDateTime.now());
-            migrationTaskMapper.updateLifecycle(migrationTask);
-
-            client.batch().v1().jobs().inNamespace("default").create(job);
-
-            client.batch().v1().jobs().inNamespace("default").withName(jobName)
-                    .waitUntilCondition(j -> j != null && j.getStatus() != null &&
-                                    (j.getStatus().getSucceeded() != null || j.getStatus().getFailed() != null),
-                            10, TimeUnit.MINUTES);
-
-            Job finalJob = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
-            if (finalJob == null || finalJob.getStatus().getSucceeded() == null || finalJob.getStatus().getSucceeded() < 1) {
-                log.error("Job {} 在集群 {} 中执行失败或超时", jobName, getClusterIdFromClient(client));
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                lastError = "retry backoff interrupted";
+                log.error("Job {} 重试退避等待被中断", jobName, ie);
                 if (migrationTask != null) {
                     migrationTask.setStatus("FAILED");
-                    migrationTask.setErrorMessage("k8s job failed or timeout");
+                    migrationTask.setRetryCount(attempt);
+                    migrationTask.setErrorMessage(lastError);
                     migrationTask.setFinishedAt(LocalDateTime.now());
                     migrationTaskMapper.updateLifecycle(migrationTask);
                 }
                 return -1;
-            }
-            log.info("Job {} 在集群 {} 中执行成功，开始提取Init Container执行时间", jobName, getClusterIdFromClient(client));
+            } catch (Exception e) {
+                lastError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                String clusterId = client != null ? getClusterIdFromClient(client) : "unknown-context";
+                if (attempt < maxRetries) {
+                    log.warn("执行Job {}（集群 {}）第 {}/{} 次出现异常，将重试: {}",
+                            jobName, clusterId, attempt + 1, totalAttempts, lastError);
+                    if (migrationTask != null) {
+                        migrationTask.setStatus("RETRYING");
+                        migrationTask.setRetryCount(attempt + 1);
+                        migrationTask.setErrorMessage(lastError);
+                        migrationTaskMapper.updateLifecycle(migrationTask);
+                    }
+                    try {
+                        if (retryBackoffSeconds > 0) {
+                            TimeUnit.SECONDS.sleep(retryBackoffSeconds);
+                        }
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        log.error("Job {} 重试退避等待被中断", jobName, ie);
+                        if (migrationTask != null) {
+                            migrationTask.setStatus("FAILED");
+                            migrationTask.setRetryCount(attempt);
+                            migrationTask.setErrorMessage("retry backoff interrupted");
+                            migrationTask.setFinishedAt(LocalDateTime.now());
+                            migrationTaskMapper.updateLifecycle(migrationTask);
+                        }
+                        return -1;
+                    }
+                    continue;
+                }
 
-            migrationTask.setStatus("VERIFYING");
-            migrationTaskMapper.updateLifecycle(migrationTask);
-
-            migrationTask.setStatus("SWITCHING");
-            migrationTaskMapper.updateLifecycle(migrationTask);
-
-            // data_server 不在此处更新：亲和性调度只是临时将数据下载到 emptyDir 进行训练，
-            // 并未持久化到目标节点，data_server 应始终反映数据文件真实所在的节点。
-
-            migrationTask.setStatus("COMPLETED");
-            migrationTask.setFinishedAt(LocalDateTime.now());
-            migrationTaskMapper.updateLifecycle(migrationTask);
-
-            if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
-            return getInitContainerDuration(client, jobName, "data-transfer-container");
-
-        } catch (Exception e) {
-            log.error("执行Job {} 或测量时间时出现异常", jobName, e);
-            if (migrationTask != null) {
-                migrationTask.setStatus("FAILED");
-                migrationTask.setErrorMessage(e.getMessage());
-                migrationTask.setFinishedAt(LocalDateTime.now());
-                migrationTaskMapper.updateLifecycle(migrationTask);
-            }
-            return -1;
-        } finally {
-            if (client != null) {
-                cleanupJob(client, jobName);
+                log.error("执行Job {}（集群 {}）已达到最大重试次数，最终失败", jobName, clusterId, e);
+                if (migrationTask != null) {
+                    migrationTask.setStatus("FAILED");
+                    migrationTask.setRetryCount(attempt);
+                    migrationTask.setErrorMessage(lastError);
+                    migrationTask.setFinishedAt(LocalDateTime.now());
+                    migrationTaskMapper.updateLifecycle(migrationTask);
+                }
+                return -1;
+            } finally {
+                if (client != null) {
+                    cleanupJob(client, jobName);
+                }
             }
         }
+
+        log.error("数据项[{}] 迁移任务执行失败，最终错误: {}", dataInfo.getDataName(), lastError);
+        return -1;
     }
 
     /**
