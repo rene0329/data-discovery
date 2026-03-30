@@ -285,15 +285,12 @@ public class NodeSyncService {
 
     @PostConstruct
     public void init() {
-        log.info("Starting initial full sync and watchers for all managed clusters...");
         // 遍历 K8sJobFactory 中所有集群客户端，为每个集群执行同步和启动 watcher
         // 由于当前是单集群部署，这里只会有一个客户端
         k8sJobFactory.getClusterClients().forEach((clusterId, client) -> {
-            log.info("Processing cluster: {}", clusterId);
             initialFullSync(client, clusterId); // 为每个客户端执行全量同步
             startNodeWatcher(client, clusterId); // 为每个客户端启动 watcher
         });
-        log.info("Initial full sync and watchers completed for all managed clusters.");
     }
 
     /**
@@ -301,18 +298,16 @@ public class NodeSyncService {
      * 接收 KubernetesClient 参数
      */
     private void initialFullSync(KubernetesClient client, String clusterId) { // <-- 传入 clusterId，避免 in-cluster null context
-        log.debug("Performing initial full sync for cluster: {}", clusterId);
         List<Node> nodes = client.nodes().list().getItems();
         nodes.forEach(node -> syncNode(node, client, clusterId)); // 将 client 传入 syncNode
     }
 
     /**
-     * 【新增】定时任务：每 30 秒更新一次节点的实时 Metrics
+     * 【新增】定时任务：每 120 秒更新一次节点的实时 Metrics
      * 遍历所有 K8sJobFactory 管理的集群
      */
-    @Scheduled(fixedRate = 120000) // 每 30 秒执行一次
+    @Scheduled(fixedRate = 120000) // 每 120 秒执行一次
     public void updateNodeMetrics() {
-        log.debug("定时更新所有集群的节点 Metrics...");
         k8sJobFactory.getClusterClients().forEach((clusterId, client) -> { // <-- 遍历所有客户端
             List<Node> nodes = client.nodes().list().getItems();
             nodes.forEach(node -> syncNode(node, client, clusterId)); // 将 client 传入 syncNode
@@ -329,7 +324,7 @@ public class NodeSyncService {
         NodeManagement entity = k8sNodeMapper.toEntityWithMetrics(k8sNode, client); // 传入 client
 
         if (entity == null) {
-            log.warn("Skipping null entity for node: {}", k8sNode.getMetadata().getName());
+            log.error("节点 '{}' 在集群 '{}' 映射实体失败，已跳过同步", k8sNode.getMetadata().getName(), clusterId);
             return;
         }
 
@@ -339,17 +334,9 @@ public class NodeSyncService {
             // 存在：更新（保留原有 node_id）
             entity.setNodeId(existing.getNodeId());
             nodeManagementMapper.updateNodeFromK8s(entity);
-            log.debug("Node '{}' updated: CPU={}/{}, Memory={}/{}GB in cluster {}",
-                    entity.getNodeName(),
-                    entity.getCurrentCpu(), entity.getMaxCpu(),
-                    entity.getCurrentMemory(), entity.getMaxMemory(),
-                    clusterId);
         } else {
             // 不存在：插入
             nodeManagementMapper.insertNode(entity);
-            log.info("Node '{}' inserted into the database in cluster {}.",
-                    entity.getNodeName(),
-                    clusterId);
         }
     }
 
@@ -364,15 +351,10 @@ public class NodeSyncService {
                 String nodeName = node.getMetadata().getName();
                 switch (action) {
                     case ADDED:
-                        log.info("Node event: {} for {} in cluster {}", action, nodeName, clusterId);
-                        syncNode(node, client, clusterId);
-                        break;
                     case MODIFIED:
-                        log.debug("Node event: MODIFIED for {} in cluster {}", nodeName, clusterId);
                         syncNode(node, client, clusterId);
                         break;
                     case DELETED:
-                        log.info("Node deleted: {} in cluster {}", nodeName, clusterId);
                         nodeManagementMapper.deleteByName(nodeName); // 这里可能需要考虑clusterId，如果nodeName在不同集群可能重复
                         break;
                     case ERROR:
@@ -383,11 +365,10 @@ public class NodeSyncService {
 
             @Override
             public void onClose(WatcherException cause) {
-                log.warn("Node watcher for cluster {} closed", clusterId, cause);
+                log.error("Node watcher for cluster {} closed", clusterId, cause);
                 // 可添加重连逻辑，并确保传递正确的 client 和 clusterId
                 try {
                     Thread.sleep(5000);
-                    log.info("Attempting to restart node watcher for cluster {}...", clusterId);
                     startNodeWatcher(client, clusterId); // 重连时传入 client 和 clusterId
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();

@@ -193,6 +193,7 @@ public class K8sTaskOrchestratorService {
         for (int attempt = 0; attempt < totalAttempts; attempt++) {
             String jobName = String.format("%s-%s-%s", type, dataNameForJob, UUID.randomUUID().toString().substring(0, 8));
             KubernetesClient client = null;
+            boolean jobSubmitted = false;
             try {
                 log.info("准备Job: {} (源: {}, 目标: {}, attempt={}/{})",
                         jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
@@ -244,6 +245,7 @@ public class K8sTaskOrchestratorService {
                 }
 
                 client.batch().v1().jobs().inNamespace("default").create(job);
+                jobSubmitted = true;
 
                 client.batch().v1().jobs().inNamespace("default").withName(jobName)
                         .waitUntilCondition(j -> j != null && j.getStatus() != null &&
@@ -351,7 +353,7 @@ public class K8sTaskOrchestratorService {
                 }
                 return -1;
             } finally {
-                if (client != null) {
+                if (client != null && jobSubmitted) {
                     cleanupJob(client, jobName);
                 }
             }

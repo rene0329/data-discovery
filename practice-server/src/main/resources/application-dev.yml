@@ -116,5 +116,9 @@ practice:
       root: INFO
       # 为您的项目包设置更详细的日志级别，方便调试
       org.example: DEBUG
+      # NodeSync 背景同步日志太频繁，仅保留错误
+      org.example.service.NodeSyncService: ERROR
+      # 节点指标映射日志仅保留错误
+      org.example.mapper.K8sNodeMapperImpl: ERROR
       # 调整一些框架的日志级别，避免日志刷屏
       io.fabric8: WARN

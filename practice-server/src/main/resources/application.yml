@@ -45,8 +45,8 @@ logging:
   level:
     root: INFO
     org.example: DEBUG # 为你的项目包设置更详细的日志级别，方便调试
-    org.example.service.NodeSyncService: INFO   # NodeSync 定时/watcher 事件太频繁，只保留 INFO+
-    org.example.mapper.K8sNodeMapperImpl: INFO   # 节点指标原始数据太冗余，只保留 INFO+
+    org.example.service.NodeSyncService: ERROR  # NodeSync 仅保留错误日志
+    org.example.mapper.K8sNodeMapperImpl: ERROR # 节点指标映射日志仅保留错误
     io.fabric8: WARN # 减少fabric8的日志输出，避免刷屏
     com.sky.mapper: debug # 调整为适合K8s的日志级别
     com.sky.service: info
@@ -70,10 +70,10 @@ dispatch:
       main: python:3.9-slim # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.main}")
     curl:
       limit-rate:
-        default: 2560k          # 全局兜底限速（原 5m，减半为 2.5m）
-        n141-to-40: 4096k       # master-141 → master-40（原 8m，减半为 4m）
-        n141-to-215: 2560k      # master-141 → master-215（原 5m，减半为 2.5m）
-        n40-to-215: 5120k       # master-40  → master-215（原 10m，减半为 5m）
+        default: 2048k          # 全局兜底限速（按比例下调后约 2m）
+        n141-to-40: 3277k       # master-141 → master-40（按比例下调后约 3.2m）
+        n141-to-215: 2048k      # master-141 → master-215（按比例下调后约 2m）
+        n40-to-215: 4096k       # master-40  → master-215（目标值 4m）
   central-node:
     name: "master-215" # 中心节点，需在 node_management 表中存在 # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
@@ -82,7 +82,7 @@ dispatch:
     data-directory: /dataset  # 与 DaemonSet FILE_DISCOVERY_DATA_DIRECTORY 一致，用于 upload 路径剥离
   scheduler:
     in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
-    in-place-rate: 7680k           # 原地调度模拟本地读取速率（原 15m，减半为 7.5m）
+    in-place-rate: 6144k           # 原地调度模拟本地读取速率（按比例下调后约 6m）
     weight:
       networkLatency: 0.3          # 网络延迟惩罚权重
       bandwidth: 0.3               # 带宽奖励权重
