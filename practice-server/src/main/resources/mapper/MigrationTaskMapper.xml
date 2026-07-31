@@ -52,4 +52,12 @@
         WHERE id = #{id}
     </update>
 
+    <delete id="deleteByTaskId">
+        DELETE FROM migration_task WHERE task_id = #{taskId}
+    </delete>
+
+    <delete id="deleteAll">
+        DELETE FROM migration_task
+    </delete>
+
 </mapper>

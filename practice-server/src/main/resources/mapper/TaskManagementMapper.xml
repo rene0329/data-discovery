@@ -108,6 +108,10 @@
         DELETE FROM task_management;
     </delete>
 
+    <delete id="deleteTaskById">
+        DELETE FROM task_management WHERE task_id = #{taskId}
+    </delete>
+
     <select id="listWithSchedule" resultType="org.example.entity.TaskManagement">
         SELECT * FROM task_management
         WHERE schedule IS NOT NULL AND schedule != ''

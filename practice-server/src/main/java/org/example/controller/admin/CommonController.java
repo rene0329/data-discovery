@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.entity.*;
 import org.example.mapper.DataManagementMapper;
 import org.example.mapper.EdgeManagementMapper;
+import org.example.mapper.MigrationTaskMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.example.service.K8sTaskOrchestratorService; // 引入新的后台服务
@@ -11,6 +12,7 @@ import org.example.vo.NodeManagementVO;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -39,6 +41,7 @@ public class CommonController {
     private final DataManagementMapper dataManagementMapper;
     private final NodeManagementMapper nodeManagementMapper;
     private final TaskManagementMapper taskManagementMapper;
+    private final MigrationTaskMapper migrationTaskMapper;
     private final EdgeManagementMapper edgeManagementMapper;
     private final K8sTaskOrchestratorService k8sTaskOrchestratorService;
     private final RestTemplate restTemplate;
@@ -57,6 +60,7 @@ public class CommonController {
             DataManagementMapper dataManagementMapper,
             NodeManagementMapper nodeManagementMapper,
             TaskManagementMapper taskManagementMapper,
+            MigrationTaskMapper migrationTaskMapper,
             EdgeManagementMapper edgeManagementMapper,
             K8sTaskOrchestratorService k8sTaskOrchestratorService,
             RestTemplate restTemplate
@@ -64,6 +68,7 @@ public class CommonController {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
         this.taskManagementMapper = taskManagementMapper;
+        this.migrationTaskMapper = migrationTaskMapper;
         this.edgeManagementMapper = edgeManagementMapper;
         this.k8sTaskOrchestratorService = k8sTaskOrchestratorService;
         this.restTemplate = restTemplate;
@@ -496,9 +501,12 @@ public class CommonController {
 
 
     @DeleteMapping("/clearTasks")
+    @Transactional
     public ResponseEntity<ApiResponse<Map<String, Object>>> clearTasks() {
         Map<String, Object> response = new HashMap<>();
         try {
+            // 迁移记录引用 task_id；先删除明细，避免清空任务后留下孤立引用。
+            migrationTaskMapper.deleteAll();
             taskManagementMapper.deleteAllTasks();
             taskManagementMapper.resetAutoIncrement();
             response.put("success", true);
@@ -654,6 +662,7 @@ public class CommonController {
      * 删除任务（按 taskId）。
      */
     @PostMapping("/deleteTask")
+    @Transactional
     public ResponseEntity<ApiResponse<Map<String, Object>>> deleteTask(@RequestBody TaskManagement task) {
         Map<String, Object> resp = new HashMap<>();
         if (task.getTaskId() == null) {
@@ -661,6 +670,9 @@ public class CommonController {
             resp.put("message", "taskId is required");
             return ResponseEntity.badRequest().body(ApiResponse.ok(resp));
         }
+        // 删除任务时同步清理其迁移明细。AUTO_INCREMENT 只保证唯一递增，
+        // 单条删除产生空号是数据库的正常行为，不应复用已有任务的主键。
+        migrationTaskMapper.deleteByTaskId(task.getTaskId());
         taskManagementMapper.deleteTaskById(task.getTaskId());
         resp.put("success", true);
         return ResponseEntity.ok(ApiResponse.ok(resp));
