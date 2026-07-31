@@ -189,22 +189,42 @@ public class K8sTaskOrchestratorService {
     }
 
     /**
-     * 优先按中心节点 InternalIP/ExternalIP 解析真实 K8s 节点名，避免部署时猜测节点名。
-     * 若未配置 IP，则兼容使用显式配置的节点名。
+     * 节点名已显式配置时直接用于 K8s 调度，并用 IP 对节点表做一致性检查。
+     * 节点同步尚未完成时允许继续使用显式节点名；未配置节点名时才按 IP 解析。
      */
     private String resolveCentralNodeName() {
-        if (centralNodeIp != null && !centralNodeIp.trim().isEmpty()) {
-            Integer nodeId = nodeManagementMapper.getNodeIdByIp(centralNodeIp.trim());
+        String configuredName = centralNodeName == null ? "" : centralNodeName.trim();
+        String configuredIp = centralNodeIp == null ? "" : centralNodeIp.trim();
+
+        if (!configuredName.isEmpty()) {
+            if (!configuredIp.isEmpty()) {
+                Integer nodeId = nodeManagementMapper.getNodeIdByIp(configuredIp);
+                NodeManagement node = nodeId == null ? null : nodeManagementMapper.getNodeById(nodeId);
+                String discoveredName = node == null || node.getNodeName() == null
+                        ? ""
+                        : node.getNodeName().trim();
+                if (!discoveredName.isEmpty() && !configuredName.equals(discoveredName)) {
+                    throw new IllegalStateException("中心节点配置不一致：IP " + configuredIp
+                            + " 在 node_management 中对应 " + discoveredName
+                            + "，但配置的节点名是 " + configuredName);
+                }
+                if (discoveredName.isEmpty()) {
+                    log.warn("中心节点 IP {} 尚未同步到 node_management，暂按显式节点名 {} 调度",
+                            configuredIp, configuredName);
+                }
+            }
+            return configuredName;
+        }
+
+        if (!configuredIp.isEmpty()) {
+            Integer nodeId = nodeManagementMapper.getNodeIdByIp(configuredIp);
             if (nodeId != null) {
                 NodeManagement node = nodeManagementMapper.getNodeById(nodeId);
                 if (node != null && node.getNodeName() != null && !node.getNodeName().trim().isEmpty()) {
                     return node.getNodeName();
                 }
             }
-            throw new IllegalStateException("找不到中心节点 IP " + centralNodeIp + " 对应的 node_management 记录");
-        }
-        if (centralNodeName != null && !centralNodeName.trim().isEmpty()) {
-            return centralNodeName.trim();
+            throw new IllegalStateException("找不到中心节点 IP " + configuredIp + " 对应的 node_management 记录");
         }
         throw new IllegalStateException("未配置 dispatch.central-node.ip 或 dispatch.central-node.name");
     }

@@ -84,8 +84,8 @@ dispatch:
     ttl-seconds-after-finished: 300
   central-node:
     # 新集群中心计算节点；运行时会通过 node_management.internal_ip 解析实际 K8s 节点名。
-    ip: ${DISPATCH_CENTRAL_NODE_IP:10.212.14.90}
-    name: ${DISPATCH_CENTRAL_NODE_NAME:}
+    ip: ${DISPATCH_CENTRAL_NODE_IP:10.212.14.88}
+    name: ${DISPATCH_CENTRAL_NODE_NAME:master-88}
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
   data-discovery:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致
