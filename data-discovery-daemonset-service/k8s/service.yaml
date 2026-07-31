@@ -13,6 +13,6 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
-      nodePort: 30080        # 改为你想要的端口（30000-32767）
+      nodePort: 31082        # 对外诊断/人工访问；节点间复制仍走 internal_ip:8080
       name: http
       protocol: TCP

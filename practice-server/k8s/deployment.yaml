@@ -27,6 +27,8 @@ spec:
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: "prod"
+            - name: DISPATCH_CENTRAL_NODE_IP
+              value: "10.212.14.90"
 
             # MySQL
             - name: SPRING_DATASOURCE_DRUID_URL

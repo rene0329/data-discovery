@@ -12,6 +12,6 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
-      nodePort: 30081        # 改为你想要的端口（30000-32767）
+      nodePort: 31081        # 对外后端 API；任一集群节点 IP 均可访问
       name: http
       protocol: TCP

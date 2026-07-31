@@ -52,6 +52,7 @@ public class K8sTaskOrchestratorService {
     private final MigrationTaskMapper migrationTaskMapper;
     private final K8sJobFactory k8sJobFactory;
     private final String centralNodeName;
+    private final String centralNodeIp;
     private final Executor dataProcessingExecutor;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
@@ -93,7 +94,8 @@ public class K8sTaskOrchestratorService {
             MigrationTaskMapper migrationTaskMapper,
             // 【架构修正#2】: 从构造函数中移除KubernetesClient
             K8sJobFactory k8sJobFactory,
-            @Value("${dispatch.central-node.name:aks-nodepool1-54677688-vmss000002}") String centralNodeName,
+            @Value("${dispatch.central-node.name:}") String centralNodeName,
+            @Value("${dispatch.central-node.ip:}") String centralNodeIp,
             @Qualifier("dataProcessingExecutor") Executor dataProcessingExecutor
     ) {
         this.dataManagementMapper = dataManagementMapper;
@@ -102,6 +104,7 @@ public class K8sTaskOrchestratorService {
         this.migrationTaskMapper = migrationTaskMapper;
         this.k8sJobFactory = k8sJobFactory;
         this.centralNodeName = centralNodeName;
+        this.centralNodeIp = centralNodeIp;
         this.dataProcessingExecutor = dataProcessingExecutor;
     }
 
@@ -163,10 +166,11 @@ public class K8sTaskOrchestratorService {
             return null;
         }
 
+        String resolvedCentralNodeName = resolveCentralNodeName();
         AtomicReference<String> affinityNodeOut = new AtomicReference<>(sourceNodeName);
-        AtomicReference<String> centralNodeOut  = new AtomicReference<>(centralNodeName);
+        AtomicReference<String> centralNodeOut  = new AtomicReference<>(resolvedCentralNodeName);
         long t1_ms = executeJobAndMeasureInitContainer(taskId, "affinity", sourceNodeInfo, null, dataInfo, affinityNodeOut);
-        long t2_ms = executeJobAndMeasureInitContainer(taskId, "central", sourceNodeInfo, centralNodeName, dataInfo, centralNodeOut);
+        long t2_ms = executeJobAndMeasureInitContainer(taskId, "central", sourceNodeInfo, resolvedCentralNodeName, dataInfo, centralNodeOut);
 
         if (t1_ms == -1 || t2_ms == -1) {
             log.error("数据项 {} 的Job执行失败", dataItem);
@@ -182,6 +186,27 @@ public class K8sTaskOrchestratorService {
         result.setScheduleT2(dataItem + ": " + sourceNodeName + " -> " + centralNodeOut.get());
         log.info("数据项 {} 处理完成。亲和性调度传输: {}ms, 中心化调度传输: {}ms", dataItem, t1_ms, t2_ms);
         return result;
+    }
+
+    /**
+     * 优先按中心节点 InternalIP/ExternalIP 解析真实 K8s 节点名，避免部署时猜测节点名。
+     * 若未配置 IP，则兼容使用显式配置的节点名。
+     */
+    private String resolveCentralNodeName() {
+        if (centralNodeIp != null && !centralNodeIp.trim().isEmpty()) {
+            Integer nodeId = nodeManagementMapper.getNodeIdByIp(centralNodeIp.trim());
+            if (nodeId != null) {
+                NodeManagement node = nodeManagementMapper.getNodeById(nodeId);
+                if (node != null && node.getNodeName() != null && !node.getNodeName().trim().isEmpty()) {
+                    return node.getNodeName();
+                }
+            }
+            throw new IllegalStateException("找不到中心节点 IP " + centralNodeIp + " 对应的 node_management 记录");
+        }
+        if (centralNodeName != null && !centralNodeName.trim().isEmpty()) {
+            return centralNodeName.trim();
+        }
+        throw new IllegalStateException("未配置 dispatch.central-node.ip 或 dispatch.central-node.name");
     }
 
     /**
