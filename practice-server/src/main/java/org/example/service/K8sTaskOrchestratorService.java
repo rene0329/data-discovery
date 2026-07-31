@@ -5,6 +5,7 @@ import io.fabric8.kubernetes.api.model.ContainerStatus;
 import io.fabric8.kubernetes.api.model.NamedContext;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
+import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import lombok.extern.slf4j.Slf4j;
 import org.example.entity.DataManagement;
@@ -74,6 +75,16 @@ public class K8sTaskOrchestratorService {
     @Value("${app.orchestrator.job-retry-backoff-seconds:5}")
     private long jobRetryBackoffSeconds;
 
+    /**
+     * 传输计时与训练完成解耦。默认在 init container 成功后立即返回测量值，
+     * 训练 Job 继续运行并由 ttlSecondsAfterFinished 自动清理。
+     */
+    @Value("${app.orchestrator.wait-for-processing-completion:false}")
+    private boolean waitForProcessingCompletion;
+
+    @Value("${app.orchestrator.status-poll-interval-ms:1000}")
+    private long statusPollIntervalMs;
+
     @Autowired
     public K8sTaskOrchestratorService(
             DataManagementMapper dataManagementMapper,
@@ -128,7 +139,8 @@ public class K8sTaskOrchestratorService {
                 }
             }
 
-            updateFinalTaskStatus(taskId, totalT1, totalT2, scheduleT1List, scheduleT2List);
+            updateFinalTaskStatus(taskId, totalT1, totalT2, scheduleT1List, scheduleT2List,
+                    scheduleT1List.size(), selectedDatas.size());
 
         } catch (Exception e) {
             log.error("任务 {} 执行过程中发生错误", taskId, e);
@@ -194,6 +206,7 @@ public class K8sTaskOrchestratorService {
             String jobName = String.format("%s-%s-%s", type, dataNameForJob, UUID.randomUUID().toString().substring(0, 8));
             KubernetesClient client = null;
             boolean jobSubmitted = false;
+            boolean cleanupOnExit = true;
             try {
                 log.info("准备Job: {} (源: {}, 目标: {}, attempt={}/{})",
                         jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
@@ -247,47 +260,22 @@ public class K8sTaskOrchestratorService {
                 client.batch().v1().jobs().inNamespace("default").create(job);
                 jobSubmitted = true;
 
-                client.batch().v1().jobs().inNamespace("default").withName(jobName)
-                        .waitUntilCondition(j -> j != null && j.getStatus() != null &&
-                                        (j.getStatus().getSucceeded() != null || j.getStatus().getFailed() != null),
-                                waitTimeoutMinutes, TimeUnit.MINUTES);
-
-                Job finalJob = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
-                if (finalJob == null || finalJob.getStatus().getSucceeded() == null || finalJob.getStatus().getSucceeded() < 1) {
-                    lastError = String.format("k8s job failed or timeout after %d minute(s)", waitTimeoutMinutes);
-                    String clusterId = client != null ? getClusterIdFromClient(client) : "unknown-context";
-                    if (attempt < maxRetries) {
-                        log.warn("Job {} 在集群 {} 第 {}/{} 次执行失败或超时，将重试。",
-                                jobName, clusterId, attempt + 1, totalAttempts);
-                        if (migrationTask != null) {
-                            migrationTask.setStatus("RETRYING");
-                            migrationTask.setRetryCount(attempt + 1);
-                            migrationTask.setErrorMessage(lastError);
-                            migrationTaskMapper.updateLifecycle(migrationTask);
-                        }
-                        if (retryBackoffSeconds > 0) {
-                            TimeUnit.SECONDS.sleep(retryBackoffSeconds);
-                        }
-                        continue;
-                    }
-
-                    log.error("Job {} 在集群 {} 中执行失败或超时（已达到最大重试次数）", jobName, clusterId);
-                    if (migrationTask != null) {
-                        migrationTask.setStatus("FAILED");
-                        migrationTask.setRetryCount(attempt);
-                        migrationTask.setErrorMessage(lastError);
-                        migrationTask.setFinishedAt(LocalDateTime.now());
-                        migrationTaskMapper.updateLifecycle(migrationTask);
-                    }
-                    return -1;
-                }
-                log.info("Job {} 在集群 {} 中执行成功，开始提取Init Container执行时间", jobName, getClusterIdFromClient(client));
+                // 只等待数据传输 init container。这样训练镜像拉取、训练脚本失败或训练超时，
+                // 都不会抹掉已经成功取得的传输时间。
+                long transferDurationMs = waitForInitContainerDuration(
+                        client, jobName, "data-transfer-container", waitTimeoutMinutes);
+                log.info("Job {} 在集群 {} 中已取得传输时间 {}ms",
+                        jobName, getClusterIdFromClient(client), transferDurationMs);
 
                 migrationTask.setStatus("VERIFYING");
                 migrationTaskMapper.updateLifecycle(migrationTask);
 
-                migrationTask.setStatus("SWITCHING");
-                migrationTaskMapper.updateLifecycle(migrationTask);
+                if (waitForProcessingCompletion) {
+                    waitForJobCompletion(client, jobName, waitTimeoutMinutes);
+                } else {
+                    // Job 仍可能在执行训练，不能在 finally 中立即删除；由 Job TTL 自动清理。
+                    cleanupOnExit = false;
+                }
 
                 // data_server 不在此处更新：亲和性调度只是临时将数据下载到 emptyDir 进行训练，
                 // 并未持久化到目标节点，data_server 应始终反映数据文件真实所在的节点。
@@ -298,7 +286,7 @@ public class K8sTaskOrchestratorService {
                 migrationTaskMapper.updateLifecycle(migrationTask);
 
                 if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
-                return getInitContainerDuration(client, jobName, "data-transfer-container");
+                return transferDurationMs;
 
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
@@ -353,7 +341,7 @@ public class K8sTaskOrchestratorService {
                 }
                 return -1;
             } finally {
-                if (client != null && jobSubmitted) {
+                if (client != null && jobSubmitted && cleanupOnExit) {
                     cleanupJob(client, jobName);
                 }
             }
@@ -366,54 +354,112 @@ public class K8sTaskOrchestratorService {
     /**
      * 【架构修正#4】: 方法增加一个client参数，以确保从正确的集群获取Pod信息。
      */
-    private long getInitContainerDuration(KubernetesClient client, String jobName, String initContainerName) {
-        try {
-            List<Pod> pods = client.pods().inNamespace("default").withLabel("job-name", jobName).list().getItems();
-            if (pods.isEmpty()) {
-                log.error("在集群 {} 中找不到Job {} 关联的Pod", getClusterIdFromClient(client), jobName);
-                return -1;
-            }
-            Pod pod = pods.get(0);
-            String podName = pod.getMetadata().getName();
+    private long waitForInitContainerDuration(KubernetesClient client,
+                                              String jobName,
+                                              String initContainerName,
+                                              long timeoutMinutes) throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
+        long pollMs = Math.max(200L, statusPollIntervalMs);
 
-            // 从 init container 日志中解析 TRANSFER_MS=<ms>（毫秒精度，由 init container 命令输出）
-            try {
-                String logs = client.pods().inNamespace("default").withName(podName)
-                        .inContainer(initContainerName).getLog();
-                if (logs != null) {
-                    for (String line : logs.split("\n")) {
-                        if (line.startsWith("TRANSFER_MS=")) {
-                            long duration = Long.parseLong(line.substring("TRANSFER_MS=".length()).trim());
-                            log.info("精确测量到 Init Container '{}' 的执行时间为: {} ms", initContainerName, duration);
-                            return duration;
-                        }
-                    }
+        while (System.nanoTime() < deadlineNanos) {
+            List<Pod> pods = client.pods().inNamespace("default")
+                    .withLabel("job-name", jobName).list().getItems();
+
+            for (Pod pod : pods) {
+                ContainerStateTerminated terminated = findTerminatedInitContainer(pod, initContainerName);
+                if (terminated == null || terminated.getExitCode() == null || terminated.getExitCode() != 0) {
+                    continue;
                 }
-            } catch (Exception logEx) {
-                log.warn("读取 Init Container '{}' 日志失败，回退到 K8s 时间戳: {}", initContainerName, logEx.getMessage());
-            }
-
-            // 回退：使用 K8s 时间戳（秒级精度）
-            if (pod.getStatus() != null && pod.getStatus().getInitContainerStatuses() != null) {
-                for (ContainerStatus status : pod.getStatus().getInitContainerStatuses()) {
-                    if (status.getName().equals(initContainerName)) {
-                        ContainerStateTerminated terminatedState = status.getState().getTerminated();
-                        if (terminatedState != null && terminatedState.getFinishedAt() != null && terminatedState.getStartedAt() != null) {
-                            Instant startTime = Instant.parse(terminatedState.getStartedAt());
-                            Instant finishTime = Instant.parse(terminatedState.getFinishedAt());
-                            long duration = Duration.between(startTime, finishTime).toMillis();
-                            log.info("回退测量到 Init Container '{}' 的执行时间为: {} ms (K8s 时间戳，秒级精度)", initContainerName, duration);
-                            return duration;
-                        }
-                    }
+                Long duration = extractInitContainerDuration(client, pod, initContainerName, terminated);
+                if (duration != null && duration >= 0) {
+                    return duration;
                 }
             }
-            log.error("在Pod {} 中找不到名为 '{}' 的 Init Container 的有效时间信息", podName, initContainerName);
-            return -1;
-        } catch (Exception e) {
-            log.error("提取Job {} 的Init Container时长时出错", jobName, e);
-            return -1;
+
+            Job currentJob = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
+            if (hasJobCondition(currentJob, "Failed")) {
+                throw new IllegalStateException("Job " + jobName + " 在数据传输阶段失败");
+            }
+            TimeUnit.MILLISECONDS.sleep(pollMs);
         }
+        throw new IllegalStateException("等待 Job " + jobName + " 的数据传输阶段超时（"
+                + timeoutMinutes + " 分钟）");
+    }
+
+    private void waitForJobCompletion(KubernetesClient client,
+                                      String jobName,
+                                      long timeoutMinutes) throws InterruptedException {
+        long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
+        long pollMs = Math.max(200L, statusPollIntervalMs);
+        while (System.nanoTime() < deadlineNanos) {
+            Job job = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
+            if (hasJobCondition(job, "Complete")) {
+                return;
+            }
+            if (hasJobCondition(job, "Failed")) {
+                throw new IllegalStateException("Job " + jobName + " 的处理容器执行失败");
+            }
+            TimeUnit.MILLISECONDS.sleep(pollMs);
+        }
+        throw new IllegalStateException("等待 Job " + jobName + " 完成超时（" + timeoutMinutes + " 分钟）");
+    }
+
+    private boolean hasJobCondition(Job job, String type) {
+        if (job == null || job.getStatus() == null || job.getStatus().getConditions() == null) {
+            return false;
+        }
+        for (JobCondition condition : job.getStatus().getConditions()) {
+            if (type.equals(condition.getType()) && "True".equalsIgnoreCase(condition.getStatus())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private ContainerStateTerminated findTerminatedInitContainer(Pod pod, String initContainerName) {
+        if (pod == null || pod.getStatus() == null || pod.getStatus().getInitContainerStatuses() == null) {
+            return null;
+        }
+        for (ContainerStatus status : pod.getStatus().getInitContainerStatuses()) {
+            if (initContainerName.equals(status.getName()) && status.getState() != null) {
+                return status.getState().getTerminated();
+            }
+        }
+        return null;
+    }
+
+    private Long extractInitContainerDuration(KubernetesClient client,
+                                              Pod pod,
+                                              String initContainerName,
+                                              ContainerStateTerminated terminatedState) {
+        String podName = pod.getMetadata().getName();
+        try {
+            String logs = client.pods().inNamespace("default").withName(podName)
+                    .inContainer(initContainerName).getLog();
+            if (logs != null) {
+                for (String line : logs.split("\n")) {
+                    String trimmed = line.trim();
+                    if (trimmed.startsWith("TRANSFER_MS=")) {
+                        long duration = Long.parseLong(trimmed.substring("TRANSFER_MS=".length()).trim());
+                        log.info("精确测量到 Init Container '{}' 的执行时间为: {} ms", initContainerName, duration);
+                        return duration;
+                    }
+                }
+            }
+        } catch (Exception logEx) {
+            log.warn("读取 Init Container '{}' 日志失败，回退到 K8s 时间戳: {}",
+                    initContainerName, logEx.getMessage());
+        }
+
+        if (terminatedState.getFinishedAt() != null && terminatedState.getStartedAt() != null) {
+            Instant startTime = Instant.parse(terminatedState.getStartedAt());
+            Instant finishTime = Instant.parse(terminatedState.getFinishedAt());
+            long duration = Duration.between(startTime, finishTime).toMillis();
+            log.info("回退测量到 Init Container '{}' 的执行时间为: {} ms (K8s 时间戳)",
+                    initContainerName, duration);
+            return duration;
+        }
+        return null;
     }
 
     /**
@@ -432,7 +478,8 @@ public class K8sTaskOrchestratorService {
 
     // ... updateFinalTaskStatus 和 updateTaskStatusToFailed 方法无需修改 ...
     private void updateFinalTaskStatus(Integer taskId, double totalT1, double totalT2,
-                                       List<String> scheduleT1List, List<String> scheduleT2List) {
+                                       List<String> scheduleT1List, List<String> scheduleT2List,
+                                       int successCount, int expectedCount) {
         TaskManagement finalTask = taskManagementMapper.getTaskByTaskId(taskId);
         if (finalTask != null) {
             double rating = totalT1 > 0 ? (totalT2 / totalT1) : 0;
@@ -443,7 +490,13 @@ public class K8sTaskOrchestratorService {
             finalTask.setT2(totalT2);
             finalTask.setRating(rating);
             finalTask.setSchedule(finalSchedule);
-            finalTask.setStatus("已完成");
+            if (successCount == 0) {
+                finalTask.setStatus("执行失败");
+            } else if (successCount < expectedCount) {
+                finalTask.setStatus("部分完成");
+            } else {
+                finalTask.setStatus("已完成");
+            }
             taskManagementMapper.updateTask(finalTask);
 
             log.info("==================== 任务 {} 完成 ====================", taskId);

@@ -11,12 +11,14 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Disabled;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import javax.swing.text.html.parser.Entity;
 
 @SpringBootTest
 @Slf4j
+@Disabled("历史接口联调测试：依赖本机 8080 上已删除的旧接口，不属于自动化测试")
 public class HttpClientTest {
 
     /**

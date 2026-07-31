@@ -26,9 +26,14 @@ public interface DataManagementMapper {
     @Select("SELECT * FROM node_management WHERE type = 'storage' ORDER BY node_id DESC LIMIT 1")
     NodeManagement getMaxNodeIdStorageNode();
 
-    void updateDataServer(DataManagement dataManagement);
+    int updateDataServer(DataManagement dataManagement);
 
     void updateDataHeat(@Param("dataName") String dataName, @Param("newHeat") double newHeat);
+
+    int updateAllDataHeat(@Param("alpha") double alpha,
+                          @Param("countWeight") double countWeight,
+                          @Param("lambda") double lambda,
+                          @Param("threshold") double threshold);
 
     void save(DataManagement dataManagement); // 这个 save 方法在 XML 中实现，通常用于更新或插入
 

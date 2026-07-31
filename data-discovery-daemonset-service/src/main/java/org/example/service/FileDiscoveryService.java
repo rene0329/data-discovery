@@ -230,8 +230,8 @@ public class FileDiscoveryService {
         Path dataPath = Paths.get(DATA_DIRECTORY);
 
         if (!Files.exists(dataPath) || !Files.isDirectory(dataPath)) {
-            log.warn("数据目录不存在或不是目录: {}", DATA_DIRECTORY);
-            return fileList;
+            // 不能把“目录不可用”解释为“目录为空”，否则同步逻辑会删除该节点的全部元数据。
+            throw new IllegalStateException("数据目录不存在或不是目录: " + DATA_DIRECTORY);
         }
 
         try (Stream<Path> pathStream = Files.walk(dataPath)) {
@@ -345,7 +345,7 @@ public class FileDiscoveryService {
             } else {
                 // 全局查重：若同名文件已被其他节点注册（例如备份副本），跳过 INSERT 避免重复行
                 DataManagement globalExisting = dataManagementMapper.findDataByName(stripExtension(fileData.getName()));
-                if (globalExisting != null && !globalExisting.getDataNodeId().equals(nodeId)) {
+                if (globalExisting != null && !Objects.equals(globalExisting.getDataNodeId(), nodeId)) {
                     log.debug("跳过文件 '{}' 的 INSERT：该文件已归属节点 {} (data_node_id={})",
                             fileData.getName(), globalExisting.getDataServer(), globalExisting.getDataNodeId());
                     continue;
@@ -404,7 +404,9 @@ public class FileDiscoveryService {
      * 检查是否需要更新
      */
     private boolean needsUpdate(DataManagement existing, FileData fileData) {
-        return existing.getDataSize() != fileData.getSizeBytes() ||
+        return existing.getDataSize() == null ||
+                existing.getDataSize() != fileData.getSizeBytes() ||
+                existing.getLastModifiedTime() == null ||
                 existing.getLastModifiedTime().getTime() != fileData.getLastModified() ||
                 !Objects.equals(existing.getMd5Hash(), fileData.getMd5Hash());
     }

@@ -9,7 +9,6 @@ import org.example.mapper.TaskManagementMapper;
 import org.example.service.K8sTaskOrchestratorService; // 引入新的后台服务
 import org.example.vo.NodeManagementVO;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -23,14 +22,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriUtils;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.stream.Collectors;
 import org.example.vo.ApiResponse;
 import org.example.vo.PageResult;
 
@@ -61,14 +58,15 @@ public class CommonController {
             NodeManagementMapper nodeManagementMapper,
             TaskManagementMapper taskManagementMapper,
             EdgeManagementMapper edgeManagementMapper,
-            K8sTaskOrchestratorService k8sTaskOrchestratorService
+            K8sTaskOrchestratorService k8sTaskOrchestratorService,
+            RestTemplate restTemplate
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
         this.taskManagementMapper = taskManagementMapper;
         this.edgeManagementMapper = edgeManagementMapper;
         this.k8sTaskOrchestratorService = k8sTaskOrchestratorService;
-        this.restTemplate = new RestTemplate();
+        this.restTemplate = restTemplate;
     }
 
     /**
@@ -87,18 +85,20 @@ public class CommonController {
      * 物理迁移文件：从 sourceNode 下载，上传到 targetNode。
      * 文件名为 dataName（相对路径，直接使用 data_management.data_name）。
      *
-     * @param deleteSource 若为 true，上传成功后删除源节点文件（主迁移/move）；
-     *                     若为 false，仅复制不删除（备份/copy）。
-     * @return true=迁移成功；false=失败（调用方应保留旧 data_server）
+     * 目标节点直接从源节点流式拉取，控制面只传递编排信息。
+     * 此方法只负责复制和校验大小，不删除源文件；源文件必须在数据库切换成功后再删除。
      */
-    private boolean migrateFile(String dataName, String filePath, String sourceNode, String targetNode, boolean deleteSource) {
+    private boolean copyFile(String dataName,
+                             String filePath,
+                             Long expectedSize,
+                             String sourceNode,
+                             String targetNode) {
         if (filePath == null || filePath.isEmpty()) {
             log.warn("物理迁移: 数据项 '{}' filePath 为空，无法定位文件，跳过迁移", dataName);
             return false;
         }
         // filePath 为绝对路径（如 /dataset/yelp/npz/yelp.npz），去掉首 / 得到完整相对路径
         String relativePath = filePath.startsWith("/") ? filePath.substring(1) : filePath;
-        String fileName = Paths.get(relativePath).getFileName().toString();
         // upload 端点的 path 参数是相对于 dataDirectory 的路径（如 yelp/npz/yelp.npz）
         // 若直接传 relativePath（含 dataset/ 前缀) 会被 upload 端点再次 resolve 到 dataDirectory 下
         // 导致 /dataset/dataset/yelp/npz/yelp.npz（双重前缀），因此需剥离根目录名
@@ -106,40 +106,53 @@ public class CommonController {
         String uploadRelPath = relativePath.startsWith(dataDirName + "/")
                 ? relativePath.substring(dataDirName.length() + 1)
                 : relativePath;  // 无前缀时兜底，保持原路径
-        String downloadUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/download/" + relativePath;
-        String uploadUrl   = discoveryBaseUrl(targetNode) + "/data-discovery/upload";
+        String encodedRelativePath = encodeRelativePath(relativePath);
+        String downloadUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/download/" + encodedRelativePath;
+        String copyUrl = discoveryBaseUrl(targetNode) + "/data-discovery/copy-from";
         try {
-            // 1. 下载文件到内存（适合中小文件；大文件可考虑流式改造）
-            byte[] fileBytes = restTemplate.getForObject(downloadUrl, byte[].class);
-            if (fileBytes == null || fileBytes.length == 0) {
-                log.warn("物理迁移: 从 {} 下载 {} 得到空响应，跳过迁移", sourceNode, relativePath);
+            Map<String, Object> request = new HashMap<>();
+            request.put("sourceUrl", downloadUrl);
+            request.put("path", uploadRelPath);
+            if (expectedSize != null) {
+                request.put("expectedSize", expectedSize);
+            }
+            ResponseEntity<Map> response = restTemplate.postForEntity(copyUrl, request, Map.class);
+            Map body = response.getBody();
+            if (!response.getStatusCode().is2xxSuccessful()
+                    || body == null
+                    || !"ok".equals(String.valueOf(body.get("status")))) {
+                log.warn("物理复制失败: {} {} -> {}，响应={}", relativePath, sourceNode, targetNode, body);
                 return false;
             }
-            // 2. 上传到目标节点，path 参数使用相同相对路径，保持目录结构一致
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-            MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-            body.add("file", new ByteArrayResource(fileBytes) {
-                @Override public String getFilename() { return fileName; }
-            });
-            body.add("path", uploadRelPath);  // 相对于 dataDirectory，不含根目录名
-            restTemplate.postForObject(uploadUrl, new HttpEntity<>(body, headers), Map.class);
-            log.info("物理迁移成功: {} {} -> {} ({} bytes)", relativePath, sourceNode, targetNode, fileBytes.length);
-            // 3. 删除源节点文件（move 语义）
-            if (deleteSource) {
-                String deleteUrl = discoveryBaseUrl(sourceNode) + "/data-discovery/delete/" + relativePath;
-                try {
-                    restTemplate.delete(deleteUrl);
-                    log.info("已删除源节点 {} 上的文件: {}", sourceNode, relativePath);
-                } catch (Exception ex) {
-                    log.warn("删除源文件失败（非致命）: {} @ {}: {}", relativePath, sourceNode, ex.getMessage());
-                }
-            }
+            log.info("物理复制成功并完成大小校验: {} {} -> {} ({} bytes)",
+                    relativePath, sourceNode, targetNode, body.get("size"));
             return true;
         } catch (Exception e) {
-            log.error("物理迁移失败: {} {} -> {}: {}", relativePath, sourceNode, targetNode, e.getMessage());
+            log.error("物理复制失败: {} {} -> {}: {}", relativePath, sourceNode, targetNode, e.getMessage());
             return false;
         }
+    }
+
+    private boolean deleteFileOnNode(String filePath, String nodeName) {
+        if (filePath == null || filePath.isEmpty() || nodeName == null || nodeName.isEmpty()) {
+            return false;
+        }
+        String relativePath = filePath.startsWith("/") ? filePath.substring(1) : filePath;
+        String deleteUrl = discoveryBaseUrl(nodeName) + "/data-discovery/delete/" + encodeRelativePath(relativePath);
+        try {
+            restTemplate.delete(deleteUrl);
+            log.info("已删除节点 {} 上的文件: {}", nodeName, relativePath);
+            return true;
+        } catch (Exception ex) {
+            log.warn("删除文件失败（保留为冗余副本）: {} @ {}: {}", relativePath, nodeName, ex.getMessage());
+            return false;
+        }
+    }
+
+    private String encodeRelativePath(String relativePath) {
+        return Arrays.stream(relativePath.replace('\\', '/').split("/"))
+                .map(segment -> UriUtils.encodePathSegment(segment, StandardCharsets.UTF_8))
+                .collect(Collectors.joining("/"));
     }
 
 
@@ -226,62 +239,13 @@ public class CommonController {
     }
 
     /**
-     * 管理员的数据管理的存储操作
-     * @param dataManagement
-     * @return
+     * 兼容旧入口。旧实现只改数据库、不移动物理文件，容易制造错误位置，
+     * 现在统一委托给安全的热敏迁移流程。
      */
     @PutMapping("/save")
-    public ResponseEntity<ApiResponse<DataManagement>> save(@RequestBody DataManagement dataManagement) {
-
-        log.info("开始重新分配数据存储位置...");
-
-        // 获取中心性的 storage 节点列表
-        List<NodeManagement> centralityNodes = dataManagementMapper.getCentralityNodes();
-
-        // 获取所有待存储的数据，按热度从高到低排序
-        List<DataManagement> hotDataList = dataManagementMapper.getAllDataByHeat();
-
-        // 清空所有数据的存储位置
-        nodeManagementMapper.clearAllDataServers();
-
-        int remainingDataCount = hotDataList.size();
-
-        for (NodeManagement node : centralityNodes) {
-            // 动态计算当前节点的存储数据数量（清空后此值为0）
-            int currentStorageCount = nodeManagementMapper.getDataCountByNode(node.getNodeName());
-
-            int availableCapacity = node.getNumDataset() - currentStorageCount;
-
-            // 如果当前节点的可用容量足够存储剩余数据
-            if (availableCapacity >= remainingDataCount) {
-                for (DataManagement data : hotDataList) {
-                    data.setDataServer(node.getNodeName());
-                    dataManagementMapper.updateDataServer(data);
-                }
-                break;
-            } else {
-                for (int i = 0; i < availableCapacity; i++) {
-                    DataManagement data = hotDataList.remove(0);
-                    data.setDataServer(node.getNodeName());
-                    dataManagementMapper.updateDataServer(data);
-                }
-                remainingDataCount -= availableCapacity;
-            }
-        }
-
-        // 不论剩余数据数量如何，始终将热度最高的两个数据备份到中心性最低的两个节点
-        for (int i = 0; i < 2 && !hotDataList.isEmpty(); i++) {
-            DataManagement data = hotDataList.remove(0);
-            NodeManagement lastNode = centralityNodes.get(centralityNodes.size() - 1 - i);
-            data.setBackupServer(lastNode.getNodeName());
-            dataManagementMapper.updateBackupServer(data);
-        }
-
-
-        // Re-fetch the saved data and return it
-        DataManagement savedData = dataManagementMapper.getData(dataManagement);
-        return ResponseEntity.ok(ApiResponse.ok(savedData));
-
+    public ResponseEntity<ApiResponse<List<DataManagement>>> save(@RequestBody(required = false) DataManagement ignored) {
+        log.warn("调用了旧接口 PUT /common/save，已转交给 /common/saveAll 的安全迁移流程");
+        return saveAll("heat");
     }
 
 
@@ -303,8 +267,7 @@ public class CommonController {
      *   POST {newNode}/data-discovery/upload               上传到目标节点
      * 物理迁移成功后才更新 DB；失败则保留旧 data_server，本轮跳过。
      */
-    @Transactional
-    @GetMapping("/saveAll")
+    @PostMapping("/saveAll")
     public ResponseEntity<ApiResponse<List<DataManagement>>> saveAll(
             @RequestParam(defaultValue = "heat") String mode) {
         int taskCount = taskManagementMapper.countTasks();
@@ -365,9 +328,11 @@ public class CommonController {
         // ── 4. 动态状态初始化
         Map<Integer, Integer> assignedCount = new HashMap<>();
         Map<Integer, Double>  heatAccum     = new HashMap<>();
+        Map<String, NodeManagement> storageNodeByName = new HashMap<>();
         for (NodeManagement sn : storageNodes) {
             assignedCount.put(sn.getNodeId(), 0);
             heatAccum.put(sn.getNodeId(), 0.0);
+            storageNodeByName.put(sn.getNodeName(), sn);
         }
         double totalHeat = 0.0;
         for (DataManagement d : dataList) {
@@ -410,22 +375,54 @@ public class CommonController {
             boolean needsMove = oldServer != null && !oldServer.isEmpty() && !oldServer.equals(newServer);
 
             if (needsMove) {
-                boolean ok = migrateFile(data.getDataName(), data.getFilePath(), oldServer, newServer, true);
+                boolean ok = copyFile(data.getDataName(), data.getFilePath(), data.getDataSize(), oldServer, newServer);
                 if (!ok) {
                     log.warn("物理迁移失败，'{}' 保留在原节点 {}，跳过 DB 更新", data.getDataName(), oldServer);
                     skippedCount++;
-                    // 评分状态仍按新布局计入（保持评分一致性）
-                    assignedCount.merge(best.getNodeId(), 1, Integer::sum);
-                    heatAccum.merge(best.getNodeId(), heat, Double::sum);
+                    // 迁移失败后必须按真实旧布局计数，不能把容量虚记到新节点。
+                    NodeManagement oldNode = storageNodeByName.get(oldServer);
+                    if (oldNode != null) {
+                        assignedCount.merge(oldNode.getNodeId(), 1, Integer::sum);
+                        heatAccum.merge(oldNode.getNodeId(), heat, Double::sum);
+                    }
                     continue;
                 }
-                migratedCount++;
             }
 
-            // 文件已就位（原地 or 迁移成功），更新 DB
+            // 文件已就位（原地 or 复制成功），先原子切换 DB，再删除旧文件。
+            String previousServer = data.getDataServer();
+            Integer previousNodeId = data.getDataNodeId();
             data.setDataServer(newServer);
             data.setDataNodeId(best.getNodeId());
-            dataManagementMapper.updateDataServer(data);
+            int updated;
+            try {
+                updated = dataManagementMapper.updateDataServer(data);
+            } catch (Exception dbError) {
+                updated = 0;
+                log.error("切换数据位置失败，'{}' 保留旧位置 {}: {}",
+                        data.getDataName(), previousServer, dbError.getMessage());
+            }
+            if (updated != 1) {
+                data.setDataServer(previousServer);
+                data.setDataNodeId(previousNodeId);
+                skippedCount++;
+                NodeManagement oldNode = storageNodeByName.get(previousServer);
+                if (oldNode != null) {
+                    assignedCount.merge(oldNode.getNodeId(), 1, Integer::sum);
+                    heatAccum.merge(oldNode.getNodeId(), heat, Double::sum);
+                }
+                // DB 未切换成功，删除刚复制到目标节点的暂存副本，避免产生无主文件。
+                if (needsMove) {
+                    deleteFileOnNode(data.getFilePath(), newServer);
+                }
+                continue;
+            }
+
+            if (needsMove) {
+                migratedCount++;
+                // DB 已指向新节点后再删源；删除失败只会留下安全的冗余文件。
+                deleteFileOnNode(data.getFilePath(), oldServer);
+            }
             assignedCount.merge(best.getNodeId(), 1, Integer::sum);
             heatAccum.merge(best.getNodeId(), heat, Double::sum);
             log.debug("分配 '{}' → {} (moved={})", data.getDataName(), newServer, needsMove);
@@ -443,7 +440,7 @@ public class CommonController {
                 if (sn.getNodeName().equals(primaryNode)) continue;
                 int cap  = sn.getNumDataset() != null ? sn.getNumDataset() : 0;
                 int used = assignedCount.get(sn.getNodeId());
-                if (used > cap) continue; // 允许轻微超配 1 个以保证冗余
+                if (used >= cap) continue;
 
                 double freeCapRatio  = cap > 0 ? (double)(cap - used) / cap : 0.0;
                 double heatLoadRatio = totalHeat > 0 ? heatAccum.get(sn.getNodeId()) / totalHeat : 0.0;
@@ -456,6 +453,10 @@ public class CommonController {
 
             if (backupBest == null) {
                 log.warn("数据项 '{}' 找不到可用备份节点，跳过", data.getDataName());
+                if (data.getBackupServer() != null) {
+                    data.setBackupServer(null);
+                    dataManagementMapper.updateBackupServer(data);
+                }
                 continue;
             }
 
@@ -467,6 +468,15 @@ public class CommonController {
             dataManagementMapper.updateBackupServer(data);
             log.info("备份（仅落库）'{}' → {}{}", data.getDataName(), newBackup,
                     newBackup.equals(oldBackup) ? "（未变更）" : "（已变更）");
+        }
+
+        // 清理上一轮遗留的备份位置：只有当前热度最高的 backupCount 条保留备份标记。
+        for (int i = backupCount; i < dataList.size(); i++) {
+            DataManagement data = dataList.get(i);
+            if (data.getBackupServer() != null) {
+                data.setBackupServer(null);
+                dataManagementMapper.updateBackupServer(data);
+            }
         }
 
         log.info("分配完成：共 {} 条数据，物理迁移 {} 个，失败保留 {} 个，存储节点 {} 个",

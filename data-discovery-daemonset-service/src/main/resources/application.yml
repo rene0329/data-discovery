@@ -45,13 +45,16 @@ node:
 
 # 文件发现配置
 file:
-        discovery:
-                data-directory: C:/test-data
-                enable-md5: false
-                md5-max-size-mb: 100
-                scan:
-                        interval:
-                                ms: 60000  # 1分钟扫描一次
+  discovery:
+    data-directory: C:/test-data
+    enable-md5: false
+    md5-max-size-mb: 100
+    scan:
+      interval:
+        ms: 60000  # 1分钟扫描一次
+  transfer:
+    connect-timeout-ms: 5000
+    read-timeout-ms: 600000
 
 logging:
         level:

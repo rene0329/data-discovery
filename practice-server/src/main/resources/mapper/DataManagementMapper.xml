@@ -76,6 +76,22 @@
         WHERE data_name = #{dataName}
     </update>
 
+    <!--
+      在一条 UPDATE 中消费 data_count 并清零，避免“先 SELECT、后 UPDATE”
+      把并发到达的访问计数覆盖掉。等待行锁期间到达的增量要么被本轮消费，
+      要么在本轮提交后保留到下一轮。
+    -->
+    <update id="updateAllDataHeat" parameterType="map">
+        UPDATE data_management
+        SET data_heat = GREATEST(
+                #{threshold},
+                #{alpha} * COALESCE(data_heat, 0)
+                    + #{countWeight} * COALESCE(data_count, 0)
+                    - #{lambda}
+            ),
+            data_count = 0
+    </update>
+
     <update id="updateBackupServer">
         UPDATE data_management
         SET backup_server = #{backupServer}
@@ -107,7 +123,7 @@
     <!-- 更新数据块的 heat 值 -->
     <update id="incrementDataCount" parameterType="String">
         UPDATE data_management
-        SET data_count = data_count + 1
+        SET data_count = COALESCE(data_count, 0) + 1
         WHERE data_name = #{dataName}
     </update>
 

@@ -71,12 +71,18 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.HandlerMapping;
 
 import javax.servlet.http.HttpServletRequest;
+import java.io.InputStream;
 import java.io.IOException;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URI;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -84,6 +90,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * REST 控制器，用于暴露文件发现 API
@@ -103,6 +110,12 @@ public class DataDiscoveryController {
 
     @Value("${file.discovery.data-directory:/data}")
     private String dataDirectory;
+
+    @Value("${file.transfer.connect-timeout-ms:5000}")
+    private int transferConnectTimeoutMs;
+
+    @Value("${file.transfer.read-timeout-ms:600000}")
+    private int transferReadTimeoutMs;
 
     /**
      * 获取文件列表（HTTP API，向后兼容）
@@ -221,6 +234,113 @@ public class DataDiscoveryController {
             log.error("文件上传失败: {}", relativePath, e);
             Map<String, Object> err = new HashMap<>(); err.put("error", e.getMessage());
             return ResponseEntity.internalServerError().body(err);
+        }
+    }
+
+    /**
+     * 目标节点直接从源节点流式拉取文件。控制面只发送编排请求，
+     * 不再把整个数据文件装进 practice-server 的堆内存。
+     */
+    @PostMapping(value = "/copy-from", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Map<String, Object>> copyFrom(@RequestBody Map<String, Object> request) {
+        String sourceUrl = request.get("sourceUrl") == null ? null : String.valueOf(request.get("sourceUrl"));
+        String relativePath = request.get("path") == null ? null : String.valueOf(request.get("path"));
+        Long expectedSize = parseLong(request.get("expectedSize"));
+
+        Map<String, Object> result = new HashMap<>();
+        if (sourceUrl == null || sourceUrl.isEmpty() || relativePath == null || relativePath.isEmpty()) {
+            result.put("error", "sourceUrl and path are required");
+            return ResponseEntity.badRequest().body(result);
+        }
+
+        Path root = Paths.get(dataDirectory).toAbsolutePath().normalize();
+        Path target = root.resolve(relativePath).normalize();
+        if (!target.startsWith(root)) {
+            result.put("error", "path traversal rejected");
+            return ResponseEntity.badRequest().body(result);
+        }
+
+        URI sourceUri;
+        try {
+            sourceUri = URI.create(sourceUrl);
+            if (!"http".equalsIgnoreCase(sourceUri.getScheme())) {
+                throw new IllegalArgumentException("only http source URLs are allowed");
+            }
+        } catch (Exception e) {
+            result.put("error", "invalid sourceUrl: " + e.getMessage());
+            return ResponseEntity.badRequest().body(result);
+        }
+
+        HttpURLConnection connection = null;
+        Path tempFile = null;
+        try {
+            Files.createDirectories(target.getParent());
+            tempFile = target.resolveSibling(target.getFileName() + ".part-" + UUID.randomUUID());
+
+            connection = (HttpURLConnection) sourceUri.toURL().openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(Math.max(1000, transferConnectTimeoutMs));
+            connection.setReadTimeout(Math.max(1000, transferReadTimeoutMs));
+            connection.setInstanceFollowRedirects(false);
+
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 300) {
+                throw new IOException("source returned HTTP " + status);
+            }
+
+            long bytesCopied;
+            try (InputStream input = connection.getInputStream();
+                 OutputStream output = Files.newOutputStream(tempFile)) {
+                byte[] buffer = new byte[1024 * 1024];
+                long total = 0;
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                    total += read;
+                }
+                bytesCopied = total;
+            }
+
+            if (expectedSize != null && expectedSize >= 0 && bytesCopied != expectedSize) {
+                throw new IOException("size mismatch: expected=" + expectedSize + ", actual=" + bytesCopied);
+            }
+
+            try {
+                Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+            tempFile = null;
+
+            result.put("status", "ok");
+            result.put("path", relativePath);
+            result.put("size", bytesCopied);
+            log.info("节点间流式复制成功: {} -> {} ({} bytes)", sourceUrl, target, bytesCopied);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("节点间流式复制失败: {} -> {}: {}", sourceUrl, relativePath, e.getMessage());
+            result.put("error", e.getMessage());
+            return ResponseEntity.status(502).body(result);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+            if (tempFile != null) {
+                try {
+                    Files.deleteIfExists(tempFile);
+                } catch (IOException cleanupError) {
+                    log.warn("清理临时文件失败 {}: {}", tempFile, cleanupError.getMessage());
+                }
+            }
+        }
+    }
+
+    private Long parseLong(Object value) {
+        if (value == null) return null;
+        try {
+            return Long.valueOf(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

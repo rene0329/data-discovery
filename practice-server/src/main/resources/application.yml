@@ -69,11 +69,19 @@ dispatch:
       init: curlimages/curl:latest # init container 镜像，支持 --limit-rate 限速（busybox wget 不支持）
       main: python:3.9-slim # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.main}")
     curl:
+      connect-timeout-seconds: 5
+      max-time-seconds: 600
+      retry-count: 3
+      retry-delay-seconds: 2
+      speed-limit-bytes: 1024
+      speed-time-seconds: 30
       limit-rate:
         default: 2048k          # 全局兜底限速（按比例下调后约 2m）
         n141-to-40: 3277k       # master-141 → master-40（按比例下调后约 3.2m）
         n141-to-215: 2048k      # master-141 → master-215（按比例下调后约 2m）
         n40-to-215: 4096k       # master-40  → master-215（目标值 4m）
+    active-deadline-seconds: 1800
+    ttl-seconds-after-finished: 300
   central-node:
     name: "master-215" # 中心节点，需在 node_management 表中存在 # 对应 K8sTaskOrchestratorService 中的 @Value("${dispatch.central-node.name}")
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
@@ -121,6 +129,12 @@ app:
     job-wait-timeout-minutes: 30
     job-max-retries: 1
     job-retry-backoff-seconds: 5
+    wait-for-processing-completion: false
+    status-poll-interval-ms: 1000
+
+  storage-transfer:
+    connect-timeout-ms: 5000
+    read-timeout-ms: 600000
 
   node-sync:
     enabled: true   # 仅 practice-server 启用，heat-update-cronjob 不设此属性故默认 false

@@ -17,18 +17,22 @@ import org.example.mapper.TrainingProfileMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.UriUtils;
 import org.yaml.snakeyaml.Yaml;
 
 import javax.annotation.PostConstruct;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Component
 @Slf4j
@@ -99,6 +103,30 @@ public class K8sJobFactory {
 
     @Value("${dispatch.scheduler.threshold.memHeadroom:0.1}")
     private double memHeadroom;
+
+    @Value("${dispatch.job.curl.connect-timeout-seconds:5}")
+    private int curlConnectTimeoutSeconds;
+
+    @Value("${dispatch.job.curl.max-time-seconds:600}")
+    private int curlMaxTimeSeconds;
+
+    @Value("${dispatch.job.curl.retry-count:3}")
+    private int curlRetryCount;
+
+    @Value("${dispatch.job.curl.retry-delay-seconds:2}")
+    private int curlRetryDelaySeconds;
+
+    @Value("${dispatch.job.curl.speed-limit-bytes:1024}")
+    private int curlSpeedLimitBytes;
+
+    @Value("${dispatch.job.curl.speed-time-seconds:30}")
+    private int curlSpeedTimeSeconds;
+
+    @Value("${dispatch.job.active-deadline-seconds:1800}")
+    private long jobActiveDeadlineSeconds;
+
+    @Value("${dispatch.job.ttl-seconds-after-finished:300}")
+    private int jobTtlSecondsAfterFinished;
 
     private int nEpochs;
 
@@ -299,7 +327,11 @@ public class K8sJobFactory {
         String downloadRelPath = (dataFilePath != null && !dataFilePath.isEmpty())
                 ? dataFilePath.replaceAll("^/+", "")
                 : dataFileName;
-        String dataSourceUrl = String.format("http://%s:%d/data-discovery/download/%s", sourceIp, discoveryPort, downloadRelPath);
+        String encodedDownloadRelPath = Arrays.stream(downloadRelPath.split("/"))
+                .map(segment -> UriUtils.encodePathSegment(segment, StandardCharsets.UTF_8))
+                .collect(Collectors.joining("/"));
+        String dataSourceUrl = String.format("http://%s:%d/data-discovery/download/%s",
+                sourceIp, discoveryPort, encodedDownloadRelPath);
         log.info("执行阶段: 将在集群 '{}' 中创建Job，数据源URL为: {}", bestNode.getClusterId(), dataSourceUrl);
 
         Job jobToCreate = new JobBuilder()
@@ -357,6 +389,8 @@ public class K8sJobFactory {
                 .endSpec()
                 .endTemplate()
                 .withBackoffLimit(2)
+                .withActiveDeadlineSeconds(Math.max(60L, jobActiveDeadlineSeconds))
+                .withTtlSecondsAfterFinished(Math.max(60, jobTtlSecondsAfterFinished))
                 .endSpec()
                 .build();
 
@@ -468,8 +502,16 @@ public class K8sJobFactory {
      */
     private String buildWgetCommand(String destPath, String srcUrl, String limitRate) {
         String limitRateArg = isValidRate(limitRate) ? " --limit-rate " + limitRate : "";
+        String reliabilityArgs = " --connect-timeout " + Math.max(1, curlConnectTimeoutSeconds)
+                + " --max-time " + Math.max(1, curlMaxTimeSeconds)
+                + " --retry " + Math.max(0, curlRetryCount)
+                + " --retry-delay " + Math.max(0, curlRetryDelaySeconds)
+                + " --retry-all-errors"
+                + " --speed-limit " + Math.max(1, curlSpeedLimitBytes)
+                + " --speed-time " + Math.max(1, curlSpeedTimeSeconds);
         return "mkdir -p \"$(dirname '" + destPath + "')\" && "
-                + "_t=$(curl -fsSL" + limitRateArg + " -o '" + destPath + "' --write-out '%{time_total}' '" + srcUrl + "') && "
+                + "_t=$(curl -fsSL" + reliabilityArgs + limitRateArg
+                + " -o '" + destPath + "' --write-out '%{time_total}' '" + srcUrl + "') && "
                 + "echo \"TRANSFER_MS=$(echo $_t | awk '{printf \"%d\", $1*1000}')\"";
     }
 
