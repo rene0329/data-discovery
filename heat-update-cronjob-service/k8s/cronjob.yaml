@@ -30,12 +30,18 @@ spec:
             app: heat-update
         spec:
           restartPolicy: OnFailure
+          nodeSelector:
+            kubernetes.io/hostname: master-90
+          tolerations:
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
 
           containers:
             - name: heat-update
               # GitHub Container Registry 镜像地址（由 publish-heat-update.yml workflow 构建推送）
               image: ghcr.io/rene0329/data-discovery-heat-update-cronjob:latest
-              imagePullPolicy: Always
+              imagePullPolicy: IfNotPresent
               resources:
                 requests:
                   memory: "256Mi"

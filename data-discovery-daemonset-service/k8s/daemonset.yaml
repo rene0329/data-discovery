@@ -50,7 +50,7 @@ spec:
         - name: data-discovery
           # ⚠️ 替换为实际构建并推送的镜像地址
           image: ghcr.io/rene0329/data-discovery:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http

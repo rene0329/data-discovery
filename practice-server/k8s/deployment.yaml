@@ -15,10 +15,17 @@ spec:
       labels:
         app: practice-server
     spec:
+      serviceAccountName: practice-server-sa
+      nodeSelector:
+        kubernetes.io/hostname: master-90
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: practice-server
           image: ghcr.io/rene0329/data-discovery-practice-server:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http
