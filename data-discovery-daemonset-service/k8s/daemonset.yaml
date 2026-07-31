@@ -75,13 +75,16 @@ spec:
             - name: FILE_DISCOVERY_SCAN_INTERVAL_MS
               value: "60000"
 
-            # MySQL 连接（直接填写，无需 Secret）
+            # MySQL 连接
             - name: SPRING_DATASOURCE_DRUID_URL
-              value: "jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
+              value: "jdbc:mysql://mysql.topic4-1.svc.cluster.local:3306/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
             - name: SPRING_DATASOURCE_DRUID_USERNAME
               value: "root"
             - name: SPRING_DATASOURCE_DRUID_PASSWORD
-              value: "ibdiibdi"
+              valueFrom:
+                secretKeyRef:
+                  name: project4-mysql-secret
+                  key: root-password
 
           resources:
             requests:

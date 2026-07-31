@@ -48,13 +48,11 @@ spec:
                 - name: JAVA_TOOL_OPTIONS
                   value: "-Xms128m -Xmx384m"
                 - name: SPRING_DATASOURCE_URL
-                  value: "jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
+                  value: "jdbc:mysql://mysql.topic4-1.svc.cluster.local:3306/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
                 - name: SPRING_DATASOURCE_USERNAME
                   value: "root"
                 - name: SPRING_DATASOURCE_PASSWORD
-                  # 建议改为 secretKeyRef，示例：
-                  # valueFrom:
-                  #   secretKeyRef:
-                  #     name: db-secret
-                  #     key: password
-                  value: "ibdiibdi"
+                  valueFrom:
+                    secretKeyRef:
+                      name: project4-mysql-secret
+                      key: root-password
