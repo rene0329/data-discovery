@@ -18,8 +18,7 @@ spec:
       labels:
         app: data-discovery
     spec:
-      # 不指定 serviceAccountName，使用命名空间内的 default SA
-      # default SA 没有 nodes/list 权限，但 KubernetesConfig 已做容错处理，不影响启动
+      serviceAccountName: data-discovery-sa
       tolerations:
         # 若需要在 master/control-plane 节点也运行，保留这两条；否则删除
         - key: node-role.kubernetes.io/master
