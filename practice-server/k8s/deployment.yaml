@@ -54,9 +54,10 @@ spec:
             - name: SPRING_REDIS_HOST
               value: "redis-service.default.svc.cluster.local"
             - name: SPRING_REDIS_PORT
-              value: "6379"
+              value: "26379"
             - name: SPRING_REDIS_DATABASE
-              value: "10"
+              # 新集群使用 Redis Cluster，只支持 database 0。
+              value: "0"
 
           resources:
             requests:

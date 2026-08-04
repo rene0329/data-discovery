@@ -44,7 +44,8 @@ spec:
           effect: NoSchedule
       containers:
         - name: mysql
-          image: mysql:8.0.42
+          # Docker Hub 在目标集群不可达；由 publish-mysql-mirror.yml 将同版本官方镜像原样同步到 GHCR。
+          image: ghcr.io/rene0329/data-discovery-mysql:8.0.42
           imagePullPolicy: IfNotPresent
           ports:
             - name: mysql

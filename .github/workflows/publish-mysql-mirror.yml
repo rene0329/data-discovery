@@ -1,0 +1,40 @@
+name: Mirror MySQL Image to GHCR
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'practice-server/k8s/mysql-image/**'
+      - '.github/workflows/publish-mysql-mirror.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-mysql
+
+jobs:
+  mirror-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize image name
+        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Mirror official MySQL 8.0.42 image
+        uses: docker/build-push-action@v6
+        with:
+          context: practice-server/k8s/mysql-image
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:8.0.42

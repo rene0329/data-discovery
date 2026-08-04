@@ -1,5 +1,5 @@
-# 目标集群为 Kubernetes 1.18，CronJob 在该版本使用 v1beta1。
-apiVersion: batch/v1beta1
+# 重装后的目标集群为 Kubernetes 1.25，CronJob 使用稳定版 batch/v1。
+apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: heat-update-cronjob
