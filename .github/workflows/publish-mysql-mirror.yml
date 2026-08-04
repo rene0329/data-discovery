@@ -10,7 +10,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-mysql
+  # Reuse the existing public package so cluster nodes can pull anonymously.
+  IMAGE_NAME: ${{ github.repository }}-practice-server
 
 jobs:
   mirror-and-push:
@@ -37,4 +38,4 @@ jobs:
         with:
           context: practice-server/k8s/mysql-image
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:8.0.42
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mysql-8.0.42
