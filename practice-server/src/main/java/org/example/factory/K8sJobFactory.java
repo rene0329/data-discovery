@@ -51,17 +51,17 @@ public class K8sJobFactory {
     private final int discoveryPort;
     private final String wgetLimitRate;
 
-    /** 路径级限速: master-141 -> master-40 */
-    @Value("${dispatch.job.curl.limit-rate.n141-to-40:}")
-    private String wgetLimitRate141To40;
+    /** 路径级限速: master-89 -> master-88（旧 master-141 -> master-40） */
+    @Value("${dispatch.job.curl.limit-rate.n89-to-88:}")
+    private String wgetLimitRate89To88;
 
-    /** 路径级限速: master-141 -> master-215 */
-    @Value("${dispatch.job.curl.limit-rate.n141-to-215:}")
-    private String wgetLimitRate141To215;
+    /** 路径级限速: master-89 -> master-90（旧 master-141 -> master-215） */
+    @Value("${dispatch.job.curl.limit-rate.n89-to-90:}")
+    private String wgetLimitRate89To90;
 
-    /** 路径级限速: master-40 -> master-215 */
-    @Value("${dispatch.job.curl.limit-rate.n40-to-215:}")
-    private String wgetLimitRate40To215;
+    /** 路径级限速: master-88 -> master-90（旧 master-40 -> master-215） */
+    @Value("${dispatch.job.curl.limit-rate.n88-to-90:}")
+    private String wgetLimitRate88To90;
 
     @Value("${dispatch.scheduler.weight.cpuFreePct:0.5}")
     private double weightCpuFreePct;
@@ -244,8 +244,8 @@ public class K8sJobFactory {
         if (clusterClients.isEmpty()) {
             log.error("K8sJobFactory 初始化失败：既无法使用 In-Cluster 认证，也无法加载外部 kubeconfig 文件。没有可用的 Kubernetes 客户端。");
         }
-        log.info("curl 限速配置: default='{}', n141-to-40='{}', n141-to-215='{}', n40-to-215='{}'",
-                wgetLimitRate, wgetLimitRate141To40, wgetLimitRate141To215, wgetLimitRate40To215);
+        log.info("curl 限速配置: default='{}', n89-to-88='{}', n89-to-90='{}', n88-to-90='{}'",
+                wgetLimitRate, wgetLimitRate89To88, wgetLimitRate89To90, wgetLimitRate88To90);
     }
 
     public JobCreationResult createDataProcessingJob(String jobName,
@@ -447,9 +447,9 @@ public class K8sJobFactory {
      */
     private String resolveLimitRate(String srcNode, String destNode) {
         if (srcNode != null && destNode != null) {
-            if (srcNode.contains("141") && destNode.contains("40") && isValidRate(wgetLimitRate141To40))   return wgetLimitRate141To40;
-            if (srcNode.contains("141") && destNode.contains("215") && isValidRate(wgetLimitRate141To215)) return wgetLimitRate141To215;
-            if (srcNode.contains("40")  && destNode.contains("215") && isValidRate(wgetLimitRate40To215))  return wgetLimitRate40To215;
+            if ("master-89".equalsIgnoreCase(srcNode) && "master-88".equalsIgnoreCase(destNode) && isValidRate(wgetLimitRate89To88)) return wgetLimitRate89To88;
+            if ("master-89".equalsIgnoreCase(srcNode) && "master-90".equalsIgnoreCase(destNode) && isValidRate(wgetLimitRate89To90)) return wgetLimitRate89To90;
+            if ("master-88".equalsIgnoreCase(srcNode) && "master-90".equalsIgnoreCase(destNode) && isValidRate(wgetLimitRate88To90)) return wgetLimitRate88To90;
         }
         return isValidRate(wgetLimitRate) ? wgetLimitRate : null;
     }

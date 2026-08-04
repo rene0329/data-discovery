@@ -77,15 +77,15 @@ dispatch:
       speed-time-seconds: 30
       limit-rate:
         default: 2048k          # 全局兜底限速（按比例下调后约 2m）
-        n141-to-40: 3277k       # master-141 → master-40（按比例下调后约 3.2m）
-        n141-to-215: 2048k      # master-141 → master-215（按比例下调后约 2m）
-        n40-to-215: 4096k       # master-40  → master-215（目标值 4m）
+        n89-to-88: 3277k        # master-89 → master-88（旧 master-141 → master-40）
+        n89-to-90: 2048k        # master-89 → master-90（旧 master-141 → master-215）
+        n88-to-90: 4096k        # master-88 → master-90（旧 master-40 → master-215）
     active-deadline-seconds: 1800
     ttl-seconds-after-finished: 300
   central-node:
     # 新集群中心计算节点；运行时会通过 node_management.internal_ip 解析实际 K8s 节点名。
-    ip: ${DISPATCH_CENTRAL_NODE_IP:10.212.14.88}
-    name: ${DISPATCH_CENTRAL_NODE_NAME:master-88}
+    ip: ${DISPATCH_CENTRAL_NODE_IP:10.212.14.90}
+    name: ${DISPATCH_CENTRAL_NODE_NAME:master-90}
   # data-discovery DaemonSet 配置（hostNetwork 模式，直接用节点 IP 访问）
   data-discovery:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致
