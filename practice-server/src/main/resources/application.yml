@@ -66,7 +66,7 @@ dispatch:
     domain: cluster.local # 对应 K8sJobFactory 中的 @Value("${dispatch.cluster.domain}")
   job:
     image:
-      init: curlimages/curl:latest # init container 镜像，支持 --limit-rate 限速（busybox wget 不支持）
+      init: ghcr.io/rene0329/data-discovery-practice-server:curl-8.21.0 # 固定版本并经 GHCR 镜像，避免 Docker Hub 拉取失败
       main: python:3.9-slim # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.main}")
     curl:
       connect-timeout-seconds: 5

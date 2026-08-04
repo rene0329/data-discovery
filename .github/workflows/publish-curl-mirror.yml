@@ -1,0 +1,41 @@
+name: Mirror Curl Image to GHCR
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'practice-server/k8s/curl-image/**'
+      - '.github/workflows/publish-curl-mirror.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  # Reuse the existing public package so cluster nodes can pull anonymously.
+  IMAGE_NAME: ${{ github.repository }}-practice-server
+
+jobs:
+  mirror-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize image name
+        run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Mirror curl 8.21.0 image
+        uses: docker/build-push-action@v6
+        with:
+          context: practice-server/k8s/curl-image
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:curl-8.21.0
