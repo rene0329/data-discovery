@@ -253,6 +253,7 @@ public class K8sJobFactory {
                                                      String dataFileName,
                                                      String dataFilePath,
                                                      String overrideTargetNode,
+                                                     String excludedTargetNode,
                                                      Double cpuRequest,
                                                      Double memoryRequest) {
 
@@ -301,6 +302,17 @@ public class K8sJobFactory {
         } else {
             log.info("===== [智能调度流程开始] Job: {} =====", jobName);
             List<CandidateNode> allAvailableNodes = gatherAvailableNodes(effectiveCpu, effectiveMem, sourceNodeName);
+            if (excludedTargetNode != null && !excludedTargetNode.trim().isEmpty()) {
+                List<CandidateNode> alternatives = allAvailableNodes.stream()
+                        .filter(node -> !excludedTargetNode.equalsIgnoreCase(node.getName()))
+                        .collect(Collectors.toList());
+                if (!alternatives.isEmpty()) {
+                    log.info("对照实验约束: 从亲和性候选节点中排除中心节点 '{}'", excludedTargetNode);
+                    allAvailableNodes = alternatives;
+                } else {
+                    log.warn("对照实验约束无法应用: 除中心节点 '{}' 外没有满足资源要求的计算节点", excludedTargetNode);
+                }
+            }
             if (allAvailableNodes.isEmpty()) {
                 throw new IllegalStateException("在所有已知的集群中，没有找到任何可用的'compute'角色的节点。");
             }

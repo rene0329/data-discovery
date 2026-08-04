@@ -169,8 +169,12 @@ public class K8sTaskOrchestratorService {
         String resolvedCentralNodeName = resolveCentralNodeName();
         AtomicReference<String> affinityNodeOut = new AtomicReference<>(sourceNodeName);
         AtomicReference<String> centralNodeOut  = new AtomicReference<>(resolvedCentralNodeName);
-        long t1_ms = executeJobAndMeasureInitContainer(taskId, "affinity", sourceNodeInfo, null, dataInfo, affinityNodeOut);
-        long t2_ms = executeJobAndMeasureInitContainer(taskId, "central", sourceNodeInfo, resolvedCentralNodeName, dataInfo, centralNodeOut);
+        // 亲和性方案用于和固定中心方案做对照：只要存在其他可用计算节点，
+        // 就不要让亲和性调度再次选中中心节点，否则两组实验会退化为同一条路径。
+        long t1_ms = executeJobAndMeasureInitContainer(
+                taskId, "affinity", sourceNodeInfo, null, resolvedCentralNodeName, dataInfo, affinityNodeOut);
+        long t2_ms = executeJobAndMeasureInitContainer(
+                taskId, "central", sourceNodeInfo, resolvedCentralNodeName, null, dataInfo, centralNodeOut);
 
         if (t1_ms == -1 || t2_ms == -1) {
             log.error("数据项 {} 的Job执行失败", dataItem);
@@ -236,6 +240,7 @@ public class K8sTaskOrchestratorService {
                                                    String type,
                                                    NodeManagement sourceNodeInfo,
                                                    String targetNode,
+                                                   String excludedTargetNode,
                                                    DataManagement dataInfo,
                                                    AtomicReference<String> selectedNodeOut) {
         String dataNameForJob = dataInfo.getDataName() == null
@@ -262,6 +267,7 @@ public class K8sTaskOrchestratorService {
                         dataInfo.getDataName(),
                         dataInfo.getFilePath(),
                         targetNode,
+                        excludedTargetNode,
                         dataInfo.getRequiredCpu(),
                         dataInfo.getRequiredMemory());
 
