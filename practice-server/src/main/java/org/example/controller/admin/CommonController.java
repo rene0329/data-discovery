@@ -433,8 +433,9 @@ public class CommonController {
             log.debug("分配 '{}' → {} (moved={})", data.getDataName(), newServer, needsMove);
         }
 
-        // ── 6. 冗余备份：热度最高 min(2,N) 条数据，各选最优非主节点
-        int backupCount = Math.min(2, dataList.size());
+        // ── 6. 冗余备份：只备份热度排名前 1/2 的数据（N / 2 向下取整），
+        // 例如 N=5 时备份 2 条、N=6 时备份 3 条；N=1 时不创建冗余备份。
+        int backupCount = dataList.size() / 2;
         for (int i = 0; i < backupCount; i++) {
             DataManagement data        = dataList.get(i);
             String         primaryNode = data.getDataServer();
@@ -475,7 +476,8 @@ public class CommonController {
                     newBackup.equals(oldBackup) ? "（未变更）" : "（已变更）");
         }
 
-        // 清理上一轮遗留的备份位置：只有当前热度最高的 backupCount 条保留备份标记。
+        // 清理上一轮以及数据库恢复时遗留的备份位置：
+        // 只有当前热度排名前 1/2 的 backupCount 条保留备份标记。
         for (int i = backupCount; i < dataList.size(); i++) {
             DataManagement data = dataList.get(i);
             if (data.getBackupServer() != null) {
