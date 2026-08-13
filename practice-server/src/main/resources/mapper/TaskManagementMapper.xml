@@ -95,6 +95,9 @@
     <update id="updateTask" parameterType="TaskManagement">
         UPDATE task_management
         SET
+        <if test="taskName != null">
+            task_name = #{taskName},
+        </if>
         T1 = #{T1},
         T2 = #{T2},
         rating = #{rating},
