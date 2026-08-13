@@ -446,8 +446,11 @@ public class CommonController {
                 if (sn.getNodeName().equals(primaryNode)) continue;
                 int cap  = sn.getNumDataset() != null ? sn.getNumDataset() : 0;
                 int used = assignedCount.get(sn.getNodeId());
-                if (used >= cap) continue;
 
+                // backup_server is currently a logical placement marker only; no physical
+                // backup file is created here.  Reusing the primary-data capacity gate would
+                // make floor(N / 2) impossible whenever primary replicas nearly fill the
+                // cluster (for example, 5 primaries in two nodes with capacity 3 each).
                 double freeCapRatio  = cap > 0 ? (double)(cap - used) / cap : 0.0;
                 double heatLoadRatio = totalHeat > 0 ? heatAccum.get(sn.getNodeId()) / totalHeat : 0.0;
                 double prox          = proxScoreMap.getOrDefault(sn.getNodeId(), 0.0);
