@@ -7,8 +7,9 @@ metadata:
   labels:
     app: heat-update
 spec:
-  # 每天执行一次（00:00）
-  schedule: "0 0 * * *"
+  # 每小时刷新一次存储值；公式使用真实时间差，跳过某轮也不会少衰减。
+  schedule: "0 * * * *"
+  timeZone: "Asia/Shanghai"
   # 同一时间最多允许 1 个 Job 并发运行
   concurrencyPolicy: Forbid
   # 成功的 Job 不保留，失败的保留 1 次便于排查

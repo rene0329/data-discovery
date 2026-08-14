@@ -76,19 +76,27 @@
         WHERE data_name = #{dataName}
     </update>
 
-    <!--
-      在一条 UPDATE 中消费 data_count 并清零，避免“先 SELECT、后 UPDATE”
-      把并发到达的访问计数覆盖掉。等待行锁期间到达的增量要么被本轮消费，
-      要么在本轮提交后保留到下一轮。
-    -->
-    <update id="updateAllDataHeat" parameterType="map">
+    <!-- 按真实经过时长做指数衰减；half-life 后超出下限的部分减半。 -->
+    <update id="decayAllDataHeat" parameterType="map">
         UPDATE data_management
-        SET data_heat = GREATEST(
-                #{threshold},
-                #{alpha} * COALESCE(data_heat, 0)
-                    + #{countWeight} * COALESCE(data_count, 0)
-                    - #{lambda}
+        SET data_heat = ROUND(
+                #{threshold}
+                + (GREATEST(#{threshold}, COALESCE(data_heat, #{threshold})) - #{threshold})
+                  * EXP(
+                      -0.6931471805599453
+                      * GREATEST(
+                          TIMESTAMPDIFF(
+                              MICROSECOND,
+                              COALESCE(heat_updated_at, CURRENT_TIMESTAMP(3)),
+                              CURRENT_TIMESTAMP(3)
+                          ),
+                          0
+                        )
+                      / (3600000000.0 * #{halfLifeHours})
+                    ),
+                2
             ),
+            heat_updated_at = CURRENT_TIMESTAMP(3),
             data_count = 0
     </update>
 
@@ -120,10 +128,49 @@
         WHERE data_name = #{dataName}
     </update>
 
-    <!-- 访问发生时立即提升热度；data_count 清零避免 CronJob 再次加热。 -->
-    <update id="incrementDataHeat" parameterType="map">
+    <!--
+      访问时先衰减到当前时刻，再执行 H' = alpha * H + (1-alpha) * maxHeat。
+      GREATEST 保证一次访问永远不会让热度降低；单条 UPDATE 保证并发请求不丢更新。
+    -->
+    <update id="updateDataHeatOnAccess" parameterType="map">
         UPDATE data_management
-        SET data_heat = GREATEST(#{threshold}, COALESCE(data_heat, #{threshold})) + #{heatIncrement},
+        SET data_heat = ROUND(
+                GREATEST(
+                    #{threshold}
+                    + (GREATEST(#{threshold}, COALESCE(data_heat, #{threshold})) - #{threshold})
+                      * EXP(
+                          -0.6931471805599453
+                          * GREATEST(
+                              TIMESTAMPDIFF(
+                                  MICROSECOND,
+                                  COALESCE(heat_updated_at, CURRENT_TIMESTAMP(3)),
+                                  CURRENT_TIMESTAMP(3)
+                              ),
+                              0
+                            )
+                          / (3600000000.0 * #{halfLifeHours})
+                        ),
+                    #{accessAlpha} * (
+                        #{threshold}
+                        + (GREATEST(#{threshold}, COALESCE(data_heat, #{threshold})) - #{threshold})
+                          * EXP(
+                              -0.6931471805599453
+                              * GREATEST(
+                                  TIMESTAMPDIFF(
+                                      MICROSECOND,
+                                      COALESCE(heat_updated_at, CURRENT_TIMESTAMP(3)),
+                                      CURRENT_TIMESTAMP(3)
+                                  ),
+                                  0
+                                )
+                              / (3600000000.0 * #{halfLifeHours})
+                            )
+                      )
+                      + (1 - #{accessAlpha}) * #{maxHeat}
+                ),
+                2
+            ),
+            heat_updated_at = CURRENT_TIMESTAMP(3),
             data_count = 0
         WHERE data_name = #{dataName}
     </update>

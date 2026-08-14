@@ -142,12 +142,9 @@ app:
     enabled: true   # 仅 practice-server 启用，heat-update-cronjob 不设此属性故默认 false
 
   heat-update:
-    alpha: 0.99
-    count-weight: 5.0
-    k: 0.05
-    lambda0: 0.05
-    beta: 0.3
-    time: 10
+    access-alpha: 0.90
+    max-heat: 100
+    half-life-hours: 24
     threshold: 10
 
 # 禁用 Redis 健康检查（Redis 未实际使用，避免连接失败导致 /actuator/health 报 DOWN）

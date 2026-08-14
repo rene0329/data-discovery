@@ -55,9 +55,15 @@ public class CommonController {
     @Value("${dispatch.data-discovery.data-directory:/dataset}")
     private String discoveryDataDirectory;
 
-    /** 每次任务选中数据集时立即增加的热度。 */
-    @Value("${app.heat-update.count-weight:5.0}")
-    private double accessHeatIncrement;
+    /** 访问时的 EMA 历史保留系数；越大则单次访问的影响越小。 */
+    @Value("${app.heat-update.access-alpha:0.90}")
+    private double accessAlpha;
+
+    @Value("${app.heat-update.max-heat:100}")
+    private double maxHeat;
+
+    @Value("${app.heat-update.half-life-hours:24}")
+    private double heatHalfLifeHours;
 
     @Value("${app.heat-update.threshold:10}")
     private double heatThreshold;
@@ -194,9 +200,10 @@ public class CommonController {
         taskManagement.setTaskName("任务" + taskId);
         taskManagementMapper.updateTask(taskManagement);
 
-        // 2. (快速) 原子地立即更新相关数据热度，无需等待每日 CronJob
+        // 2. (快速) 先按真实间隔衰减，再向热度上限做一次 EMA，不使用固定加值
         for (String data : selectedDatas) {
-            dataManagementMapper.incrementDataHeat(data, accessHeatIncrement, heatThreshold);
+            dataManagementMapper.updateDataHeatOnAccess(
+                    data, accessAlpha, maxHeat, heatHalfLifeHours, heatThreshold);
         }
 
         // 3. (核心) 将包含所有复杂逻辑的任务异步委派给后台服务

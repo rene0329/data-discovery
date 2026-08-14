@@ -54,14 +54,12 @@ practice:
       # 每次重试前的等待秒数
       job-retry-backoff-seconds: 5
 
-    # 数据热度更新算法相关参数 (从 HeatUpdateService 中抽离)
+    # 数据热度：访问时做有上限 EMA，空闲时按真实时长衰减
     heat-update:
-      alpha: 0.99      # 动量因子
-      k: 0.05          # 手动更新影响因子
-      lambda0: 0.05    # 自动更新影响因子
-      beta: 0.3        # 指数衰减因子
-      time: 10         # 时间参数
-      threshold: 10    # 热度更新的阈值
+      access-alpha: 0.90
+      max-heat: 100
+      half-life-hours: 24
+      threshold: 10
 
     # K8s 配置 (扩展为新 K8sFactory 设计，支持多集群、超时和代理)
     k8s:

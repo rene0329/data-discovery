@@ -30,10 +30,8 @@ public interface DataManagementMapper {
 
     void updateDataHeat(@Param("dataName") String dataName, @Param("newHeat") double newHeat);
 
-    int updateAllDataHeat(@Param("alpha") double alpha,
-                          @Param("countWeight") double countWeight,
-                          @Param("lambda") double lambda,
-                          @Param("threshold") double threshold);
+    int decayAllDataHeat(@Param("halfLifeHours") double halfLifeHours,
+                         @Param("threshold") double threshold);
 
     void save(DataManagement dataManagement); // 这个 save 方法在 XML 中实现，通常用于更新或插入
 
@@ -56,12 +54,12 @@ public interface DataManagementMapper {
 
     void updateBackupServer(DataManagement dataManagement); // 更新备份服务器字段
 
-    /**
-     * 记录一次数据访问：立即增加热度，并且不留下会被定时任务重复消费的计数。
-     */
-    int incrementDataHeat(@Param("dataName") String dataName,
-                          @Param("heatIncrement") double heatIncrement,
-                          @Param("threshold") double threshold);
+    /** 先按实际经过时长衰减，再将热度向上限做一次 EMA 平滑。 */
+    int updateDataHeatOnAccess(@Param("dataName") String dataName,
+                               @Param("accessAlpha") double accessAlpha,
+                               @Param("maxHeat") double maxHeat,
+                               @Param("halfLifeHours") double halfLifeHours,
+                               @Param("threshold") double threshold);
 
     /**
      * 获取所有数据。

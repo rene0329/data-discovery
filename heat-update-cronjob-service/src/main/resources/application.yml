@@ -23,13 +23,8 @@ mybatis:
 # 自定义业务配置（热度参数）
 app:
   heat-update:
-    alpha: 0.85       # EMA 历史热度保留系数，越大衰减越慢
-    count-weight: 5.0 # 每次访问的直接热度增量；count=1,oldHeat=10时净增≈+2.4
-    k: 0.009          # 线性衰减系数，与 time=10 共同决定 λ≈0.09/轮
-    lambda0: 0.05
-    beta: 0.3
-    time: 10
-    threshold: 10
+    half-life-hours: 24 # 超出下限的热度每 24 小时减半
+    threshold: 10       # 热度下限，只趋近而不重置
 
 # 日志配置（可选，调试用）
 logging:
