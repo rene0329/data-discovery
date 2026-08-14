@@ -120,10 +120,11 @@
         WHERE data_name = #{dataName}
     </update>
 
-    <!-- 更新数据块的 heat 值 -->
-    <update id="incrementDataCount" parameterType="String">
+    <!-- 访问发生时立即提升热度；data_count 清零避免 CronJob 再次加热。 -->
+    <update id="incrementDataHeat" parameterType="map">
         UPDATE data_management
-        SET data_count = COALESCE(data_count, 0) + 1
+        SET data_heat = GREATEST(#{threshold}, COALESCE(data_heat, #{threshold})) + #{heatIncrement},
+            data_count = 0
         WHERE data_name = #{dataName}
     </update>
 

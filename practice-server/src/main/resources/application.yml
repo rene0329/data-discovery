@@ -143,6 +143,7 @@ app:
 
   heat-update:
     alpha: 0.99
+    count-weight: 5.0
     k: 0.05
     lambda0: 0.05
     beta: 0.3

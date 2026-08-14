@@ -56,8 +56,12 @@ public interface DataManagementMapper {
 
     void updateBackupServer(DataManagement dataManagement); // 更新备份服务器字段
 
-    // 更新数据块的 heat 值
-    void incrementDataCount(String dataName);
+    /**
+     * 记录一次数据访问：立即增加热度，并且不留下会被定时任务重复消费的计数。
+     */
+    int incrementDataHeat(@Param("dataName") String dataName,
+                          @Param("heatIncrement") double heatIncrement,
+                          @Param("threshold") double threshold);
 
     /**
      * 获取所有数据。

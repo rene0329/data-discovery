@@ -55,6 +55,13 @@ public class CommonController {
     @Value("${dispatch.data-discovery.data-directory:/dataset}")
     private String discoveryDataDirectory;
 
+    /** 每次任务选中数据集时立即增加的热度。 */
+    @Value("${app.heat-update.count-weight:5.0}")
+    private double accessHeatIncrement;
+
+    @Value("${app.heat-update.threshold:10}")
+    private double heatThreshold;
+
     @Autowired
     public CommonController(
             DataManagementMapper dataManagementMapper,
@@ -187,9 +194,9 @@ public class CommonController {
         taskManagement.setTaskName("任务" + taskId);
         taskManagementMapper.updateTask(taskManagement);
 
-        // 2. (快速) 更新相关数据热度
+        // 2. (快速) 原子地立即更新相关数据热度，无需等待每日 CronJob
         for (String data : selectedDatas) {
-            dataManagementMapper.incrementDataCount(data);
+            dataManagementMapper.incrementDataHeat(data, accessHeatIncrement, heatThreshold);
         }
 
         // 3. (核心) 将包含所有复杂逻辑的任务异步委派给后台服务
