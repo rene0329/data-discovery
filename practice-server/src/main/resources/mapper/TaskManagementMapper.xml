@@ -5,8 +5,14 @@
 
 
     <insert id="submitData" useGeneratedKeys="true" keyProperty="taskId">
-        insert into task_management (task_name, selected_data, status, create_time, T1, T2, rating, schedule)
-        values (#{taskName}, #{selectedData}, #{status}, #{createTime}, #{T1}, #{T2}, #{rating}, #{schedule})
+        insert into task_management (
+            task_name, selected_data, dataset_ids_json, runtime_image_id, resource_overrides_json,
+            status, create_time, T1, T2, rating, schedule
+        )
+        values (
+            #{taskName}, #{selectedData}, #{datasetIdsJson}, #{runtimeImageId}, #{resourceOverridesJson},
+            #{status}, #{createTime}, #{T1}, #{T2}, #{rating}, #{schedule}
+        )
     </insert>
     <select id="list" resultType="org.example.entity.TaskManagement">
         select * from task_management where 1=1

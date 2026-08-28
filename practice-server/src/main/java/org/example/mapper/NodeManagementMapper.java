@@ -15,33 +15,41 @@ public interface NodeManagementMapper {
 
     List<NodeManagement> networkConfiguration(String query);
 
-    @Select("select * from node_management")
+    @Select("select * from node_management where deleted_at IS NULL")
     List<NodeManagement> networkConstruction();
 
     @Select("select * from node_management where node_name = #{nodeName}")
     NodeManagement getNodeDataByNodeName(NodeManagement nodeManagement);
 
-    @Select("select * from node_management where node_id = #{nodeId}")
+    @Select("select * from node_management where node_id = #{nodeId} and deleted_at IS NULL")
     NodeManagement getNodeById(Integer nodeId);
 
-    @Select("select * from node_management where node_name = #{nodeName}")
+    @Select("select * from node_management where node_name = #{nodeName} and deleted_at IS NULL")
     NodeManagement getNodeByName(String nodeName);
 
-    @Select("select * from node_management where node_name = #{nodeName} and cluster = #{cluster}")
+    @Select("select * from node_management where node_name = #{nodeName} and cluster = #{cluster} and deleted_at IS NULL")
     NodeManagement getByNameAndCluster(@Param("nodeName") String nodeName, @Param("cluster") String cluster);
+
+    NodeManagement getByClusterAndK8sUid(@Param("cluster") String cluster,
+                                         @Param("k8sUid") String k8sUid);
+
+    List<NodeManagement> listRegisteredNodes(@Param("query") String query,
+                                             @Param("status") String status,
+                                             @Param("enabled") Boolean enabled);
 
     /**
      * 查询所有具备计算能力的节点（纯计算节点 + 计算存储双角色节点），供 K8sJobFactory 调度使用。
      * 不依赖 K8s label，以 DB 记录为准，支持双角色节点。
      */
-    @Select("SELECT * FROM node_management WHERE type IN ('compute', 'compute-storage')")
+    @Select("SELECT * FROM node_management WHERE type IN ('compute', 'compute-storage') " +
+            "AND registration_status = 'ACTIVE' AND enabled = 1 AND deleted_at IS NULL")
     List<NodeManagement> getComputeCapableNodes();
 
     // 获取所有节点
         @Select("SELECT node_id AS nodeId, node_name AS nodeName, external_ip AS externalIp, internal_ip AS internalIp, type, cluster, " +
             "current_cpu AS currentCpu, max_cpu AS maxCpu, current_memory AS currentMemory, max_memory AS maxMemory, " +
             "num_dataset AS numDataset, last_update_time AS lastUpdateTime " +
-            "FROM node_management")
+            "FROM node_management WHERE deleted_at IS NULL")
     List<NodeManagement> selectAllNodes();
     String getNodeIpByDataServer(String dataServer);
     String getNodeIpById(Integer nodeId);
@@ -68,6 +76,28 @@ public interface NodeManagementMapper {
      * @return 影响的行数
      */
     int insertNode(NodeManagement node);
+
+    int insertRegisteredNode(NodeManagement node);
+
+    int updateNodeObservation(NodeManagement node);
+
+    int attachK8sIdentity(@Param("nodeId") Integer nodeId,
+                          @Param("cluster") String cluster,
+                          @Param("k8sUid") String k8sUid);
+
+    int updateRegistrationMetadata(NodeManagement node);
+
+    int updateRegistrationState(@Param("nodeId") Integer nodeId,
+                                @Param("status") String status,
+                                @Param("enabled") boolean enabled,
+                                @Param("verified") boolean verified);
+
+    int markOfflineByClusterAndK8sUid(@Param("cluster") String cluster,
+                                      @Param("k8sUid") String k8sUid);
+
+    int softDeleteRegisteredNode(Integer nodeId);
+
+    int countDatasetReplicasByNode(Integer nodeId);
 
     /**
      * [新增] 更新一个已存在的节点，只更新来自K8s的信息。

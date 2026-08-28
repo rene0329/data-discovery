@@ -113,8 +113,10 @@
 package org.example.service;
 
 import org.example.entity.DataManagement;
+import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.NodeManagement;
 import org.example.mapper.DataManagementMapper;
+import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.model.FileData;
 import org.slf4j.Logger;
@@ -133,6 +135,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -160,6 +163,9 @@ public class FileDiscoveryService {
 
     @Autowired
     private DataManagementMapper dataManagementMapper;
+
+    @Autowired
+    private DatasetRegistrationMapper datasetRegistrationMapper;
 
     @Autowired
     private NodeManagementMapper nodeManagementMapper;
@@ -306,59 +312,45 @@ public class FileDiscoveryService {
      * 同步文件到数据库
      */
     private void syncToDatabase(List<FileData> discoveredFiles) {
-        // 获取数据库中当前节点的所有文件路径
-        Set<String> dbFilePaths = dataManagementMapper.getAllFilePathsForNode(nodeId)
-                .stream()
-                .collect(Collectors.toSet());
-
+        // 自动扫描只维护候选文件和可用性，不再直接创建或删除注册数据集。
         Set<String> discoveredPaths = discoveredFiles.stream()
                 .map(FileData::getPath)
                 .collect(Collectors.toSet());
 
-        // 删除已不存在的文件
-        int deleteCount = 0;
-        for (String dbPath : dbFilePaths) {
-            if (!discoveredPaths.contains(dbPath)) {
-                DataManagement entity = dataManagementMapper.findByDataNodeIdAndFilePath(nodeId, dbPath);
-                if (entity != null) {
-                    dataManagementMapper.deleteFile(entity.getDataId());
-                    deleteCount++;
-                    log.debug("删除文件记录: {} (文件已不存在)", dbPath);
-                }
+        List<DatasetDiscoveryCandidate> knownCandidates =
+                datasetRegistrationMapper.listCandidates(null, nodeId, false);
+        int missingCount = 0;
+        for (DatasetDiscoveryCandidate candidate : knownCandidates) {
+            if (!discoveredPaths.contains(candidate.getFilePath())
+                    && !"MISSING".equals(candidate.getAvailability())) {
+                datasetRegistrationMapper.markCandidateAvailability(
+                        nodeId, candidate.getFilePath(), "MISSING");
+                missingCount++;
             }
         }
 
-        // 插入或更新文件
-        int insertCount = 0, updateCount = 0;
+        LocalDateTime now = LocalDateTime.now();
+        int observedCount = 0;
         for (FileData fileData : discoveredFiles) {
-            DataManagement existing = dataManagementMapper.findByDataNodeIdAndFilePath(
-                    nodeId, fileData.getPath());
-
-            if (existing != null) {
-                // 检查是否需要更新
-                if (needsUpdate(existing, fileData)) {
-                    updateEntity(existing, fileData);
-                    dataManagementMapper.updateFile(existing);
-                    updateCount++;
-                    log.debug("更新文件: {}", fileData.getName());
-                }
-            } else {
-                // 全局查重：若同名文件已被其他节点注册（例如备份副本），跳过 INSERT 避免重复行
-                DataManagement globalExisting = dataManagementMapper.findDataByName(stripExtension(fileData.getName()));
-                if (globalExisting != null && !Objects.equals(globalExisting.getDataNodeId(), nodeId)) {
-                    log.debug("跳过文件 '{}' 的 INSERT：该文件已归属节点 {} (data_node_id={})",
-                            fileData.getName(), globalExisting.getDataServer(), globalExisting.getDataNodeId());
-                    continue;
-                }
-                // 插入新记录
-                DataManagement newEntity = createEntity(fileData);
-                dataManagementMapper.insertFile(newEntity);
-                insertCount++;
-                log.debug("新增文件: {}", fileData.getName());
-            }
+            DatasetDiscoveryCandidate candidate = DatasetDiscoveryCandidate.builder()
+                    .nodeId(nodeId)
+                    .filePath(fileData.getPath())
+                    .fileName(fileData.getName())
+                    .fileType(fileData.getFileType())
+                    .sizeBytes(fileData.getSizeBytes())
+                    .checksum(fileData.getMd5Hash())
+                    .lastModifiedAt(LocalDateTime.ofInstant(
+                            java.time.Instant.ofEpochMilli(fileData.getLastModified()),
+                            java.time.ZoneId.systemDefault()))
+                    .availability("AVAILABLE")
+                    .lastSeenAt(now)
+                    .build();
+            datasetRegistrationMapper.upsertCandidate(candidate);
+            observedCount++;
         }
 
-        log.info("数据库同步完成: 新增 {}, 更新 {}, 删除 {}", insertCount, updateCount, deleteCount);
+        log.info("候选文件同步完成: 观测 {}, 标记缺失 {}。注册数据集未被自动删除。",
+                observedCount, missingCount);
     }
 
     // ── 数据集元信息映射（按文件名去扩展名后的 baseName 匹配） ─────────────

@@ -60,6 +60,9 @@
         SELECT nm.*
         FROM node_management nm
         WHERE nm.type IN ('storage', 'compute-storage')
+          AND nm.registration_status = 'ACTIVE'
+          AND nm.enabled = 1
+          AND nm.deleted_at IS NULL
         ORDER BY
         (SELECT COUNT(*) FROM edge_management em WHERE em.source_id = nm.node_id) DESC
     </select>

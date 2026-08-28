@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.example.mapper.RuntimeImageMapper">
+    <resultMap id="RuntimeImageMap" type="org.example.entity.RuntimeImage">
+        <id property="runtimeImageId" column="runtime_image_id"/>
+        <result property="legacyProfileId" column="legacy_profile_id"/>
+        <result property="name" column="name"/>
+        <result property="imageRef" column="image_ref"/>
+        <result property="resolvedDigest" column="resolved_digest"/>
+        <result property="taskType" column="task_type"/>
+        <result property="modelType" column="model_type"/>
+        <result property="commandJson" column="command_json"/>
+        <result property="argsTemplateJson" column="args_template_json"/>
+        <result property="dataPathTemplate" column="data_path_template"/>
+        <result property="defaultCpu" column="default_cpu"/>
+        <result property="defaultMemoryGi" column="default_memory_gi"/>
+        <result property="defaultGpu" column="default_gpu"/>
+        <result property="pullSecretRef" column="pull_secret_ref"/>
+        <result property="status" column="status"/>
+        <result property="enabled" column="enabled"/>
+        <result property="verifiedAt" column="verified_at"/>
+        <result property="verificationMessage" column="verification_message"/>
+        <result property="rowVersion" column="row_version"/>
+        <result property="deletedAt" column="deleted_at"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="org.example.entity.RuntimeImage"
+            useGeneratedKeys="true" keyProperty="runtimeImageId">
+        INSERT INTO runtime_image (
+            legacy_profile_id, name, image_ref, resolved_digest, task_type, model_type,
+            command_json, args_template_json, data_path_template, default_cpu,
+            default_memory_gi, default_gpu, pull_secret_ref, status, enabled
+        ) VALUES (
+            #{legacyProfileId}, #{name}, #{imageRef}, #{resolvedDigest}, #{taskType}, #{modelType},
+            #{commandJson}, #{argsTemplateJson}, #{dataPathTemplate}, #{defaultCpu},
+            #{defaultMemoryGi}, #{defaultGpu}, #{pullSecretRef}, #{status}, #{enabled}
+        )
+    </insert>
+
+    <select id="findById" resultMap="RuntimeImageMap">
+        SELECT * FROM runtime_image WHERE runtime_image_id = #{runtimeImageId} AND deleted_at IS NULL
+    </select>
+
+    <select id="findByName" resultMap="RuntimeImageMap">
+        SELECT * FROM runtime_image WHERE name = #{name} AND deleted_at IS NULL
+    </select>
+
+    <select id="list" resultMap="RuntimeImageMap">
+        SELECT * FROM runtime_image
+        WHERE deleted_at IS NULL
+        <if test="status != null and status != ''">AND status = #{status}</if>
+        <if test="query != null and query != ''">
+            AND (name LIKE CONCAT('%', #{query}, '%') OR image_ref LIKE CONCAT('%', #{query}, '%'))
+        </if>
+        ORDER BY updated_at DESC, runtime_image_id DESC
+    </select>
+
+    <update id="update" parameterType="org.example.entity.RuntimeImage">
+        UPDATE runtime_image
+        SET name = #{name}, image_ref = #{imageRef}, task_type = #{taskType}, model_type = #{modelType},
+            command_json = #{commandJson}, args_template_json = #{argsTemplateJson},
+            data_path_template = #{dataPathTemplate}, default_cpu = #{defaultCpu},
+            default_memory_gi = #{defaultMemoryGi}, default_gpu = #{defaultGpu},
+            pull_secret_ref = #{pullSecretRef}, status = 'DRAFT', enabled = 0,
+            resolved_digest = NULL, verified_at = NULL, verification_message = NULL,
+            row_version = row_version + 1
+        WHERE runtime_image_id = #{runtimeImageId} AND row_version = #{rowVersion} AND deleted_at IS NULL
+    </update>
+
+    <update id="updateStatus">
+        UPDATE runtime_image
+        SET status = #{status}, enabled = #{enabled}, resolved_digest = #{resolvedDigest},
+            verification_message = #{verificationMessage},
+            verified_at = <choose><when test="verified">CURRENT_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
+            row_version = row_version + 1
+        WHERE runtime_image_id = #{runtimeImageId} AND deleted_at IS NULL
+    </update>
+
+    <update id="softDelete">
+        UPDATE runtime_image
+        SET status = 'DELETED', enabled = 0, deleted_at = CURRENT_TIMESTAMP(3), row_version = row_version + 1
+        WHERE runtime_image_id = #{runtimeImageId} AND deleted_at IS NULL
+    </update>
+
+    <select id="countDatasetBindings" resultType="int">
+        SELECT COUNT(*) FROM registered_dataset
+        WHERE default_runtime_image_id = #{runtimeImageId} AND deleted_at IS NULL
+    </select>
+</mapper>

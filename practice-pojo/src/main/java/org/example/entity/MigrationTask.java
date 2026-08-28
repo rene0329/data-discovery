@@ -15,6 +15,7 @@ public class MigrationTask {
     private Long id;
     private Integer taskId;
     private Integer dataId;
+    private Long registeredDatasetId;
     private Integer sourceNodeId;
     private Integer targetNodeId;
     private String status;

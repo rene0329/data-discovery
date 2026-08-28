@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.example.mapper.NodeRegistrationMapper">
+    <resultMap id="NodeCandidateMap" type="org.example.entity.NodeDiscoveryCandidate">
+        <id property="candidateId" column="candidate_id"/>
+        <result property="clusterId" column="cluster_id"/>
+        <result property="k8sUid" column="k8s_uid"/>
+        <result property="k8sNodeName" column="k8s_node_name"/>
+        <result property="internalIp" column="internal_ip"/>
+        <result property="externalIp" column="external_ip"/>
+        <result property="observedRole" column="observed_role"/>
+        <result property="maxCpu" column="max_cpu"/>
+        <result property="maxMemory" column="max_memory"/>
+        <result property="currentCpu" column="current_cpu"/>
+        <result property="currentMemory" column="current_memory"/>
+        <result property="observedStatus" column="observed_status"/>
+        <result property="registeredNodeId" column="registered_node_id"/>
+        <result property="labelsJson" column="labels_json"/>
+        <result property="lastSeenAt" column="last_seen_at"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <insert id="upsertCandidate" parameterType="org.example.entity.NodeDiscoveryCandidate"
+            useGeneratedKeys="true" keyProperty="candidateId">
+        INSERT INTO node_discovery_candidate (
+            cluster_id, k8s_uid, k8s_node_name, internal_ip, external_ip,
+            observed_role, max_cpu, max_memory, current_cpu, current_memory,
+            observed_status, labels_json, last_seen_at
+        ) VALUES (
+            #{clusterId}, #{k8sUid}, #{k8sNodeName}, #{internalIp}, #{externalIp},
+            #{observedRole}, #{maxCpu}, #{maxMemory}, #{currentCpu}, #{currentMemory},
+            #{observedStatus}, #{labelsJson}, #{lastSeenAt}
+        )
+        ON DUPLICATE KEY UPDATE
+            k8s_node_name = VALUES(k8s_node_name),
+            internal_ip = VALUES(internal_ip),
+            external_ip = VALUES(external_ip),
+            observed_role = VALUES(observed_role),
+            max_cpu = VALUES(max_cpu),
+            max_memory = VALUES(max_memory),
+            current_cpu = VALUES(current_cpu),
+            current_memory = VALUES(current_memory),
+            observed_status = VALUES(observed_status),
+            labels_json = VALUES(labels_json),
+            last_seen_at = VALUES(last_seen_at)
+    </insert>
+
+    <select id="findCandidateById" resultMap="NodeCandidateMap">
+        SELECT * FROM node_discovery_candidate WHERE candidate_id = #{candidateId}
+    </select>
+
+    <select id="findCandidateByClusterAndUid" resultMap="NodeCandidateMap">
+        SELECT * FROM node_discovery_candidate
+        WHERE cluster_id = #{clusterId} AND k8s_uid = #{k8sUid}
+    </select>
+
+    <select id="listCandidates" resultMap="NodeCandidateMap">
+        SELECT * FROM node_discovery_candidate
+        WHERE 1 = 1
+        <if test="onlyUnregistered">
+            AND registered_node_id IS NULL
+        </if>
+        <if test="clusterId != null and clusterId != ''">
+            AND cluster_id = #{clusterId}
+        </if>
+        <if test="query != null and query != ''">
+            AND (k8s_node_name LIKE CONCAT('%', #{query}, '%')
+                 OR internal_ip LIKE CONCAT('%', #{query}, '%'))
+        </if>
+        ORDER BY last_seen_at DESC, candidate_id DESC
+    </select>
+
+    <update id="markCandidateRegistered">
+        UPDATE node_discovery_candidate
+        SET registered_node_id = #{registeredNodeId}
+        WHERE candidate_id = #{candidateId}
+    </update>
+
+    <update id="markCandidateOffline">
+        UPDATE node_discovery_candidate
+        SET observed_status = 'OFFLINE', updated_at = CURRENT_TIMESTAMP(3)
+        WHERE cluster_id = #{clusterId} AND k8s_uid = #{k8sUid}
+    </update>
+</mapper>

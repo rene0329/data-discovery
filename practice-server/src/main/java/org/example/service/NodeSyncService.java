@@ -242,9 +242,6 @@ import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.Watcher;
 import io.fabric8.kubernetes.client.WatcherException;
-import org.example.entity.NodeManagement;
-import org.example.mapper.K8sNodeMapper;
-import org.example.mapper.NodeManagementMapper;
 import org.example.factory.K8sJobFactory; // <-- 导入 K8sJobFactory
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -266,8 +263,7 @@ public class NodeSyncService {
 
     // @Autowired private KubernetesClient client; // <-- 移除这个直接注入
     private final K8sJobFactory k8sJobFactory; // <-- 注入工厂
-    private final NodeManagementMapper nodeManagementMapper;
-    private final K8sNodeMapper k8sNodeMapper;
+    private final NodeRegistrationService nodeRegistrationService;
 
     // 存储每个集群的活跃 watcher，用于重连等场景
     private final Map<String, Watcher<Node>> activeWatchers = new ConcurrentHashMap<>();
@@ -276,11 +272,9 @@ public class NodeSyncService {
     // 构造函数调整为注入 K8sJobFactory
     @Autowired
     public NodeSyncService(K8sJobFactory k8sJobFactory,
-                           NodeManagementMapper nodeManagementMapper,
-                           K8sNodeMapper k8sNodeMapper) {
+                           NodeRegistrationService nodeRegistrationService) {
         this.k8sJobFactory = k8sJobFactory;
-        this.nodeManagementMapper = nodeManagementMapper;
-        this.k8sNodeMapper = k8sNodeMapper;
+        this.nodeRegistrationService = nodeRegistrationService;
     }
 
     @PostConstruct
@@ -294,7 +288,7 @@ public class NodeSyncService {
     }
 
     /**
-     * 初始全量同步：获取所有节点，逐个 upsert（包含 Metrics 数据）
+     * 初始全量同步：获取所有节点写入候选表；只有已注册节点会更新调度观测字段。
      * 接收 KubernetesClient 参数
      */
     private void initialFullSync(KubernetesClient client, String clusterId) { // <-- 传入 clusterId，避免 in-cluster null context
@@ -315,29 +309,10 @@ public class NodeSyncService {
     }
 
     /**
-     * Upsert 逻辑：存在则 update，否则 insert
-     * ✅ 使用 toEntityWithMetrics 获取实时数据
-     * 接收 KubernetesClient 参数
+     * 自动同步不再把新节点直接写入 node_management，以免绕过注册和启用流程。
      */
     private void syncNode(Node k8sNode, KubernetesClient client, String clusterId) { // <-- 添加 clusterId 参数
-        // ✅ 关键：使用 toEntityWithMetrics 获取包含 Metrics 的数据
-        NodeManagement entity = k8sNodeMapper.toEntityWithMetrics(k8sNode, client); // 传入 client
-
-        if (entity == null) {
-            log.error("节点 '{}' 在集群 '{}' 映射实体失败，已跳过同步", k8sNode.getMetadata().getName(), clusterId);
-            return;
-        }
-
-        // 检查数据库中是否存在
-        NodeManagement existing = nodeManagementMapper.getNodeByName(entity.getNodeName());
-        if (existing != null) {
-            // 存在：更新（保留原有 node_id）
-            entity.setNodeId(existing.getNodeId());
-            nodeManagementMapper.updateNodeFromK8s(entity);
-        } else {
-            // 不存在：插入
-            nodeManagementMapper.insertNode(entity);
-        }
+        nodeRegistrationService.observeNode(k8sNode, client, clusterId);
     }
 
     /**
@@ -355,7 +330,8 @@ public class NodeSyncService {
                         syncNode(node, client, clusterId);
                         break;
                     case DELETED:
-                        nodeManagementMapper.deleteByName(nodeName); // 这里可能需要考虑clusterId，如果nodeName在不同集群可能重复
+                        // 节点离开 K8s 时保留注册记录和关联关系，只标记为 OFFLINE。
+                        nodeRegistrationService.markOffline(node, clusterId);
                         break;
                     case ERROR:
                         log.error("Error event for node: {} in cluster {}", nodeName, clusterId);

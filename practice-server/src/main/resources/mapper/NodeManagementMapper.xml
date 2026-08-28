@@ -16,13 +16,32 @@
     </select>
 
     <select id="networkConfiguration" resultType="org.example.entity.NodeManagement">
-        select * from node_management where 1=1
+        select * from node_management where deleted_at IS NULL
         <if test="query != null and query != ''">
             and (
             node_name like concat('%', #{query}, '%')
             or cluster like concat('%', #{query}, '%')
             )
         </if>
+    </select>
+
+    <select id="getByClusterAndK8sUid" resultType="org.example.entity.NodeManagement">
+        SELECT * FROM node_management
+        WHERE cluster = #{cluster} AND k8s_uid = #{k8sUid} AND deleted_at IS NULL
+        LIMIT 1
+    </select>
+
+    <select id="listRegisteredNodes" resultType="org.example.entity.NodeManagement">
+        SELECT * FROM node_management
+        WHERE deleted_at IS NULL
+        <if test="status != null and status != ''">AND registration_status = #{status}</if>
+        <if test="enabled != null">AND enabled = #{enabled}</if>
+        <if test="query != null and query != ''">
+            AND (node_name LIKE CONCAT('%', #{query}, '%')
+                 OR display_name LIKE CONCAT('%', #{query}, '%')
+                 OR internal_ip LIKE CONCAT('%', #{query}, '%'))
+        </if>
+        ORDER BY node_id
     </select>
 
     <update id="updateSystemInfo">
@@ -64,7 +83,10 @@
         WHERE
         e.source_id = #{storageNodeId}
         AND
-        n.type = 'compute';
+        n.type = 'compute'
+        AND n.registration_status = 'ACTIVE'
+        AND n.enabled = 1
+        AND n.deleted_at IS NULL;
     </select>
 
     <select id="getAllComputeNodes" resultType="int">
@@ -74,7 +96,10 @@
         node_management n
         WHERE
         n.type = 'compute'
-        AND n.node_id != 1;
+        AND n.node_id != 1
+        AND n.registration_status = 'ACTIVE'
+        AND n.enabled = 1
+        AND n.deleted_at IS NULL;
 <!--        AND n.node_id != 6;-->
     </select>
 
@@ -117,6 +142,72 @@
         #{numDataset}, #{lastUpdateTime}
         )
     </insert>
+
+    <insert id="insertRegisteredNode" parameterType="org.example.entity.NodeManagement"
+            useGeneratedKeys="true" keyProperty="nodeId">
+        INSERT INTO node_management (
+            node_name, display_name, external_ip, internal_ip, type, cluster, k8s_uid,
+            max_cpu, max_memory, current_cpu, current_memory, num_dataset, last_update_time,
+            registration_status, enabled, labels_json, last_seen_at, verified_at, row_version
+        ) VALUES (
+            #{nodeName}, #{displayName}, #{externalIp}, #{internalIp}, #{type}, #{cluster}, #{k8sUid},
+            #{maxCpu}, #{maxMemory}, #{currentCpu}, #{currentMemory}, #{numDataset}, #{lastUpdateTime},
+            #{registrationStatus}, #{enabled}, #{labelsJson}, #{lastSeenAt}, #{verifiedAt}, 0
+        )
+    </insert>
+
+    <update id="updateNodeObservation" parameterType="org.example.entity.NodeManagement">
+        UPDATE node_management
+        SET node_name = #{nodeName}, external_ip = #{externalIp}, internal_ip = #{internalIp},
+            max_cpu = #{maxCpu}, max_memory = #{maxMemory}, current_cpu = #{currentCpu},
+            current_memory = #{currentMemory}, num_dataset = #{numDataset},
+            last_update_time = #{lastUpdateTime}, last_seen_at = #{lastSeenAt},
+            registration_status = CASE
+                WHEN registration_status = 'OFFLINE' AND enabled = 1 THEN 'ACTIVE'
+                ELSE registration_status
+            END
+        WHERE node_id = #{nodeId} AND deleted_at IS NULL
+    </update>
+
+    <update id="attachK8sIdentity">
+        UPDATE node_management
+        SET cluster = #{cluster}, k8s_uid = #{k8sUid},
+            display_name = COALESCE(display_name, node_name)
+        WHERE node_id = #{nodeId} AND k8s_uid IS NULL AND deleted_at IS NULL
+    </update>
+
+    <update id="updateRegistrationMetadata" parameterType="org.example.entity.NodeManagement">
+        UPDATE node_management
+        SET display_name = #{displayName}, type = #{type}, labels_json = #{labelsJson},
+            row_version = row_version + 1
+        WHERE node_id = #{nodeId} AND row_version = #{rowVersion} AND deleted_at IS NULL
+    </update>
+
+    <update id="updateRegistrationState">
+        UPDATE node_management
+        SET registration_status = #{status}, enabled = #{enabled},
+            verified_at = <choose><when test="verified">CURRENT_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
+            row_version = row_version + 1
+        WHERE node_id = #{nodeId} AND deleted_at IS NULL
+    </update>
+
+    <update id="markOfflineByClusterAndK8sUid">
+        UPDATE node_management
+        SET registration_status = 'OFFLINE', last_update_time = CURRENT_TIMESTAMP,
+            row_version = row_version + 1
+        WHERE cluster = #{cluster} AND k8s_uid = #{k8sUid} AND deleted_at IS NULL
+    </update>
+
+    <update id="softDeleteRegisteredNode">
+        UPDATE node_management
+        SET registration_status = 'DELETED', enabled = 0, deleted_at = CURRENT_TIMESTAMP(3),
+            row_version = row_version + 1
+        WHERE node_id = #{nodeId} AND deleted_at IS NULL
+    </update>
+
+    <select id="countDatasetReplicasByNode" resultType="int">
+        SELECT COUNT(*) FROM dataset_replica WHERE node_id = #{nodeId}
+    </select>
 
     <!-- 更新现有节点，支持所有字段（基于 node_name） -->
     <update id="updateNodeFromK8s" parameterType="org.example.entity.NodeManagement">

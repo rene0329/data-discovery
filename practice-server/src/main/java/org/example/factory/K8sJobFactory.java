@@ -10,6 +10,7 @@ import io.fabric8.kubernetes.client.KubernetesClientException;
 import lombok.extern.slf4j.Slf4j;
 import org.example.entity.EdgeManagement;
 import org.example.entity.NodeManagement;
+import org.example.entity.RuntimeImage;
 import org.example.entity.TrainingProfile;
 import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
@@ -257,14 +258,43 @@ public class K8sJobFactory {
                                                      Double cpuRequest,
                                                      Double memoryRequest) {
 
-        TrainingProfile profile = resolveTrainingProfile(dataFileName);
+        return createDataProcessingJob(jobName, sourceNodeName, dataFileName, dataFilePath,
+                overrideTargetNode, excludedTargetNode, cpuRequest, memoryRequest, null, null);
+    }
+
+    public JobCreationResult createDataProcessingJob(String jobName,
+                                                     String sourceNodeName,
+                                                     String dataFileName,
+                                                     String dataFilePath,
+                                                     String overrideTargetNode,
+                                                     String excludedTargetNode,
+                                                     Double cpuRequest,
+                                                     Double memoryRequest,
+                                                     Double gpuRequest,
+                                                     RuntimeImage runtimeImage) {
+
+        TrainingProfile profile = runtimeImage == null ? resolveTrainingProfile(dataFileName) : null;
         double effectiveCpu = cpuRequest != null ? cpuRequest : (profile != null && profile.getDefaultCpu() != null ? profile.getDefaultCpu() : 0.5);
         double effectiveMem = memoryRequest != null ? memoryRequest : (profile != null && profile.getDefaultMem() != null ? profile.getDefaultMem() : 1.0);
-        String selectedMainImage = (profile != null && profile.getImage() != null && !profile.getImage().isEmpty()) ? profile.getImage() : mainContainerImage;
+        double effectiveGpu = gpuRequest != null ? gpuRequest
+                : (runtimeImage != null && runtimeImage.getDefaultGpu() != null ? runtimeImage.getDefaultGpu() : 0.0);
+        String selectedMainImage = runtimeImage != null
+                ? immutableImageRef(runtimeImage.getImageRef(), runtimeImage.getResolvedDigest())
+                : (profile != null && profile.getImage() != null && !profile.getImage().isEmpty()) ? profile.getImage() : mainContainerImage;
         String selectedEntrypoint = (profile != null && profile.getEntrypoint() != null && !profile.getEntrypoint().isEmpty()) ? profile.getEntrypoint() : "/app/train.py";
-        String selectedDataPath = renderDataPath(profile != null ? profile.getDataPathTemplate() : null, dataFileName);
-        String selectedTaskType = profile != null ? profile.getTaskType() : inferTaskType(dataFileName);
-        String selectedModelType = profile != null ? profile.getModelType() : "default";
+        String selectedDataPath = renderDataPath(runtimeImage != null ? runtimeImage.getDataPathTemplate()
+                : profile != null ? profile.getDataPathTemplate() : null, dataFileName);
+        String selectedTaskType = runtimeImage != null ? runtimeImage.getTaskType()
+                : profile != null ? profile.getTaskType() : inferTaskType(dataFileName);
+        String selectedModelType = runtimeImage != null ? runtimeImage.getModelType()
+                : profile != null ? profile.getModelType() : "default";
+        List<String> selectedCommand = runtimeImage != null && runtimeImage.getCommand() != null
+                && !runtimeImage.getCommand().isEmpty()
+                ? renderArguments(runtimeImage.getCommand(), dataFileName, selectedDataPath)
+                : Arrays.asList("python", selectedEntrypoint);
+        List<String> selectedArgs = runtimeImage != null
+                ? renderArguments(runtimeImage.getArgsTemplate(), dataFileName, selectedDataPath)
+                : Collections.emptyList();
 
         NodeManagement sourceNodeInfo = nodeManagementMapper.getNodeByName(sourceNodeName);
         if (sourceNodeInfo == null) {
@@ -359,6 +389,11 @@ public class K8sJobFactory {
                 .addToLabels("app", jobName)
                 .endMetadata()
                 .withNewSpec()
+                .withImagePullSecrets(runtimeImage != null && runtimeImage.getPullSecretRef() != null
+                        && !runtimeImage.getPullSecretRef().trim().isEmpty()
+                        ? Collections.singletonList(new io.fabric8.kubernetes.api.model.LocalObjectReferenceBuilder()
+                            .withName(runtimeImage.getPullSecretRef().trim()).build())
+                        : Collections.emptyList())
                 .addNewVolume()
                 .withName("shared-data")
                 .withNewEmptyDir().endEmptyDir()
@@ -379,7 +414,8 @@ public class K8sJobFactory {
                 .addNewContainer()
                 .withName("processing-container")
                 .withImage(selectedMainImage)
-                .withCommand("python", selectedEntrypoint)
+                .withCommand(selectedCommand)
+                .withArgs(selectedArgs)
                 .addNewEnv().withName("TASK_TYPE").withValue(selectedTaskType).endEnv()
                 .addNewEnv().withName("MODEL_TYPE").withValue(selectedModelType).endEnv()
                 .addNewEnv().withName("DATA_NAME").withValue(dataFileName).endEnv()
@@ -406,7 +442,35 @@ public class K8sJobFactory {
                 .endSpec()
                 .build();
 
+        if (effectiveGpu > 0) {
+            io.fabric8.kubernetes.api.model.Container processingContainer = jobToCreate.getSpec()
+                    .getTemplate().getSpec().getContainers().stream()
+                    .filter(container -> "processing-container".equals(container.getName()))
+                    .findFirst().orElseThrow(() -> new IllegalStateException("processing container is missing"));
+            Quantity gpuQuantity = new Quantity(String.valueOf(effectiveGpu));
+            processingContainer.getResources().getRequests().put("nvidia.com/gpu", gpuQuantity);
+            processingContainer.getResources().getLimits().put("nvidia.com/gpu", gpuQuantity);
+        }
+
         return new JobCreationResult(jobToCreate, targetClient, bestNode.getName());
+    }
+
+    private String immutableImageRef(String imageRef, String digest) {
+        if (digest == null || digest.trim().isEmpty()) return imageRef;
+        if (imageRef.contains("@")) return imageRef.substring(0, imageRef.indexOf('@')) + "@" + digest;
+        int slash = imageRef.lastIndexOf('/');
+        int colon = imageRef.lastIndexOf(':');
+        String repository = colon > slash ? imageRef.substring(0, colon) : imageRef;
+        return repository + "@" + digest;
+    }
+
+    private List<String> renderArguments(List<String> values, String datasetName, String dataPath) {
+        if (values == null) return Collections.emptyList();
+        return values.stream()
+                .map(value -> value == null ? "" : value
+                        .replace("{dataset}", datasetName == null ? "dataset" : datasetName)
+                        .replace("{dataPath}", dataPath))
+                .collect(Collectors.toList());
     }
 
     private TrainingProfile resolveTrainingProfile(String datasetName) {

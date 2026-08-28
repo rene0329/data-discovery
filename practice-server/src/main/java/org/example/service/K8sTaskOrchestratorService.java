@@ -1,5 +1,7 @@
 package org.example.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.api.model.ContainerStateTerminated;
 import io.fabric8.kubernetes.api.model.ContainerStatus;
 import io.fabric8.kubernetes.api.model.NamedContext;
@@ -11,14 +13,20 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.entity.DataManagement;
 import org.example.entity.MigrationTask;
 import org.example.entity.NodeManagement;
+import org.example.entity.RegisteredDataset;
+import org.example.entity.DatasetReplica;
+import org.example.entity.RuntimeImage;
 import org.example.entity.TaskManagement;
 import org.example.factory.JobCreationResult;
 import org.example.factory.K8sJobFactory;
 import org.example.mapper.DataManagementMapper;
 import org.example.mapper.MigrationTaskMapper;
 import org.example.mapper.NodeManagementMapper;
+import org.example.mapper.DatasetRegistrationMapper;
+import org.example.mapper.RuntimeImageMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.example.vo.DataItemResult;
+import org.example.dto.registration.ResourceRequirements;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,6 +39,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -51,6 +60,9 @@ public class K8sTaskOrchestratorService {
     private final TaskManagementMapper taskManagementMapper;
     private final MigrationTaskMapper migrationTaskMapper;
     private final K8sJobFactory k8sJobFactory;
+    private final DatasetRegistrationMapper datasetRegistrationMapper;
+    private final RuntimeImageMapper runtimeImageMapper;
+    private final ObjectMapper objectMapper;
     private final String centralNodeName;
     private final String centralNodeIp;
     private final Executor dataProcessingExecutor;
@@ -94,6 +106,9 @@ public class K8sTaskOrchestratorService {
             MigrationTaskMapper migrationTaskMapper,
             // 【架构修正#2】: 从构造函数中移除KubernetesClient
             K8sJobFactory k8sJobFactory,
+            DatasetRegistrationMapper datasetRegistrationMapper,
+            RuntimeImageMapper runtimeImageMapper,
+            ObjectMapper objectMapper,
             @Value("${dispatch.central-node.name:}") String centralNodeName,
             @Value("${dispatch.central-node.ip:}") String centralNodeIp,
             @Qualifier("dataProcessingExecutor") Executor dataProcessingExecutor
@@ -103,6 +118,9 @@ public class K8sTaskOrchestratorService {
         this.taskManagementMapper = taskManagementMapper;
         this.migrationTaskMapper = migrationTaskMapper;
         this.k8sJobFactory = k8sJobFactory;
+        this.datasetRegistrationMapper = datasetRegistrationMapper;
+        this.runtimeImageMapper = runtimeImageMapper;
+        this.objectMapper = objectMapper;
         this.centralNodeName = centralNodeName;
         this.centralNodeIp = centralNodeIp;
         this.dataProcessingExecutor = dataProcessingExecutor;
@@ -151,6 +169,43 @@ public class K8sTaskOrchestratorService {
         }
     }
 
+    @Async
+    public void executeRegisteredTask(Integer taskId, List<Long> datasetIds,
+                                      Long explicitRuntimeImageId,
+                                      ResourceRequirements overrides) {
+        log.info("注册资源任务 {} 开始执行，datasetIds={}", taskId, datasetIds);
+        try {
+            List<CompletableFuture<DataItemResult>> futures = datasetIds.stream()
+                    .map(datasetId -> CompletableFuture.supplyAsync(
+                            () -> processRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId, overrides),
+                            dataProcessingExecutor).exceptionally(ex -> {
+                        log.error("注册数据集 {} 处理失败: {}", datasetId, ex.getMessage());
+                        return null;
+                    }))
+                    .collect(Collectors.toList());
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+            List<String> scheduleT1List = new ArrayList<>();
+            List<String> scheduleT2List = new ArrayList<>();
+            double totalT1 = 0.0;
+            double totalT2 = 0.0;
+            for (CompletableFuture<DataItemResult> future : futures) {
+                DataItemResult result = future.get();
+                if (result != null) {
+                    scheduleT1List.add(result.getScheduleT1());
+                    scheduleT2List.add(result.getScheduleT2());
+                    totalT1 += result.getT1Seconds();
+                    totalT2 += result.getT2Seconds();
+                }
+            }
+            updateFinalTaskStatus(taskId, totalT1, totalT2, scheduleT1List, scheduleT2List,
+                    scheduleT1List.size(), datasetIds.size());
+        } catch (Exception e) {
+            log.error("注册资源任务 {} 执行失败", taskId, e);
+            updateTaskStatusToFailed(taskId, e.getMessage());
+        }
+    }
+
 
     private DataItemResult processDataItem(Integer taskId, String dataItem) {
         log.info("开始处理数据项: {}", dataItem);
@@ -172,9 +227,11 @@ public class K8sTaskOrchestratorService {
         // 亲和性方案用于和固定中心方案做对照：只要存在其他可用计算节点，
         // 就不要让亲和性调度再次选中中心节点，否则两组实验会退化为同一条路径。
         long t1_ms = executeJobAndMeasureInitContainer(
-                taskId, "affinity", sourceNodeInfo, null, resolvedCentralNodeName, dataInfo, affinityNodeOut);
+                taskId, "affinity", sourceNodeInfo, null, resolvedCentralNodeName, dataInfo,
+                null, null, null, affinityNodeOut);
         long t2_ms = executeJobAndMeasureInitContainer(
-                taskId, "central", sourceNodeInfo, resolvedCentralNodeName, null, dataInfo, centralNodeOut);
+                taskId, "central", sourceNodeInfo, resolvedCentralNodeName, null, dataInfo,
+                null, null, null, centralNodeOut);
 
         if (t1_ms == -1 || t2_ms == -1) {
             log.error("数据项 {} 的Job执行失败", dataItem);
@@ -190,6 +247,79 @@ public class K8sTaskOrchestratorService {
         result.setScheduleT2(dataItem + ": " + sourceNodeName + " -> " + centralNodeOut.get());
         log.info("数据项 {} 处理完成。亲和性调度传输: {}ms, 中心化调度传输: {}ms", dataItem, t1_ms, t2_ms);
         return result;
+    }
+
+    private DataItemResult processRegisteredDataItem(Integer taskId, Long datasetId,
+                                                     Long explicitRuntimeImageId,
+                                                     ResourceRequirements overrides) {
+        RegisteredDataset dataset = datasetRegistrationMapper.findDatasetById(datasetId);
+        if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
+            throw new IllegalStateException("数据集不存在或不再处于 ACTIVE: " + datasetId);
+        }
+        DatasetReplica replica = datasetRegistrationMapper.listReplicas(datasetId).stream()
+                .filter(item -> "AVAILABLE".equals(item.getAvailability()))
+                .filter(item -> {
+                    NodeManagement node = nodeManagementMapper.getNodeById(item.getNodeId());
+                    return node != null && "ACTIVE".equals(node.getRegistrationStatus())
+                            && Boolean.TRUE.equals(node.getEnabled());
+                })
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("数据集没有位于活动节点上的可用副本: " + datasetId));
+        NodeManagement sourceNode = nodeManagementMapper.getNodeById(replica.getNodeId());
+        Long imageId = explicitRuntimeImageId != null
+                ? explicitRuntimeImageId : dataset.getDefaultRuntimeImageId();
+        RuntimeImage image = runtimeImageMapper.findById(imageId);
+        if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())) {
+            throw new IllegalStateException("运行镜像不可用于调度: " + imageId);
+        }
+        image.setCommand(readStringList(image.getCommandJson()));
+        image.setArgsTemplate(readStringList(image.getArgsTemplateJson()));
+
+        String fileName = replica.getFilePath();
+        int slash = fileName == null ? -1 : fileName.lastIndexOf('/');
+        if (slash >= 0) fileName = fileName.substring(slash + 1);
+        if (fileName == null || fileName.isEmpty()) fileName = dataset.getDatasetCode();
+        DataManagement dataInfo = DataManagement.builder()
+                .dataId(dataset.getLegacyDataId())
+                .dataName(fileName)
+                .dataSize(replica.getSizeBytes())
+                .dataServer(sourceNode.getNodeName())
+                .dataNodeId(sourceNode.getNodeId())
+                .filePath(replica.getFilePath())
+                .requiredCpu(overrides != null && overrides.getCpu() != null
+                        ? overrides.getCpu() : dataset.getRequiredCpu())
+                .requiredMemory(overrides != null && overrides.getMemoryGi() != null
+                        ? overrides.getMemoryGi() : dataset.getRequiredMemoryGi())
+                .build();
+
+        String centralNode = resolveCentralNodeName();
+        AtomicReference<String> affinityNodeOut = new AtomicReference<>(sourceNode.getNodeName());
+        AtomicReference<String> centralNodeOut = new AtomicReference<>(centralNode);
+        Double gpu = overrides != null && overrides.getGpu() != null
+                ? overrides.getGpu() : dataset.getRequiredGpu();
+        long t1Ms = executeJobAndMeasureInitContainer(taskId, "affinity", sourceNode, null,
+                centralNode, dataInfo, datasetId, image, gpu, affinityNodeOut);
+        long t2Ms = executeJobAndMeasureInitContainer(taskId, "central", sourceNode, centralNode,
+                null, dataInfo, datasetId, image, gpu, centralNodeOut);
+        if (t1Ms == -1 || t2Ms == -1) return null;
+
+        DataItemResult result = new DataItemResult();
+        result.setT1Seconds(t1Ms / 1000.0);
+        result.setT2Seconds(t2Ms / 1000.0);
+        result.setScheduleT1(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
+                + " -> " + affinityNodeOut.get());
+        result.setScheduleT2(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
+                + " -> " + centralNodeOut.get());
+        return result;
+    }
+
+    private List<String> readStringList(String json) {
+        if (json == null || json.trim().isEmpty()) return Collections.emptyList();
+        try {
+            return objectMapper.readValue(json, new TypeReference<List<String>>() { });
+        } catch (Exception e) {
+            throw new IllegalStateException("运行镜像命令 JSON 无效", e);
+        }
     }
 
     /**
@@ -242,6 +372,9 @@ public class K8sTaskOrchestratorService {
                                                    String targetNode,
                                                    String excludedTargetNode,
                                                    DataManagement dataInfo,
+                                                   Long registeredDatasetId,
+                                                   RuntimeImage runtimeImage,
+                                                   Double gpuRequest,
                                                    AtomicReference<String> selectedNodeOut) {
         String dataNameForJob = dataInfo.getDataName() == null
                 ? "dataset"
@@ -269,7 +402,9 @@ public class K8sTaskOrchestratorService {
                         targetNode,
                         excludedTargetNode,
                         dataInfo.getRequiredCpu(),
-                        dataInfo.getRequiredMemory());
+                        dataInfo.getRequiredMemory(),
+                        gpuRequest,
+                        runtimeImage);
 
                 client = jobResult.getClient();
                 Job job = jobResult.getJob();
@@ -294,6 +429,7 @@ public class K8sTaskOrchestratorService {
                     migrationTask = MigrationTask.builder()
                             .taskId(taskId)
                             .dataId(dataInfo.getDataId())
+                            .registeredDatasetId(registeredDatasetId)
                             .sourceNodeId(sourceNodeInfo.getNodeId())
                             .targetNodeId(targetNodeInfo != null ? targetNodeInfo.getNodeId() : sourceNodeInfo.getNodeId())
                             .status("COPYING")

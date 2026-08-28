@@ -14,12 +14,14 @@ import java.time.LocalDateTime;
 public class NodeManagement {
     private Integer nodeId;
     private String nodeName;
+    private String displayName;
 
 
     private String externalIp;
     private String internalIp;
     private String type;
     private String cluster;
+    private String k8sUid;
 
     private Double maxCpu;
     private Double maxMemory;
@@ -30,6 +32,14 @@ public class NodeManagement {
     private Integer numDataset;
     private LocalDateTime lastUpdateTime;
 
-}
+    // 注册状态由管理面维护；K8s 同步只更新观测字段。
+    private String registrationStatus;
+    private Boolean enabled;
+    private String labelsJson;
+    private LocalDateTime lastSeenAt;
+    private LocalDateTime verifiedAt;
+    private LocalDateTime deletedAt;
+    private Integer rowVersion;
 
+}
 
