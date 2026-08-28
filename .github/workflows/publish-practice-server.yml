@@ -33,7 +33,7 @@ jobs:
 
       # 编译 practice-server 及其依赖模块（practice-common, practice-pojo）
       - name: Build with Maven
-        run: mvn -pl practice-server -am package -DskipTests
+        run: mvn -pl practice-server -am package
 
       - name: Lowercase image name
         run: echo "IMAGE_NAME=$(echo '${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV

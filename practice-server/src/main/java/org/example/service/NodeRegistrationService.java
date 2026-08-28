@@ -245,7 +245,9 @@ public class NodeRegistrationService {
             if (client == null) throw new IllegalStateException("K8s cluster client is unavailable");
             Node k8sNode = client.nodes().withName(node.getNodeName()).get();
             if (k8sNode == null) throw new IllegalStateException("K8s node does not exist");
-            verifyDiscoveryAgent(node.getInternalIp());
+            if (requiresDiscoveryAgent(node.getType())) {
+                verifyDiscoveryAgent(node.getInternalIp());
+            }
             nodeMapper.updateRegistrationState(nodeId, "REGISTERED", false, true);
             audit("NODE", String.valueOf(nodeId), "VERIFY", requestId, "success");
             return getNode(nodeId);
@@ -323,6 +325,10 @@ public class NodeRegistrationService {
                 || !Boolean.TRUE.equals(body.get("dataDirectoryReadable"))) {
             throw new IllegalStateException("data-discovery Agent is not healthy");
         }
+    }
+
+    static boolean requiresDiscoveryAgent(String nodeRole) {
+        return nodeRole == null || !"compute".equalsIgnoreCase(nodeRole.trim());
     }
 
     private String toDatabaseRole(String role) {
