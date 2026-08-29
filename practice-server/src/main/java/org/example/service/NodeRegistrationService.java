@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import org.example.dto.registration.NodeCandidateView;
+import org.example.dto.registration.OperationResult;
 import org.example.dto.registration.RegisterNodeRequest;
 import org.example.dto.registration.RegisteredNodeView;
 import org.example.dto.registration.UpdateNodeRequest;
@@ -64,22 +65,33 @@ public class NodeRegistrationService {
         this.discoveryPort = discoveryPort;
     }
 
-    public String discover(Set<String> requestedClusterIds) {
+    public OperationResult discover(Set<String> requestedClusterIds) {
         int[] observed = {0};
+        int[] requested = {0};
+        List<String> failedClusters = new ArrayList<>();
         k8sJobFactory.getClusterClients().forEach((clusterId, client) -> {
             if (requestedClusterIds != null && !requestedClusterIds.isEmpty()
                     && !requestedClusterIds.contains(clusterId)) {
                 return;
             }
-            List<Node> nodes = client.nodes().list().getItems();
-            for (Node node : nodes) {
-                observeNode(node, client, clusterId);
-                observed[0]++;
+            try {
+                List<Node> nodes = client.nodes().list().getItems();
+                requested[0] += nodes.size();
+                for (Node node : nodes) {
+                    observeNode(node, client, clusterId);
+                    observed[0]++;
+                }
+            } catch (RuntimeException ex) {
+                failedClusters.add(clusterId);
             }
         });
         String operationId = UUID.randomUUID().toString();
-        audit("NODE", null, "DISCOVER", operationId, "observed=" + observed[0]);
-        return operationId;
+        OperationResult result = OperationResult.discovery(
+                operationId, requested[0], observed[0], failedClusters);
+        audit("NODE", null, "DISCOVER", operationId,
+                "requestedNodes=" + requested[0] + ",observedNodes=" + observed[0]
+                        + ",failedClusters=" + failedClusters);
+        return result;
     }
 
     @Transactional
@@ -147,13 +159,17 @@ public class NodeRegistrationService {
     }
 
     public List<NodeCandidateView> listCandidates(String query, String clusterId) {
+        validateQuery(query);
         return registrationMapper.listCandidates(query, clusterId, true).stream()
                 .map(candidate -> NodeCandidateView.from(candidate, readLabels(candidate.getLabelsJson())))
                 .collect(Collectors.toList());
     }
 
     public List<RegisteredNodeView> listNodes(String query, String status, Boolean enabled) {
-        return nodeMapper.listRegisteredNodes(query, status, enabled).stream()
+        validateQuery(query);
+        validateNodeStatus(status);
+        String normalizedStatus = status == null ? null : status.trim().toUpperCase();
+        return nodeMapper.listRegisteredNodes(query, normalizedStatus, enabled).stream()
                 .map(this::toView)
                 .collect(Collectors.toList());
     }
@@ -358,6 +374,21 @@ public class NodeRegistrationService {
             return objectMapper.readValue(json, STRING_MAP);
         } catch (JsonProcessingException e) {
             return Collections.emptyMap();
+        }
+    }
+
+    private void validateQuery(String query) {
+        if (query != null && query.length() > 200) {
+            throw RegistrationException.invalid("query must not exceed 200 characters");
+        }
+    }
+
+    private void validateNodeStatus(String status) {
+        if (status == null || status.trim().isEmpty()) return;
+        String normalized = status.trim().toUpperCase();
+        if (!java.util.Arrays.asList("REGISTERED", "VERIFYING", "VERIFY_FAILED", "ACTIVE",
+                "DISABLED", "OFFLINE").contains(normalized)) {
+            throw RegistrationException.invalid("unsupported node status: " + status);
         }
     }
 

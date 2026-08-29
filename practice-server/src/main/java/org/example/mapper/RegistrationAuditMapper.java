@@ -8,8 +8,9 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface RegistrationAuditMapper {
     @Insert("INSERT INTO registration_audit_log " +
-            "(resource_type, resource_id, action, actor, request_id, detail_json) " +
-            "VALUES (#{resourceType}, #{resourceId}, #{action}, #{actor}, #{requestId}, #{detailJson})")
+            "(resource_type, resource_id, action, actor, request_id, detail_json, created_at) " +
+            "VALUES (#{resourceType}, #{resourceId}, #{action}, #{actor}, #{requestId}, " +
+            "#{detailJson}, UTC_TIMESTAMP(3))")
     int insert(@Param("resourceType") String resourceType,
                @Param("resourceId") String resourceId,
                @Param("action") String action,

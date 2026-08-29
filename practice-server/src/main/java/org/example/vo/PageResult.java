@@ -19,6 +19,12 @@ public class PageResult<T> {
     }
 
     public static <T> PageResult<T> of(List<T> fullList, int pageNum, int pageSize) {
+        if (pageNum < 1) {
+            throw new IllegalArgumentException("page must be greater than or equal to 1");
+        }
+        if (pageSize < 1 || pageSize > 100) {
+            throw new IllegalArgumentException("pageSize must be between 1 and 100");
+        }
         if (fullList == null || fullList.isEmpty()) {
             return new PageResult<>(Collections.emptyList(), 0, pageNum, pageSize);
         }

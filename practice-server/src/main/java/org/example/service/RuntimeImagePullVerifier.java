@@ -5,7 +5,9 @@ import io.fabric8.kubernetes.api.model.LocalObjectReference;
 import io.fabric8.kubernetes.api.model.LocalObjectReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import lombok.extern.slf4j.Slf4j;
 import org.example.factory.K8sJobFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -16,13 +18,14 @@ import java.util.Map;
 import java.util.UUID;
 
 @Component
+@Slf4j
 public class RuntimeImagePullVerifier {
     private final K8sJobFactory k8sJobFactory;
     private final String namespace;
     private final int timeoutSeconds;
 
     public RuntimeImagePullVerifier(K8sJobFactory k8sJobFactory,
-                                    @Value("${dispatch.data-discovery.namespace:default}") String namespace,
+                                    @Value("${app.runtime-image.verify-namespace:topic4-1}") String namespace,
                                     @Value("${app.runtime-image.verify-timeout-seconds:60}") int timeoutSeconds) {
         this.k8sJobFactory = k8sJobFactory;
         this.namespace = namespace;
@@ -63,11 +66,19 @@ public class RuntimeImagePullVerifier {
                 .endMetadata()
                 .withNewSpec()
                     .withRestartPolicy("Never")
+                    .withActiveDeadlineSeconds((long) timeoutSeconds)
+                    .withTerminationGracePeriodSeconds(0L)
                     .withImagePullSecrets(pullSecrets)
                     .addNewContainer()
                         .withName("verify")
                         .withImage(imageRef)
                         .withCommand("sh", "-c", "exit 0")
+                        .withNewResources()
+                            .addToRequests("cpu", new Quantity("25m"))
+                            .addToRequests("memory", new Quantity("32Mi"))
+                            .addToLimits("cpu", new Quantity("100m"))
+                            .addToLimits("memory", new Quantity("128Mi"))
+                        .endResources()
                     .endContainer()
                 .endSpec()
                 .build();
@@ -101,7 +112,14 @@ public class RuntimeImagePullVerifier {
             }
             throw new IllegalStateException("cluster " + clusterId + " image pull verification timed out");
         } finally {
-            client.pods().inNamespace(namespace).withName(podName).delete();
+            try {
+                client.pods().inNamespace(namespace).withName(podName).delete();
+            } catch (RuntimeException cleanupError) {
+                // Cleanup must never hide the original create/pull result. The label and deadline
+                // make a leaked verifier pod easy and safe to reap separately.
+                log.warn("Failed to clean up runtime image verifier pod {}/{}: {}",
+                        namespace, podName, cleanupError.getMessage());
+            }
         }
     }
 

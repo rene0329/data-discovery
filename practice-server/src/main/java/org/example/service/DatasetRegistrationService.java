@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.dto.registration.RegisterDatasetRequest;
+import org.example.dto.registration.OperationResult;
 import org.example.dto.registration.RegisteredDatasetView;
 import org.example.dto.registration.ResourceRequirements;
 import org.example.dto.registration.UpdateDatasetRequest;
@@ -63,12 +64,15 @@ public class DatasetRegistrationService {
         this.discoveryPort = discoveryPort;
     }
 
-    public String discover(Set<Integer> nodeIds) {
-        List<NodeManagement> nodes = nodeMapper.listRegisteredNodes(null, "ACTIVE", true);
+    public OperationResult discover(Set<Integer> nodeIds) {
+        List<NodeManagement> nodes = nodeMapper.listRegisteredNodes(null, null, null).stream()
+                .filter(this::isEligibleDiscoveryNode)
+                .collect(Collectors.toList());
         if (nodeIds != null && !nodeIds.isEmpty()) {
             nodes = nodes.stream().filter(node -> nodeIds.contains(node.getNodeId())).collect(Collectors.toList());
         }
         int triggered = 0;
+        List<String> failedNodes = new java.util.ArrayList<>();
         for (NodeManagement node : nodes) {
             if (node.getInternalIp() == null || node.getInternalIp().isEmpty()) continue;
             String url = String.format("http://%s:%d/data-discovery/scan", node.getInternalIp(), discoveryPort);
@@ -77,29 +81,40 @@ public class DatasetRegistrationService {
                 if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null
                         && !"error".equals(String.valueOf(response.getBody().get("status")))) {
                     triggered++;
+                } else {
+                    failedNodes.add(node.getNodeName());
                 }
-            } catch (RestClientException ignored) {
-                // Discovery is best effort: one offline node must not prevent other agents from scanning.
+            } catch (RestClientException ex) {
+                failedNodes.add(node.getNodeName());
             }
         }
         String operationId = UUID.randomUUID().toString();
-        audit("DATASET", null, "DISCOVER", operationId, "triggered=" + triggered);
-        return operationId;
+        OperationResult result = OperationResult.discovery(
+                operationId, nodes.size(), triggered, failedNodes);
+        audit("DATASET", null, "DISCOVER", operationId,
+                "requestedNodes=" + nodes.size() + ",triggeredNodes=" + triggered
+                        + ",failedNodes=" + failedNodes);
+        return result;
     }
 
     public List<DatasetDiscoveryCandidate> listCandidates(String query, Integer nodeId) {
+        validateQuery(query);
         return mapper.listCandidates(query, nodeId, true);
     }
 
     public List<RegisteredDatasetView> listDatasets(String query, String status) {
-        return mapper.listDatasets(query, status).stream().map(this::toView).collect(Collectors.toList());
+        validateQuery(query);
+        validateDatasetStatus(status);
+        String normalizedStatus = status == null ? null : status.trim().toUpperCase();
+        return mapper.listDatasets(query, normalizedStatus).stream()
+                .map(this::toView).collect(Collectors.toList());
     }
 
     public RegisteredDatasetView getDataset(Long datasetId) {
         return toView(requireDataset(datasetId));
     }
 
-    @Transactional(noRollbackFor = RegistrationException.class)
+    @Transactional
     public RegisteredDatasetView register(RegisterDatasetRequest request, String requestId) {
         String existingResourceId = auditMapper.findResourceIdByRequest("DATASET", "REGISTER", requestId);
         if (existingResourceId != null) return getDataset(Long.valueOf(existingResourceId));
@@ -111,6 +126,9 @@ public class DatasetRegistrationService {
         }
         if (!"AVAILABLE".equals(candidate.getAvailability())) {
             throw RegistrationException.invalid("dataset candidate is not available");
+        }
+        if (mapper.findReplicaByNodePath(candidate.getNodeId(), candidate.getFilePath()) != null) {
+            throw RegistrationException.conflict("dataset file is already registered");
         }
         NodeManagement node = nodeMapper.getNodeById(candidate.getNodeId());
         if (node == null) throw RegistrationException.invalid("candidate node is not registered");
@@ -224,12 +242,18 @@ public class DatasetRegistrationService {
         requireDataset(datasetId);
         DatasetDiscoveryCandidate candidate = mapper.findCandidateById(candidateId);
         if (candidate == null) throw RegistrationException.notFound("dataset candidate not found");
+        if (candidate.getRegisteredDatasetId() != null
+                && !datasetId.equals(candidate.getRegisteredDatasetId())) {
+            throw RegistrationException.conflict("dataset candidate is already registered");
+        }
         if (!"AVAILABLE".equals(candidate.getAvailability())) {
             throw RegistrationException.invalid("dataset candidate is not available");
         }
-        DatasetReplica existing = mapper.findReplicaByDatasetNodePath(
-                datasetId, candidate.getNodeId(), candidate.getFilePath());
-        if (existing != null) return existing;
+        DatasetReplica existing = mapper.findReplicaByNodePath(candidate.getNodeId(), candidate.getFilePath());
+        if (existing != null) {
+            if (datasetId.equals(existing.getDatasetId())) return existing;
+            throw RegistrationException.conflict("dataset file is already registered");
+        }
         DatasetReplica replica = DatasetReplica.builder()
                 .datasetId(datasetId)
                 .nodeId(candidate.getNodeId())
@@ -278,6 +302,32 @@ public class DatasetRegistrationService {
         RegisteredDataset dataset = mapper.findDatasetById(datasetId);
         if (dataset == null) throw RegistrationException.notFound("registered dataset not found");
         return dataset;
+    }
+
+    private boolean isEligibleDiscoveryNode(NodeManagement node) {
+        if (node == null || node.getVerifiedAt() == null) return false;
+        String status = node.getRegistrationStatus();
+        if (!("REGISTERED".equals(status) || "ACTIVE".equals(status) || "DISABLED".equals(status))) {
+            return false;
+        }
+        String role = node.getType();
+        return role != null && ("storage".equalsIgnoreCase(role.trim())
+                || "compute-storage".equalsIgnoreCase(role.trim()));
+    }
+
+    private void validateQuery(String query) {
+        if (query != null && query.length() > 200) {
+            throw RegistrationException.invalid("query must not exceed 200 characters");
+        }
+    }
+
+    private void validateDatasetStatus(String status) {
+        if (status == null || status.trim().isEmpty()) return;
+        String normalized = status.trim().toUpperCase();
+        if (!java.util.Arrays.asList("DRAFT", "VERIFYING", "VERIFY_FAILED", "ACTIVE",
+                "DISABLED").contains(normalized)) {
+            throw RegistrationException.invalid("unsupported dataset status: " + status);
+        }
     }
 
     private RegisteredDatasetView toView(RegisteredDataset dataset) {

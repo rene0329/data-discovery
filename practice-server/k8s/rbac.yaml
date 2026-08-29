@@ -57,3 +57,28 @@ roleRef:
   kind: Role
   name: job-manager
   apiGroup: rbac.authorization.k8s.io
+---
+# 运行镜像校验只在业务命名空间创建短生命周期 Pod。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: runtime-image-verifier
+  namespace: topic4-1
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: runtime-image-verifier-binding
+  namespace: topic4-1
+subjects:
+  - kind: ServiceAccount
+    name: practice-server-sa
+    namespace: topic4-1
+roleRef:
+  kind: Role
+  name: runtime-image-verifier
+  apiGroup: rbac.authorization.k8s.io

@@ -7,6 +7,7 @@ import org.example.dto.registration.RegisterNodeRequest;
 import org.example.dto.registration.RegisteredNodeView;
 import org.example.dto.registration.UpdateNodeRequest;
 import org.example.service.NodeRegistrationService;
+import org.example.service.ApiIdempotencyService;
 import org.example.vo.ApiV1Response;
 import org.example.vo.PageResult;
 import org.springframework.http.HttpStatus;
@@ -30,17 +31,24 @@ import java.util.UUID;
 @RequestMapping("/api/v1")
 public class NodeRegistrationController {
     private final NodeRegistrationService service;
+    private final ApiIdempotencyService idempotency;
 
-    public NodeRegistrationController(NodeRegistrationService service) {
+    public NodeRegistrationController(NodeRegistrationService service,
+                                      ApiIdempotencyService idempotency) {
         this.service = service;
+        this.idempotency = idempotency;
     }
 
     @PostMapping("/node-discovery-runs")
     public ResponseEntity<ApiV1Response<OperationResult>> discover(
-            @RequestBody(required = false) NodeDiscoveryRequest request) {
-        String operationId = service.discover(request == null ? Collections.emptySet() : request.getClusterIds());
-        return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(ApiV1Response.ok(OperationResult.accepted(operationId, "node discovery completed")));
+            @RequestBody(required = false) NodeDiscoveryRequest request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
+        String id = requestId(requestId);
+        OperationResult result = idempotency.execute("NODE", "DISCOVER", id, null, request,
+                OperationResult.class,
+                () -> service.discover(request == null ? Collections.emptySet() : request.getClusterIds()),
+                OperationResult::getOperationId);
+        return ResponseEntity.ok(ApiV1Response.ok(result));
     }
 
     @GetMapping("/node-candidates")
@@ -68,7 +76,10 @@ public class NodeRegistrationController {
     public ResponseEntity<ApiV1Response<RegisteredNodeView>> register(
             @RequestBody RegisterNodeRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        RegisteredNodeView node = service.register(request, requestId(requestId));
+        String id = requestId(requestId);
+        RegisteredNodeView node = idempotency.execute("NODE", "REGISTER", id, null, request,
+                RegisteredNodeView.class, () -> service.register(request, id),
+                item -> String.valueOf(item.getNodeId()));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(node));
     }
 
@@ -82,41 +93,68 @@ public class NodeRegistrationController {
             @PathVariable Integer nodeId,
             @RequestBody UpdateNodeRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.update(nodeId, request, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredNodeView node = idempotency.execute("NODE", "UPDATE", id,
+                String.valueOf(nodeId), request, RegisteredNodeView.class,
+                () -> service.update(nodeId, request, id), item -> String.valueOf(item.getNodeId()));
+        return ApiV1Response.ok(node);
     }
 
     @PostMapping("/nodes/{nodeId}/verify")
     public ApiV1Response<RegisteredNodeView> verify(
             @PathVariable Integer nodeId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.verify(nodeId, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredNodeView node = idempotency.execute("NODE", "VERIFY", id,
+                String.valueOf(nodeId), null, RegisteredNodeView.class,
+                () -> service.verify(nodeId, id), item -> String.valueOf(item.getNodeId()));
+        return ApiV1Response.ok(node);
     }
 
     @PostMapping("/nodes/{nodeId}/sync")
-    public ApiV1Response<RegisteredNodeView> sync(@PathVariable Integer nodeId) {
-        return ApiV1Response.ok(service.sync(nodeId));
+    public ApiV1Response<RegisteredNodeView> sync(
+            @PathVariable Integer nodeId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
+        String id = requestId(requestId);
+        RegisteredNodeView node = idempotency.execute("NODE", "SYNC", id,
+                String.valueOf(nodeId), null, RegisteredNodeView.class,
+                () -> service.sync(nodeId), item -> String.valueOf(item.getNodeId()));
+        return ApiV1Response.ok(node);
     }
 
     @PostMapping("/nodes/{nodeId}/enable")
     public ApiV1Response<RegisteredNodeView> enable(
             @PathVariable Integer nodeId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.enable(nodeId, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredNodeView node = idempotency.execute("NODE", "ENABLE", id,
+                String.valueOf(nodeId), null, RegisteredNodeView.class,
+                () -> service.enable(nodeId, id), item -> String.valueOf(item.getNodeId()));
+        return ApiV1Response.ok(node);
     }
 
     @PostMapping("/nodes/{nodeId}/disable")
     public ApiV1Response<RegisteredNodeView> disable(
             @PathVariable Integer nodeId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.disable(nodeId, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredNodeView node = idempotency.execute("NODE", "DISABLE", id,
+                String.valueOf(nodeId), null, RegisteredNodeView.class,
+                () -> service.disable(nodeId, id), item -> String.valueOf(item.getNodeId()));
+        return ApiV1Response.ok(node);
     }
 
     @DeleteMapping("/nodes/{nodeId}")
     public ApiV1Response<OperationResult> unregister(
             @PathVariable Integer nodeId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        service.unregister(nodeId, requestId(requestId));
-        return ApiV1Response.ok(OperationResult.completed("node unregistered"));
+        String id = requestId(requestId);
+        OperationResult result = idempotency.execute("NODE", "UNREGISTER", id,
+                String.valueOf(nodeId), null, OperationResult.class, () -> {
+                    service.unregister(nodeId, id);
+                    return OperationResult.completed("node unregistered");
+                }, item -> String.valueOf(nodeId));
+        return ApiV1Response.ok(result);
     }
 
     private String requestId(String requestId) {

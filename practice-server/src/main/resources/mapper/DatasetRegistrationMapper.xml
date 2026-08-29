@@ -58,15 +58,19 @@
             useGeneratedKeys="true" keyProperty="candidateId">
         INSERT INTO dataset_discovery_candidate (
             node_id, file_path, file_name, file_type, size_bytes, checksum,
-            last_modified_at, availability, last_seen_at
+            last_modified_at, availability, registered_dataset_id, last_seen_at
         ) VALUES (
             #{nodeId}, #{filePath}, #{fileName}, #{fileType}, #{sizeBytes}, #{checksum},
-            #{lastModifiedAt}, #{availability}, #{lastSeenAt}
+            #{lastModifiedAt}, #{availability},
+            (SELECT r.dataset_id FROM dataset_replica r
+             WHERE r.node_id = #{nodeId} AND r.file_path = #{filePath} LIMIT 1),
+            #{lastSeenAt}
         )
         ON DUPLICATE KEY UPDATE
             file_name = VALUES(file_name), file_type = VALUES(file_type),
             size_bytes = VALUES(size_bytes), checksum = VALUES(checksum),
             last_modified_at = VALUES(last_modified_at), availability = VALUES(availability),
+            registered_dataset_id = COALESCE(registered_dataset_id, VALUES(registered_dataset_id)),
             last_seen_at = VALUES(last_seen_at)
     </insert>
 
@@ -98,7 +102,7 @@
 
     <update id="markCandidateAvailability">
         UPDATE dataset_discovery_candidate
-        SET availability = #{availability}, updated_at = CURRENT_TIMESTAMP(3)
+        SET availability = #{availability}, updated_at = UTC_TIMESTAMP(3)
         WHERE node_id = #{nodeId} AND file_path = #{filePath}
     </update>
 
@@ -146,7 +150,7 @@
     <update id="updateDatasetStatus">
         UPDATE registered_dataset
         SET status = #{status}, verification_message = #{verificationMessage},
-            verified_at = <choose><when test="verified">CURRENT_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
+            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
             row_version = row_version + 1
         WHERE dataset_id = #{datasetId} AND deleted_at IS NULL
     </update>
@@ -159,7 +163,7 @@
 
     <update id="softDeleteDataset">
         UPDATE registered_dataset
-        SET status = 'DELETED', deleted_at = CURRENT_TIMESTAMP(3), row_version = row_version + 1
+        SET status = 'DELETED', deleted_at = UTC_TIMESTAMP(3), row_version = row_version + 1
         WHERE dataset_id = #{datasetId} AND deleted_at IS NULL
     </update>
 
@@ -187,6 +191,12 @@
         WHERE dataset_id = #{datasetId} AND node_id = #{nodeId} AND file_path = #{filePath}
     </select>
 
+    <select id="findReplicaByNodePath" resultMap="ReplicaMap">
+        SELECT * FROM dataset_replica
+        WHERE node_id = #{nodeId} AND file_path = #{filePath}
+        LIMIT 1
+    </select>
+
     <select id="listReplicas" resultMap="ReplicaMap">
         SELECT * FROM dataset_replica WHERE dataset_id = #{datasetId} ORDER BY replica_id
     </select>
@@ -194,7 +204,7 @@
     <update id="updateReplicaAvailability">
         UPDATE dataset_replica
         SET availability = #{availability},
-            verified_at = <choose><when test="verified">CURRENT_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>
+            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>
         WHERE replica_id = #{replicaId}
     </update>
 

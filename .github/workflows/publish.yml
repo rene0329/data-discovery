@@ -28,9 +28,9 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # 3. Maven 编译打包（只编译 data-discovery 及其依赖，跳过测试）
+      # 3. Maven 编译打包并运行依赖模块与 Agent 测试
       - name: Build with Maven
-        run: mvn -pl data-discovery-daemonset-service -am package -DskipTests
+        run: mvn -pl data-discovery-daemonset-service -am package
 
       # 4. 将镜像名转为小写（Docker 不允许大写）
       - name: Lowercase image name

@@ -1,5 +1,6 @@
 package org.example.dto.registration;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import org.example.entity.NodeDiscoveryCandidate;
 
 import java.time.LocalDateTime;
@@ -18,6 +19,7 @@ public class NodeCandidateView {
     private String observedStatus;
     private Integer registeredNodeId;
     private Map<String, String> labels;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private LocalDateTime lastSeenAt;
 
     public static NodeCandidateView from(NodeDiscoveryCandidate entity, Map<String, String> labels) {

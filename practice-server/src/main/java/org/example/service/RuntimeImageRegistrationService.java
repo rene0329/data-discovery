@@ -39,7 +39,10 @@ public class RuntimeImageRegistrationService {
     }
 
     public List<RuntimeImageView> list(String query, String status) {
-        return mapper.list(query, status).stream().map(this::toView).collect(Collectors.toList());
+        validateQuery(query);
+        validateStatus(status);
+        String normalizedStatus = status == null ? null : status.trim().toUpperCase();
+        return mapper.list(query, normalizedStatus).stream().map(this::toView).collect(Collectors.toList());
     }
 
     public RuntimeImageView get(Long imageId) {
@@ -95,10 +98,12 @@ public class RuntimeImageRegistrationService {
             audit(String.valueOf(imageId), "VERIFY", requestId, result.getMessage());
             return get(imageId);
         } catch (RuntimeException e) {
-            String message = safeMessage(e);
-            mapper.updateStatus(imageId, "INVALID", false, null, message, false);
-            audit(String.valueOf(imageId), "VERIFY_FAILED", requestId, message);
-            throw RegistrationException.invalid("runtime image verification failed: " + message);
+            String internalMessage = safeMessage(e);
+            String publicMessage = publicFailureMessage(internalMessage);
+            mapper.updateStatus(imageId, "INVALID", false, null, publicMessage, false);
+            audit(String.valueOf(imageId), "VERIFY_FAILED", requestId, internalMessage);
+            throw RegistrationException.invalid(publicMessage,
+                    "runtime image verification failed: " + publicMessage);
         }
     }
 
@@ -212,6 +217,36 @@ public class RuntimeImageRegistrationService {
     private String safeMessage(RuntimeException e) {
         String message = e.getMessage();
         return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
+    }
+
+    private String publicFailureMessage(String message) {
+        String normalized = message == null ? "" : message.toLowerCase();
+        if (normalized.contains("forbidden") || normalized.contains("cannot create resource")
+                || normalized.contains("cannot delete resource")) {
+            return "IMAGE_VERIFY_FORBIDDEN";
+        }
+        if (normalized.contains("imagepullbackoff") || normalized.contains("errimagepull")
+                || normalized.contains("cannot pull image")) {
+            return "IMAGE_PULL_FAILED";
+        }
+        if (normalized.contains("timed out")) return "IMAGE_VERIFY_TIMEOUT";
+        if (normalized.contains("different digests")) return "IMAGE_DIGEST_MISMATCH";
+        return "IMAGE_VERIFY_FAILED";
+    }
+
+    private void validateQuery(String query) {
+        if (query != null && query.length() > 200) {
+            throw RegistrationException.invalid("query must not exceed 200 characters");
+        }
+    }
+
+    private void validateStatus(String status) {
+        if (status == null || status.trim().isEmpty()) return;
+        String normalized = status.trim().toUpperCase();
+        if (!java.util.Arrays.asList("DRAFT", "VERIFYING", "READY", "INVALID", "DISABLED")
+                .contains(normalized)) {
+            throw RegistrationException.invalid("unsupported runtime image status: " + status);
+        }
     }
 
     private void audit(String resourceId, String action, String requestId, String detail) {

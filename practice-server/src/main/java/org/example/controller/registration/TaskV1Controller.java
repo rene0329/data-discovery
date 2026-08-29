@@ -3,6 +3,7 @@ package org.example.controller.registration;
 import org.example.dto.registration.CreateTaskRequest;
 import org.example.dto.registration.TaskCreated;
 import org.example.service.TaskV1Service;
+import org.example.service.ApiIdempotencyService;
 import org.example.vo.ApiV1Response;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,9 +19,11 @@ import java.util.UUID;
 @RequestMapping("/api/v1/tasks")
 public class TaskV1Controller {
     private final TaskV1Service service;
+    private final ApiIdempotencyService idempotency;
 
-    public TaskV1Controller(TaskV1Service service) {
+    public TaskV1Controller(TaskV1Service service, ApiIdempotencyService idempotency) {
         this.service = service;
+        this.idempotency = idempotency;
     }
 
     @PostMapping
@@ -29,7 +32,9 @@ public class TaskV1Controller {
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
         String id = requestId == null || requestId.trim().isEmpty()
                 ? UUID.randomUUID().toString() : requestId.trim();
-        return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(ApiV1Response.ok(service.create(request, id)));
+        TaskCreated created = idempotency.execute("TASK", "CREATE", id, null, request,
+                TaskCreated.class, () -> service.create(request, id),
+                item -> String.valueOf(item.getTaskId()));
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiV1Response.ok(created));
     }
 }

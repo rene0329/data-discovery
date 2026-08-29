@@ -1,5 +1,6 @@
 package org.example.dto.registration;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import org.example.entity.RuntimeImage;
 
 import java.time.LocalDateTime;
@@ -19,6 +20,7 @@ public class RuntimeImageView {
     private String pullSecretRef;
     private String status;
     private Boolean enabled;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private LocalDateTime verifiedAt;
     private String verificationMessage;
     private Integer rowVersion;

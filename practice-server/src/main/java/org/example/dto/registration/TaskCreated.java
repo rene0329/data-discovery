@@ -1,8 +1,11 @@
 package org.example.dto.registration;
 
 public class TaskCreated {
-    private final Integer taskId;
-    private final String status;
+    private Integer taskId;
+    private String status;
+
+    public TaskCreated() {
+    }
 
     public TaskCreated(Integer taskId, String status) {
         this.taskId = taskId;
@@ -11,4 +14,6 @@ public class TaskCreated {
 
     public Integer getTaskId() { return taskId; }
     public String getStatus() { return status; }
+    public void setTaskId(Integer taskId) { this.taskId = taskId; }
+    public void setStatus(String status) { this.status = status; }
 }

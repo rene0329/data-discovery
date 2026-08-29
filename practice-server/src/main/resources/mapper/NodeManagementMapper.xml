@@ -186,21 +186,21 @@
     <update id="updateRegistrationState">
         UPDATE node_management
         SET registration_status = #{status}, enabled = #{enabled},
-            verified_at = <choose><when test="verified">CURRENT_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
+            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
             row_version = row_version + 1
         WHERE node_id = #{nodeId} AND deleted_at IS NULL
     </update>
 
     <update id="markOfflineByClusterAndK8sUid">
         UPDATE node_management
-        SET registration_status = 'OFFLINE', last_update_time = CURRENT_TIMESTAMP,
+        SET registration_status = 'OFFLINE', last_update_time = UTC_TIMESTAMP(),
             row_version = row_version + 1
         WHERE cluster = #{cluster} AND k8s_uid = #{k8sUid} AND deleted_at IS NULL
     </update>
 
     <update id="softDeleteRegisteredNode">
         UPDATE node_management
-        SET registration_status = 'DELETED', enabled = 0, deleted_at = CURRENT_TIMESTAMP(3),
+        SET registration_status = 'DELETED', enabled = 0, deleted_at = UTC_TIMESTAMP(3),
             row_version = row_version + 1
         WHERE node_id = #{nodeId} AND deleted_at IS NULL
     </update>

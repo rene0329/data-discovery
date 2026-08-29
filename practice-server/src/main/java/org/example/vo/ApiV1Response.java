@@ -7,6 +7,7 @@ import java.util.UUID;
 public class ApiV1Response<T> {
     private int code;
     private String msg;
+    private String errorCode;
     private T data;
     private String traceId;
     private long timestamp;
@@ -33,10 +34,18 @@ public class ApiV1Response<T> {
         return new ApiV1Response<>(code, msg, null);
     }
 
+    public static <T> ApiV1Response<T> error(int code, String errorCode, String msg) {
+        ApiV1Response<T> response = new ApiV1Response<>(code, msg, null);
+        response.errorCode = errorCode;
+        return response;
+    }
+
     public int getCode() { return code; }
     public void setCode(int code) { this.code = code; }
     public String getMsg() { return msg; }
     public void setMsg(String msg) { this.msg = msg; }
+    public String getErrorCode() { return errorCode; }
+    public void setErrorCode(String errorCode) { this.errorCode = errorCode; }
     public T getData() { return data; }
     public void setData(T data) { this.data = data; }
     public String getTraceId() { return traceId; }

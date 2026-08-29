@@ -39,10 +39,16 @@ spec:
               value: "10.212.14.90"
             - name: DISPATCH_CENTRAL_NODE_NAME
               value: "master-90"
+            - name: TZ
+              value: "UTC"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Duser.timezone=UTC"
+            - name: APP_RUNTIME_IMAGE_VERIFY_NAMESPACE
+              value: "topic4-1"
 
             # MySQL
             - name: SPRING_DATASOURCE_DRUID_URL
-              value: "jdbc:mysql://mysql.topic4-1.svc.cluster.local:3306/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8"
+              value: "jdbc:mysql://mysql.topic4-1.svc.cluster.local:3306/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8&sessionVariables=time_zone='%2B00:00'"
             - name: SPRING_DATASOURCE_DRUID_USERNAME
               value: "root"
             - name: SPRING_DATASOURCE_DRUID_PASSWORD

@@ -39,9 +39,9 @@ public class Knife4jConfig {  // 或 SwaggerConfig，根据你的命名
 
     private ApiInfo apiInfo() {
         return new ApiInfoBuilder()
-                .title("Data Discovery Daemonset Service API")
-                .description("文件发现服务 API 文档")
-                .version("1.0")
+                .title("虚拟原位数据中心系统 API")
+                .description("practice-server 业务接口与资源注册 API")
+                .version("1.1")
                 .build();
     }
 

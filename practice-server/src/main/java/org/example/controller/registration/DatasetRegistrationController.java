@@ -11,6 +11,7 @@ import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.DatasetReplica;
 import org.example.exception.RegistrationException;
 import org.example.service.DatasetRegistrationService;
+import org.example.service.ApiIdempotencyService;
 import org.example.vo.ApiV1Response;
 import org.example.vo.PageResult;
 import org.springframework.http.HttpStatus;
@@ -35,17 +36,24 @@ import java.util.UUID;
 @RequestMapping("/api/v1")
 public class DatasetRegistrationController {
     private final DatasetRegistrationService service;
+    private final ApiIdempotencyService idempotency;
 
-    public DatasetRegistrationController(DatasetRegistrationService service) {
+    public DatasetRegistrationController(DatasetRegistrationService service,
+                                         ApiIdempotencyService idempotency) {
         this.service = service;
+        this.idempotency = idempotency;
     }
 
     @PostMapping("/dataset-discovery-runs")
     public ResponseEntity<ApiV1Response<OperationResult>> discover(
-            @RequestBody(required = false) DatasetDiscoveryRequest request) {
-        String operationId = service.discover(request == null ? Collections.emptySet() : request.getNodeIds());
-        return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(ApiV1Response.ok(OperationResult.accepted(operationId, "dataset discovery triggered")));
+            @RequestBody(required = false) DatasetDiscoveryRequest request,
+            @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
+        String id = requestId(requestId);
+        OperationResult result = idempotency.execute("DATASET", "DISCOVER", id, null, request,
+                OperationResult.class,
+                () -> service.discover(request == null ? Collections.emptySet() : request.getNodeIds()),
+                OperationResult::getOperationId);
+        return ResponseEntity.ok(ApiV1Response.ok(result));
     }
 
     @GetMapping("/dataset-candidates")
@@ -71,7 +79,10 @@ public class DatasetRegistrationController {
     public ResponseEntity<ApiV1Response<RegisteredDatasetView>> register(
             @RequestBody RegisterDatasetRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        RegisteredDatasetView dataset = service.register(request, requestId(requestId));
+        String id = requestId(requestId);
+        RegisteredDatasetView dataset = idempotency.execute("DATASET", "REGISTER", id,
+                null, request, RegisteredDatasetView.class, () -> service.register(request, id),
+                item -> String.valueOf(item.getDatasetId()));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(dataset));
     }
 
@@ -85,28 +96,45 @@ public class DatasetRegistrationController {
             @PathVariable Long datasetId,
             @RequestBody UpdateDatasetRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.update(datasetId, request, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredDatasetView dataset = idempotency.execute("DATASET", "UPDATE", id,
+                String.valueOf(datasetId), request, RegisteredDatasetView.class,
+                () -> service.update(datasetId, request, id),
+                item -> String.valueOf(item.getDatasetId()));
+        return ApiV1Response.ok(dataset);
     }
 
     @PostMapping("/datasets/{datasetId}/verify")
     public ApiV1Response<RegisteredDatasetView> verify(
             @PathVariable Long datasetId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.verify(datasetId, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredDatasetView dataset = idempotency.execute("DATASET", "VERIFY", id,
+                String.valueOf(datasetId), null, RegisteredDatasetView.class,
+                () -> service.verify(datasetId, id), item -> String.valueOf(item.getDatasetId()));
+        return ApiV1Response.ok(dataset);
     }
 
     @PostMapping("/datasets/{datasetId}/activate")
     public ApiV1Response<RegisteredDatasetView> activate(
             @PathVariable Long datasetId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.activate(datasetId, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredDatasetView dataset = idempotency.execute("DATASET", "ACTIVATE", id,
+                String.valueOf(datasetId), null, RegisteredDatasetView.class,
+                () -> service.activate(datasetId, id), item -> String.valueOf(item.getDatasetId()));
+        return ApiV1Response.ok(dataset);
     }
 
     @PostMapping("/datasets/{datasetId}/disable")
     public ApiV1Response<RegisteredDatasetView> disable(
             @PathVariable Long datasetId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.disable(datasetId, requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredDatasetView dataset = idempotency.execute("DATASET", "DISABLE", id,
+                String.valueOf(datasetId), null, RegisteredDatasetView.class,
+                () -> service.disable(datasetId, id), item -> String.valueOf(item.getDatasetId()));
+        return ApiV1Response.ok(dataset);
     }
 
     @GetMapping("/datasets/{datasetId}/replicas")
@@ -122,8 +150,11 @@ public class DatasetRegistrationController {
         if (request == null || request.getCandidateId() == null) {
             throw RegistrationException.invalid("candidateId is required");
         }
-        DatasetReplica replica = service.addReplica(
-                datasetId, request.getCandidateId(), requestId(requestId));
+        String id = requestId(requestId);
+        DatasetReplica replica = idempotency.execute("DATASET", "ADD_REPLICA", id,
+                String.valueOf(datasetId), request, DatasetReplica.class,
+                () -> service.addReplica(datasetId, request.getCandidateId(), id),
+                item -> String.valueOf(item.getReplicaId()));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(replica));
     }
 
@@ -135,16 +166,25 @@ public class DatasetRegistrationController {
         if (request == null || request.getRuntimeImageId() == null) {
             throw RegistrationException.invalid("runtimeImageId is required");
         }
-        return ApiV1Response.ok(service.bindRuntimeImage(
-                datasetId, request.getRuntimeImageId(), requestId(requestId)));
+        String id = requestId(requestId);
+        RegisteredDatasetView dataset = idempotency.execute("DATASET", "BIND_IMAGE", id,
+                String.valueOf(datasetId), request, RegisteredDatasetView.class,
+                () -> service.bindRuntimeImage(datasetId, request.getRuntimeImageId(), id),
+                item -> String.valueOf(item.getDatasetId()));
+        return ApiV1Response.ok(dataset);
     }
 
     @DeleteMapping("/datasets/{datasetId}")
     public ApiV1Response<OperationResult> unregister(
             @PathVariable Long datasetId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        service.unregister(datasetId, requestId(requestId));
-        return ApiV1Response.ok(OperationResult.completed("dataset unregistered"));
+        String id = requestId(requestId);
+        OperationResult result = idempotency.execute("DATASET", "UNREGISTER", id,
+                String.valueOf(datasetId), null, OperationResult.class, () -> {
+                    service.unregister(datasetId, id);
+                    return OperationResult.completed("dataset unregistered");
+                }, item -> String.valueOf(datasetId));
+        return ApiV1Response.ok(result);
     }
 
     private String requestId(String requestId) {

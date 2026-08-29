@@ -74,14 +74,14 @@
         UPDATE runtime_image
         SET status = #{status}, enabled = #{enabled}, resolved_digest = #{resolvedDigest},
             verification_message = #{verificationMessage},
-            verified_at = <choose><when test="verified">CURRENT_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
+            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>,
             row_version = row_version + 1
         WHERE runtime_image_id = #{runtimeImageId} AND deleted_at IS NULL
     </update>
 
     <update id="softDelete">
         UPDATE runtime_image
-        SET status = 'DELETED', enabled = 0, deleted_at = CURRENT_TIMESTAMP(3), row_version = row_version + 1
+        SET status = 'DELETED', enabled = 0, deleted_at = UTC_TIMESTAMP(3), row_version = row_version + 1
         WHERE runtime_image_id = #{runtimeImageId} AND deleted_at IS NULL
     </update>
 

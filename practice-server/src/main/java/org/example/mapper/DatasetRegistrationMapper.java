@@ -44,6 +44,8 @@ public interface DatasetRegistrationMapper {
     DatasetReplica findReplicaByDatasetNodePath(@Param("datasetId") Long datasetId,
                                                 @Param("nodeId") Integer nodeId,
                                                 @Param("filePath") String filePath);
+    DatasetReplica findReplicaByNodePath(@Param("nodeId") Integer nodeId,
+                                         @Param("filePath") String filePath);
     List<DatasetReplica> listReplicas(Long datasetId);
     int updateReplicaAvailability(@Param("replicaId") Long replicaId,
                                   @Param("availability") String availability,

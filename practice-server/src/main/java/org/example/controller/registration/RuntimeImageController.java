@@ -5,6 +5,7 @@ import org.example.dto.registration.RegisterRuntimeImageRequest;
 import org.example.dto.registration.RuntimeImageView;
 import org.example.dto.registration.UpdateRuntimeImageRequest;
 import org.example.service.RuntimeImageRegistrationService;
+import org.example.service.ApiIdempotencyService;
 import org.example.vo.ApiV1Response;
 import org.example.vo.PageResult;
 import org.springframework.http.HttpStatus;
@@ -26,9 +27,12 @@ import java.util.UUID;
 @RequestMapping("/api/v1/runtime-images")
 public class RuntimeImageController {
     private final RuntimeImageRegistrationService service;
+    private final ApiIdempotencyService idempotency;
 
-    public RuntimeImageController(RuntimeImageRegistrationService service) {
+    public RuntimeImageController(RuntimeImageRegistrationService service,
+                                  ApiIdempotencyService idempotency) {
         this.service = service;
+        this.idempotency = idempotency;
     }
 
     @GetMapping
@@ -44,8 +48,11 @@ public class RuntimeImageController {
     public ResponseEntity<ApiV1Response<RuntimeImageView>> register(
             @RequestBody RegisterRuntimeImageRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiV1Response.ok(service.register(request, requestId(requestId))));
+        String id = requestId(requestId);
+        RuntimeImageView image = idempotency.execute("RUNTIME_IMAGE", "REGISTER", id,
+                null, request, RuntimeImageView.class, () -> service.register(request, id),
+                item -> String.valueOf(item.getImageId()));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(image));
     }
 
     @GetMapping("/{imageId}")
@@ -58,36 +65,57 @@ public class RuntimeImageController {
             @PathVariable Long imageId,
             @RequestBody UpdateRuntimeImageRequest request,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.update(imageId, request, requestId(requestId)));
+        String id = requestId(requestId);
+        RuntimeImageView image = idempotency.execute("RUNTIME_IMAGE", "UPDATE", id,
+                String.valueOf(imageId), request, RuntimeImageView.class,
+                () -> service.update(imageId, request, id), item -> String.valueOf(item.getImageId()));
+        return ApiV1Response.ok(image);
     }
 
     @PostMapping("/{imageId}/verify")
     public ApiV1Response<RuntimeImageView> verify(
             @PathVariable Long imageId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.verify(imageId, requestId(requestId)));
+        String id = requestId(requestId);
+        RuntimeImageView image = idempotency.execute("RUNTIME_IMAGE", "VERIFY", id,
+                String.valueOf(imageId), null, RuntimeImageView.class,
+                () -> service.verify(imageId, id), item -> String.valueOf(item.getImageId()));
+        return ApiV1Response.ok(image);
     }
 
     @PostMapping("/{imageId}/activate")
     public ApiV1Response<RuntimeImageView> activate(
             @PathVariable Long imageId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.activate(imageId, requestId(requestId)));
+        String id = requestId(requestId);
+        RuntimeImageView image = idempotency.execute("RUNTIME_IMAGE", "ACTIVATE", id,
+                String.valueOf(imageId), null, RuntimeImageView.class,
+                () -> service.activate(imageId, id), item -> String.valueOf(item.getImageId()));
+        return ApiV1Response.ok(image);
     }
 
     @PostMapping("/{imageId}/disable")
     public ApiV1Response<RuntimeImageView> disable(
             @PathVariable Long imageId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        return ApiV1Response.ok(service.disable(imageId, requestId(requestId)));
+        String id = requestId(requestId);
+        RuntimeImageView image = idempotency.execute("RUNTIME_IMAGE", "DISABLE", id,
+                String.valueOf(imageId), null, RuntimeImageView.class,
+                () -> service.disable(imageId, id), item -> String.valueOf(item.getImageId()));
+        return ApiV1Response.ok(image);
     }
 
     @DeleteMapping("/{imageId}")
     public ApiV1Response<OperationResult> unregister(
             @PathVariable Long imageId,
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        service.unregister(imageId, requestId(requestId));
-        return ApiV1Response.ok(OperationResult.completed("runtime image unregistered"));
+        String id = requestId(requestId);
+        OperationResult result = idempotency.execute("RUNTIME_IMAGE", "UNREGISTER", id,
+                String.valueOf(imageId), null, OperationResult.class, () -> {
+                    service.unregister(imageId, id);
+                    return OperationResult.completed("runtime image unregistered");
+                }, item -> String.valueOf(imageId));
+        return ApiV1Response.ok(result);
     }
 
     private String requestId(String requestId) {

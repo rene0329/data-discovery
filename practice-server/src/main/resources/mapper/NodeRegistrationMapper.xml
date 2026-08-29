@@ -80,7 +80,7 @@
 
     <update id="markCandidateOffline">
         UPDATE node_discovery_candidate
-        SET observed_status = 'OFFLINE', updated_at = CURRENT_TIMESTAMP(3)
+        SET observed_status = 'OFFLINE', updated_at = UTC_TIMESTAMP(3)
         WHERE cluster_id = #{clusterId} AND k8s_uid = #{k8sUid}
     </update>
 </mapper>

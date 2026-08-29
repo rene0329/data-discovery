@@ -52,7 +52,7 @@ class RuntimeImageRegistrationServiceTest {
 
         assertThrows(RegistrationException.class, () -> service.verify(7L, "request-2"));
         verify(mapper).updateStatus(eq(7L), eq("INVALID"), eq(false), eq(null),
-                eq("ImagePullBackOff"), eq(false));
+                eq("IMAGE_PULL_FAILED"), eq(false));
     }
 
     private RuntimeImage image(String status, String digest) {

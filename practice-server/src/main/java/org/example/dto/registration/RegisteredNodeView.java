@@ -1,5 +1,6 @@
 package org.example.dto.registration;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import org.example.entity.NodeManagement;
 
 import java.time.LocalDateTime;
@@ -21,7 +22,9 @@ public class RegisteredNodeView {
     private Double currentCpu;
     private Double currentMemoryGi;
     private Map<String, String> labels;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private LocalDateTime lastSeenAt;
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private LocalDateTime verifiedAt;
     private Integer version;
 
