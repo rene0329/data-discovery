@@ -6,6 +6,7 @@ import org.example.dto.registration.RegisterDatasetRequest;
 import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
+import org.example.entity.RegisteredDataset;
 import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
@@ -27,30 +28,34 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
 
 class DatasetRegistrationServiceTest {
     private DatasetRegistrationMapper mapper;
     private NodeManagementMapper nodeMapper;
     private RestTemplate restTemplate;
     private DatasetRegistrationService service;
+    private DatasetReplicaAvailabilityService replicaAvailabilityService;
 
     @BeforeEach
     void setUp() {
         mapper = mock(DatasetRegistrationMapper.class);
         nodeMapper = mock(NodeManagementMapper.class);
         restTemplate = mock(RestTemplate.class);
+        replicaAvailabilityService = mock(DatasetReplicaAvailabilityService.class);
         service = new DatasetRegistrationService(mapper, nodeMapper, mock(RuntimeImageMapper.class),
-                mock(RegistrationAuditMapper.class), new ObjectMapper(), restTemplate, 8080);
+                mock(RegistrationAuditMapper.class), new ObjectMapper(), restTemplate,
+                replicaAvailabilityService, 8080);
     }
 
     @Test
     void discoveryUsesVerifiedStorageNodesEvenWhenSchedulingIsDisabled() {
         NodeManagement storage = NodeManagement.builder().nodeId(1).nodeName("storage-1")
                 .internalIp("10.0.0.1").type("storage").registrationStatus("REGISTERED")
-                .enabled(false).verifiedAt(LocalDateTime.now()).build();
+                .enabled(false).observedStatus("ONLINE").verifiedAt(LocalDateTime.now()).build();
         NodeManagement compute = NodeManagement.builder().nodeId(2).nodeName("compute-1")
                 .internalIp("10.0.0.2").type("compute").registrationStatus("REGISTERED")
-                .enabled(false).verifiedAt(LocalDateTime.now()).build();
+                .enabled(false).observedStatus("ONLINE").verifiedAt(LocalDateTime.now()).build();
         when(nodeMapper.listRegisteredNodes(null, null, null))
                 .thenReturn(Arrays.asList(storage, compute));
         Map<String, Object> response = new HashMap<>();
@@ -81,5 +86,34 @@ class DatasetRegistrationServiceTest {
                 .thenReturn(DatasetReplica.builder().replicaId(3L).datasetId(2L).build());
 
         assertThrows(RegistrationException.class, () -> service.register(request, "request-1"));
+    }
+
+    @Test
+    void datasetViewSummarizesReplicaBusinessHealth() {
+        RegisteredDataset dataset = RegisteredDataset.builder().datasetId(5L)
+                .datasetCode("sales").name("sales").status("ACTIVE").build();
+        DatasetReplica usable = DatasetReplica.builder().replicaId(1L).nodeId(1)
+                .availability("AVAILABLE").build();
+        DatasetReplica unreachable = DatasetReplica.builder().replicaId(2L).nodeId(2)
+                .availability("AVAILABLE").build();
+        when(mapper.listDatasets("", null)).thenReturn(Collections.singletonList(dataset));
+        when(mapper.listReplicas(5L)).thenReturn(Arrays.asList(usable, unreachable));
+        doAnswer(invocation -> {
+            DatasetReplica replica = invocation.getArgument(0);
+            if (replica.getReplicaId().equals(1L)) replica.setEffectiveAvailability("USABLE");
+            else {
+                replica.setEffectiveAvailability("UNREACHABLE");
+                replica.setStatusReason("节点未启用");
+            }
+            return null;
+        }).when(replicaAvailabilityService).enrich(org.mockito.ArgumentMatchers.any(DatasetReplica.class));
+
+        org.example.dto.registration.RegisteredDatasetView view =
+                service.listDatasets("", null).get(0);
+
+        assertEquals("DEGRADED", view.getHealthStatus());
+        assertEquals(1, view.getAvailableReplicaCount());
+        assertEquals(2, view.getTotalReplicaCount());
+        assertEquals("节点未启用", view.getStatusReason());
     }
 }

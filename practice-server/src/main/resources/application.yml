@@ -144,6 +144,8 @@ app:
 
   node-sync:
     enabled: true   # 仅 practice-server 启用，heat-update-cronjob 不设此属性故默认 false
+    stale-after-seconds: 300
+    offline-failure-threshold: 3
 
   heat-update:
     access-alpha: 0.90

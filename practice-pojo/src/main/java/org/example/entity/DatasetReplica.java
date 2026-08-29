@@ -20,6 +20,9 @@ public class DatasetReplica {
     private Long sizeBytes;
     private String checksum;
     private String availability;
+    // Derived business availability; not persisted in dataset_replica.
+    private String effectiveAvailability;
+    private String statusReason;
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private LocalDateTime lastSeenAt;
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")

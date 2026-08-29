@@ -66,6 +66,7 @@ public class K8sTaskOrchestratorService {
     private final String centralNodeName;
     private final String centralNodeIp;
     private final Executor dataProcessingExecutor;
+    private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
     /** 当亲和性调度的目标节点就是数据所在源节点时，跳过实际 Job 直接返回此基础时间(ms)，当文件大小为0时兜底使用。*/
@@ -111,7 +112,8 @@ public class K8sTaskOrchestratorService {
             ObjectMapper objectMapper,
             @Value("${dispatch.central-node.name:}") String centralNodeName,
             @Value("${dispatch.central-node.ip:}") String centralNodeIp,
-            @Qualifier("dataProcessingExecutor") Executor dataProcessingExecutor
+            @Qualifier("dataProcessingExecutor") Executor dataProcessingExecutor,
+            DatasetReplicaAvailabilityService replicaAvailabilityService
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -124,6 +126,7 @@ public class K8sTaskOrchestratorService {
         this.centralNodeName = centralNodeName;
         this.centralNodeIp = centralNodeIp;
         this.dataProcessingExecutor = dataProcessingExecutor;
+        this.replicaAvailabilityService = replicaAvailabilityService;
     }
 
 
@@ -257,12 +260,7 @@ public class K8sTaskOrchestratorService {
             throw new IllegalStateException("数据集不存在或不再处于 ACTIVE: " + datasetId);
         }
         DatasetReplica replica = datasetRegistrationMapper.listReplicas(datasetId).stream()
-                .filter(item -> "AVAILABLE".equals(item.getAvailability()))
-                .filter(item -> {
-                    NodeManagement node = nodeManagementMapper.getNodeById(item.getNodeId());
-                    return node != null && "ACTIVE".equals(node.getRegistrationStatus())
-                            && Boolean.TRUE.equals(node.getEnabled());
-                })
+                .filter(item -> replicaAvailabilityService.evaluate(item).isUsable())
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("数据集没有位于活动节点上的可用副本: " + datasetId));
         NodeManagement sourceNode = nodeManagementMapper.getNodeById(replica.getNodeId());

@@ -2,6 +2,7 @@ package org.example.dto.registration;
 
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
+import org.example.service.NodeAvailability;
 import org.example.json.JacksonObjectMapper;
 import org.junit.jupiter.api.Test;
 
@@ -16,7 +17,8 @@ class RegistrationTimeSerializationTest {
         LocalDateTime time = LocalDateTime.of(2026, 8, 29, 8, 15, 30);
         NodeManagement node = NodeManagement.builder()
                 .nodeId(2).nodeName("compute-1").lastSeenAt(time).verifiedAt(time).build();
-        RegisteredNodeView nodeView = RegisteredNodeView.from(node, Collections.emptyMap());
+        RegisteredNodeView nodeView = RegisteredNodeView.from(node, Collections.emptyMap(),
+                new NodeAvailability("AVAILABLE", true, null));
         DatasetReplica replica = DatasetReplica.builder().replicaId(1L).lastSeenAt(time).build();
 
         JacksonObjectMapper mapper = new JacksonObjectMapper();

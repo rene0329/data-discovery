@@ -35,6 +35,10 @@ public class NodeManagement {
     // 注册状态由管理面维护；K8s 同步只更新观测字段。
     private String registrationStatus;
     private Boolean enabled;
+    // Kubernetes/Agent observation state; never replaces administrator intent in enabled.
+    private String observedStatus;
+    private String observedStatusReason;
+    private Integer offlineObservationCount;
     private String labelsJson;
     private LocalDateTime lastSeenAt;
     private LocalDateTime verifiedAt;
@@ -42,4 +46,3 @@ public class NodeManagement {
     private Integer rowVersion;
 
 }
-

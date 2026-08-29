@@ -8,6 +8,8 @@ import org.example.mapper.MigrationTaskMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.example.service.K8sTaskOrchestratorService; // 引入新的后台服务
+import org.example.service.NodeAvailability;
+import org.example.service.NodeAvailabilityService;
 import org.example.vo.NodeManagementVO;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -45,6 +47,7 @@ public class CommonController {
     private final EdgeManagementMapper edgeManagementMapper;
     private final K8sTaskOrchestratorService k8sTaskOrchestratorService;
     private final RestTemplate restTemplate;
+    private final NodeAvailabilityService nodeAvailabilityService;
 
     // data-discovery DaemonSet 寻址配置
     @Value("${dispatch.data-discovery.port:8080}")
@@ -76,7 +79,8 @@ public class CommonController {
             MigrationTaskMapper migrationTaskMapper,
             EdgeManagementMapper edgeManagementMapper,
             K8sTaskOrchestratorService k8sTaskOrchestratorService,
-            RestTemplate restTemplate
+            RestTemplate restTemplate,
+            NodeAvailabilityService nodeAvailabilityService
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -85,6 +89,7 @@ public class CommonController {
         this.edgeManagementMapper = edgeManagementMapper;
         this.k8sTaskOrchestratorService = k8sTaskOrchestratorService;
         this.restTemplate = restTemplate;
+        this.nodeAvailabilityService = nodeAvailabilityService;
     }
 
     /**
@@ -795,8 +800,13 @@ public class CommonController {
      * 网络拓扑聚合（节点+边），用于前端 networkTopology。
      */
     @GetMapping("/networkTopology")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> networkTopology() {
+    public ResponseEntity<ApiResponse<Map<String, Object>>> networkTopology(
+            @RequestParam(defaultValue = "false") boolean activeOnly) {
         List<NodeManagement> nodeList = nodeManagementMapper.networkConstruction();
+        if (activeOnly) {
+            nodeList = nodeList.stream().filter(nodeAvailabilityService::isSchedulable)
+                    .collect(Collectors.toList());
+        }
 
         // 构建 nodeId -> nodeName 映射，供边查找
         Map<Integer, String> nodeIdToName = new HashMap<>();
@@ -805,6 +815,7 @@ public class CommonController {
         double cx = 400, cy = 300, radius = 180;
         for (int i = 0; i < total; i++) {
             NodeManagement node = nodeList.get(i);
+            NodeAvailability availability = nodeAvailabilityService.evaluate(node);
             nodeIdToName.put(node.getNodeId(), node.getNodeName());
             // 圆形自动布局，从顶部开始顺时针排列
             double angle = 2 * Math.PI * i / Math.max(total, 1) - Math.PI / 2;
@@ -823,6 +834,12 @@ public class CommonController {
             double memPct = (node.getCurrentMemory() != null && node.getMaxMemory() != null && node.getMaxMemory() > 0)
                     ? node.getCurrentMemory() / node.getMaxMemory() * 100.0 : 0.0;
             nodeMap.put("disk", Math.round(memPct * 10.0) / 10.0);
+            nodeMap.put("registrationStatus", node.getRegistrationStatus());
+            nodeMap.put("enabled", node.getEnabled());
+            nodeMap.put("observedStatus", node.getObservedStatus());
+            nodeMap.put("effectiveStatus", availability.getEffectiveStatus());
+            nodeMap.put("schedulable", availability.isSchedulable());
+            nodeMap.put("statusReason", availability.getReason());
             nodePayload.add(nodeMap);
         }
 
@@ -840,6 +857,12 @@ public class CommonController {
             edgeMap.put("target", targetName);
             edgeMap.put("latency", edge.getLatency() != null ? edge.getLatency() : 0);
             edgeMap.put("bandwidth", edge.getBandwidth() != null ? edge.getBandwidth() : 0);
+            NodeManagement sourceNode = nodeList.stream()
+                    .filter(node -> node.getNodeId().equals(edge.getSourceId())).findFirst().orElse(null);
+            NodeManagement targetNode = nodeList.stream()
+                    .filter(node -> node.getNodeId().equals(edge.getTargetId())).findFirst().orElse(null);
+            edgeMap.put("active", nodeAvailabilityService.isSchedulable(sourceNode)
+                    && nodeAvailabilityService.isSchedulable(targetNode));
             edgePayload.add(edgeMap);
         }
 

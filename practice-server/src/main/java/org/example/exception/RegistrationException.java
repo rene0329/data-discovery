@@ -26,6 +26,10 @@ public class RegistrationException extends RuntimeException {
         return new RegistrationException(HttpStatus.NOT_FOUND, message);
     }
 
+    public static RegistrationException notFound(String errorCode, String message) {
+        return new RegistrationException(HttpStatus.NOT_FOUND, errorCode, message);
+    }
+
     public static RegistrationException conflict(String message) {
         return new RegistrationException(HttpStatus.CONFLICT, message);
     }

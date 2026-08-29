@@ -47,6 +47,7 @@ public class DatasetRegistrationService {
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
     private final int discoveryPort;
+    private final DatasetReplicaAvailabilityService replicaAvailabilityService;
 
     public DatasetRegistrationService(DatasetRegistrationMapper mapper,
                                       NodeManagementMapper nodeMapper,
@@ -54,6 +55,7 @@ public class DatasetRegistrationService {
                                       RegistrationAuditMapper auditMapper,
                                       ObjectMapper objectMapper,
                                       RestTemplate restTemplate,
+                                      DatasetReplicaAvailabilityService replicaAvailabilityService,
                                       @Value("${dispatch.data-discovery.port:8080}") int discoveryPort) {
         this.mapper = mapper;
         this.nodeMapper = nodeMapper;
@@ -62,6 +64,7 @@ public class DatasetRegistrationService {
         this.objectMapper = objectMapper;
         this.restTemplate = restTemplate;
         this.discoveryPort = discoveryPort;
+        this.replicaAvailabilityService = replicaAvailabilityService;
     }
 
     public OperationResult discover(Set<Integer> nodeIds) {
@@ -221,8 +224,9 @@ public class DatasetRegistrationService {
     @Transactional
     public RegisteredDatasetView activate(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
-        if (dataset.getVerifiedAt() == null || mapper.countAvailableReplicas(datasetId) == 0) {
-            throw RegistrationException.conflict("dataset must have a verified available replica");
+        if (dataset.getVerifiedAt() == null || countUsableReplicas(datasetId) == 0) {
+            throw RegistrationException.conflict("DATASET_NO_USABLE_REPLICA",
+                    "dataset must have a verified replica on an available node");
         }
         mapper.updateDatasetStatus(datasetId, "ACTIVE", dataset.getVerificationMessage(), false);
         audit("DATASET", String.valueOf(datasetId), "ACTIVATE", requestId, null);
@@ -271,7 +275,9 @@ public class DatasetRegistrationService {
 
     public List<DatasetReplica> listReplicas(Long datasetId) {
         requireDataset(datasetId);
-        return mapper.listReplicas(datasetId);
+        List<DatasetReplica> replicas = mapper.listReplicas(datasetId);
+        replicas.forEach(replicaAvailabilityService::enrich);
+        return replicas;
     }
 
     @Transactional
@@ -306,6 +312,7 @@ public class DatasetRegistrationService {
 
     private boolean isEligibleDiscoveryNode(NodeManagement node) {
         if (node == null || node.getVerifiedAt() == null) return false;
+        if (!("ONLINE".equals(node.getObservedStatus()) || node.getObservedStatus() == null)) return false;
         String status = node.getRegistrationStatus();
         if (!("REGISTERED".equals(status) || "ACTIVE".equals(status) || "DISABLED".equals(status))) {
             return false;
@@ -331,8 +338,29 @@ public class DatasetRegistrationService {
     }
 
     private RegisteredDatasetView toView(RegisteredDataset dataset) {
-        return RegisteredDatasetView.from(dataset, readLabels(dataset.getLabelsJson()),
-                mapper.listReplicas(dataset.getDatasetId()));
+        List<DatasetReplica> replicas = mapper.listReplicas(dataset.getDatasetId());
+        int usable = 0;
+        String reason = null;
+        for (DatasetReplica replica : replicas) {
+            replicaAvailabilityService.enrich(replica);
+            if ("USABLE".equals(replica.getEffectiveAvailability())) usable++;
+            else if (reason == null) reason = replica.getStatusReason();
+        }
+        RegisteredDatasetView view = RegisteredDatasetView.from(dataset,
+                readLabels(dataset.getLabelsJson()), replicas);
+        String health = usable == 0 ? "UNAVAILABLE"
+                : usable < replicas.size() ? "DEGRADED" : "HEALTHY";
+        view.setReplicaHealth(health, usable, replicas.size(),
+                usable == replicas.size() ? null : reason);
+        return view;
+    }
+
+    private int countUsableReplicas(Long datasetId) {
+        int count = 0;
+        for (DatasetReplica replica : mapper.listReplicas(datasetId)) {
+            if (replicaAvailabilityService.evaluate(replica).isUsable()) count++;
+        }
+        return count;
     }
 
     private void validateRegisterRequest(RegisterDatasetRequest request) {

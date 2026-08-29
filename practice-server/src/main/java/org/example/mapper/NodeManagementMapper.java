@@ -37,6 +37,8 @@ public interface NodeManagementMapper {
                                              @Param("status") String status,
                                              @Param("enabled") Boolean enabled);
 
+    List<NodeManagement> listRegisteredNodesByCluster(@Param("cluster") String cluster);
+
     /**
      * 查询所有具备计算能力的节点（纯计算节点 + 计算存储双角色节点），供 K8sJobFactory 调度使用。
      * 不依赖 K8s label，以 DB 记录为准，支持双角色节点。
@@ -93,7 +95,8 @@ public interface NodeManagementMapper {
                                 @Param("verified") boolean verified);
 
     int markOfflineByClusterAndK8sUid(@Param("cluster") String cluster,
-                                      @Param("k8sUid") String k8sUid);
+                                      @Param("k8sUid") String k8sUid,
+                                      @Param("threshold") int threshold);
 
     int softDeleteRegisteredNode(Integer nodeId);
 

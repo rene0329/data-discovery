@@ -44,6 +44,12 @@
         ORDER BY node_id
     </select>
 
+    <select id="listRegisteredNodesByCluster" resultType="org.example.entity.NodeManagement">
+        SELECT * FROM node_management
+        WHERE cluster = #{cluster} AND deleted_at IS NULL
+        ORDER BY node_id
+    </select>
+
     <update id="updateSystemInfo">
         UPDATE node_management
         SET current_cpu = #{cpu},
@@ -148,11 +154,13 @@
         INSERT INTO node_management (
             node_name, display_name, external_ip, internal_ip, type, cluster, k8s_uid,
             max_cpu, max_memory, current_cpu, current_memory, num_dataset, last_update_time,
-            registration_status, enabled, labels_json, last_seen_at, verified_at, row_version
+            registration_status, enabled, observed_status, observed_status_reason,
+            offline_observation_count, labels_json, last_seen_at, verified_at, row_version
         ) VALUES (
             #{nodeName}, #{displayName}, #{externalIp}, #{internalIp}, #{type}, #{cluster}, #{k8sUid},
             #{maxCpu}, #{maxMemory}, #{currentCpu}, #{currentMemory}, #{numDataset}, #{lastUpdateTime},
-            #{registrationStatus}, #{enabled}, #{labelsJson}, #{lastSeenAt}, #{verifiedAt}, 0
+            #{registrationStatus}, #{enabled}, #{observedStatus}, #{observedStatusReason},
+            #{offlineObservationCount}, #{labelsJson}, #{lastSeenAt}, #{verifiedAt}, 0
         )
     </insert>
 
@@ -162,10 +170,9 @@
             max_cpu = #{maxCpu}, max_memory = #{maxMemory}, current_cpu = #{currentCpu},
             current_memory = #{currentMemory}, num_dataset = #{numDataset},
             last_update_time = #{lastUpdateTime}, last_seen_at = #{lastSeenAt},
-            registration_status = CASE
-                WHEN registration_status = 'OFFLINE' AND enabled = 1 THEN 'ACTIVE'
-                ELSE registration_status
-            END
+            observed_status = #{observedStatus},
+            observed_status_reason = #{observedStatusReason},
+            offline_observation_count = 0
         WHERE node_id = #{nodeId} AND deleted_at IS NULL
     </update>
 
@@ -193,8 +200,17 @@
 
     <update id="markOfflineByClusterAndK8sUid">
         UPDATE node_management
-        SET registration_status = 'OFFLINE', last_update_time = UTC_TIMESTAMP(),
-            row_version = row_version + 1
+        SET offline_observation_count = offline_observation_count + 1,
+            observed_status = CASE
+                WHEN offline_observation_count + 1 &gt;= #{threshold} THEN 'OFFLINE'
+                ELSE observed_status
+            END,
+            observed_status_reason = CASE
+                WHEN offline_observation_count + 1 &gt;= #{threshold}
+                    THEN 'Kubernetes node was not observed in consecutive checks'
+                ELSE observed_status_reason
+            END,
+            last_update_time = UTC_TIMESTAMP()
         WHERE cluster = #{cluster} AND k8s_uid = #{k8sUid} AND deleted_at IS NULL
     </update>
 

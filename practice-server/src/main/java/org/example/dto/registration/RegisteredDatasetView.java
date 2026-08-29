@@ -18,6 +18,10 @@ public class RegisteredDatasetView {
     private ResourceRequirements requiredResources;
     private Long defaultRuntimeImageId;
     private List<DatasetReplica> replicas;
+    private String healthStatus;
+    private Integer availableReplicaCount;
+    private Integer totalReplicaCount;
+    private String statusReason;
     private Integer rowVersion;
 
     public static RegisteredDatasetView from(RegisteredDataset entity, Map<String, String> labels,
@@ -54,4 +58,16 @@ public class RegisteredDatasetView {
     public Long getDefaultRuntimeImageId() { return defaultRuntimeImageId; }
     public List<DatasetReplica> getReplicas() { return replicas; }
     public Integer getRowVersion() { return rowVersion; }
+    public String getHealthStatus() { return healthStatus; }
+    public Integer getAvailableReplicaCount() { return availableReplicaCount; }
+    public Integer getTotalReplicaCount() { return totalReplicaCount; }
+    public String getStatusReason() { return statusReason; }
+
+    public void setReplicaHealth(String healthStatus, int availableReplicaCount,
+                                 int totalReplicaCount, String statusReason) {
+        this.healthStatus = healthStatus;
+        this.availableReplicaCount = availableReplicaCount;
+        this.totalReplicaCount = totalReplicaCount;
+        this.statusReason = statusReason;
+    }
 }

@@ -2,6 +2,7 @@ package org.example.controller.registration;
 
 import org.example.dto.registration.CreateTaskRequest;
 import org.example.dto.registration.TaskCreated;
+import org.example.dto.registration.TaskPreflightResult;
 import org.example.service.TaskV1Service;
 import org.example.service.ApiIdempotencyService;
 import org.example.vo.ApiV1Response;
@@ -36,5 +37,10 @@ public class TaskV1Controller {
                 TaskCreated.class, () -> service.create(request, id),
                 item -> String.valueOf(item.getTaskId()));
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiV1Response.ok(created));
+    }
+
+    @PostMapping("/preflight")
+    public ApiV1Response<TaskPreflightResult> preflight(@RequestBody CreateTaskRequest request) {
+        return ApiV1Response.ok(service.preflight(request));
     }
 }

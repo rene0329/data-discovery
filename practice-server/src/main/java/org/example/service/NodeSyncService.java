@@ -253,6 +253,8 @@ import org.springframework.stereotype.Service;
 import javax.annotation.PostConstruct;
 import java.util.List;
 import java.util.Map; // <-- 可能需要这个
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap; // <-- 可能需要这个
 
 @Service
@@ -294,6 +296,7 @@ public class NodeSyncService {
     private void initialFullSync(KubernetesClient client, String clusterId) { // <-- 传入 clusterId，避免 in-cluster null context
         List<Node> nodes = client.nodes().list().getItems();
         nodes.forEach(node -> syncNode(node, client, clusterId)); // 将 client 传入 syncNode
+        nodeRegistrationService.reconcileMissingNodes(clusterId, observedUids(nodes, clusterId));
     }
 
     /**
@@ -305,6 +308,7 @@ public class NodeSyncService {
         k8sJobFactory.getClusterClients().forEach((clusterId, client) -> { // <-- 遍历所有客户端
             List<Node> nodes = client.nodes().list().getItems();
             nodes.forEach(node -> syncNode(node, client, clusterId)); // 将 client 传入 syncNode
+            nodeRegistrationService.reconcileMissingNodes(clusterId, observedUids(nodes, clusterId));
         });
     }
 
@@ -313,6 +317,19 @@ public class NodeSyncService {
      */
     private void syncNode(Node k8sNode, KubernetesClient client, String clusterId) { // <-- 添加 clusterId 参数
         nodeRegistrationService.observeNode(k8sNode, client, clusterId);
+    }
+
+    private Set<String> observedUids(List<Node> nodes, String clusterId) {
+        Set<String> uids = new HashSet<>();
+        for (Node node : nodes) {
+            if (node == null || node.getMetadata() == null) continue;
+            String uid = node.getMetadata().getUid();
+            if (uid == null || uid.isEmpty()) {
+                uid = "synthetic:" + clusterId + ":" + node.getMetadata().getName();
+            }
+            uids.add(uid);
+        }
+        return uids;
     }
 
     /**

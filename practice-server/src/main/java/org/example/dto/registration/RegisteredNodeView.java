@@ -2,6 +2,7 @@ package org.example.dto.registration;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import org.example.entity.NodeManagement;
+import org.example.service.NodeAvailability;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -15,6 +16,10 @@ public class RegisteredNodeView {
     private String role;
     private String registrationStatus;
     private Boolean enabled;
+    private String observedStatus;
+    private String effectiveStatus;
+    private Boolean schedulable;
+    private String statusReason;
     private String internalIp;
     private String externalIp;
     private Double maxCpu;
@@ -28,7 +33,8 @@ public class RegisteredNodeView {
     private LocalDateTime verifiedAt;
     private Integer version;
 
-    public static RegisteredNodeView from(NodeManagement entity, Map<String, String> labels) {
+    public static RegisteredNodeView from(NodeManagement entity, Map<String, String> labels,
+                                          NodeAvailability availability) {
         RegisteredNodeView view = new RegisteredNodeView();
         view.nodeId = entity.getNodeId();
         view.clusterId = entity.getCluster();
@@ -38,6 +44,10 @@ public class RegisteredNodeView {
         view.role = toApiRole(entity.getType());
         view.registrationStatus = entity.getRegistrationStatus();
         view.enabled = entity.getEnabled();
+        view.observedStatus = entity.getObservedStatus();
+        view.effectiveStatus = availability.getEffectiveStatus();
+        view.schedulable = availability.isSchedulable();
+        view.statusReason = availability.getReason();
         view.internalIp = entity.getInternalIp();
         view.externalIp = entity.getExternalIp();
         view.maxCpu = entity.getMaxCpu();
@@ -64,6 +74,10 @@ public class RegisteredNodeView {
     public String getRole() { return role; }
     public String getRegistrationStatus() { return registrationStatus; }
     public Boolean getEnabled() { return enabled; }
+    public String getObservedStatus() { return observedStatus; }
+    public String getEffectiveStatus() { return effectiveStatus; }
+    public Boolean getSchedulable() { return schedulable; }
+    public String getStatusReason() { return statusReason; }
     public String getInternalIp() { return internalIp; }
     public String getExternalIp() { return externalIp; }
     public Double getMaxCpu() { return maxCpu; }

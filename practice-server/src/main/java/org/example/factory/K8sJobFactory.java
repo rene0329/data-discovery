@@ -15,6 +15,7 @@ import org.example.entity.TrainingProfile;
 import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TrainingProfileMapper;
+import org.example.service.NodeAvailabilityService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -51,6 +52,7 @@ public class K8sJobFactory {
     private final String discoveryNamespace;
     private final int discoveryPort;
     private final String wgetLimitRate;
+    private final NodeAvailabilityService nodeAvailabilityService;
 
     /** 路径级限速: master-89 -> master-88（旧 master-141 -> master-40） */
     @Value("${dispatch.job.curl.limit-rate.n89-to-88:}")
@@ -170,7 +172,8 @@ public class K8sJobFactory {
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
             @Value("${dispatch.job.curl.limit-rate.default:}") String wgetLimitRate,
             @Value("${dispatch.training.n-epochs:15}") int nEpochs,
-            EdgeManagementMapper edgeManagementMapper
+            EdgeManagementMapper edgeManagementMapper,
+            NodeAvailabilityService nodeAvailabilityService
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -184,6 +187,7 @@ public class K8sJobFactory {
         this.discoveryPort = discoveryPort;
         this.wgetLimitRate = wgetLimitRate;
         this.nEpochs = nEpochs;
+        this.nodeAvailabilityService = nodeAvailabilityService;
     }
 
     @PostConstruct
@@ -307,6 +311,9 @@ public class K8sJobFactory {
             NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(overrideTargetNode);
             if (targetNodeInfo == null) {
                 throw new IllegalStateException("在数据库中找不到目标节点信息: " + overrideTargetNode);
+            }
+            if (!nodeAvailabilityService.isSchedulable(targetNodeInfo)) {
+                throw new IllegalStateException("目标节点当前不可用于调度: " + overrideTargetNode);
             }
             overrideTargetClusterId = targetNodeInfo.getCluster();
         }
@@ -623,6 +630,9 @@ public class K8sJobFactory {
         }
 
         for (NodeManagement nm : computeNodes) {
+            if (!nodeAvailabilityService.isSchedulable(nm)) {
+                continue;
+            }
             String clusterId = nm.getCluster();
             // DB cluster 字段为空时，单集群环境下自动回退到唯一集群
             if (clusterId == null || clusterId.isEmpty()) {

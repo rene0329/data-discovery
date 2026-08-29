@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.api.model.Node;
+import io.fabric8.kubernetes.api.model.NodeCondition;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import org.example.dto.registration.NodeCandidateView;
 import org.example.dto.registration.OperationResult;
@@ -46,6 +47,8 @@ public class NodeRegistrationService {
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
     private final int discoveryPort;
+    private final int offlineFailureThreshold;
+    private final NodeAvailabilityService availabilityService;
 
     public NodeRegistrationService(K8sJobFactory k8sJobFactory,
                                    K8sNodeMapper k8sNodeMapper,
@@ -54,7 +57,9 @@ public class NodeRegistrationService {
                                    RegistrationAuditMapper auditMapper,
                                    ObjectMapper objectMapper,
                                    RestTemplate restTemplate,
-                                   @Value("${dispatch.data-discovery.port:8080}") int discoveryPort) {
+                                   NodeAvailabilityService availabilityService,
+                                   @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
+                                   @Value("${app.node-sync.offline-failure-threshold:3}") int offlineFailureThreshold) {
         this.k8sJobFactory = k8sJobFactory;
         this.k8sNodeMapper = k8sNodeMapper;
         this.registrationMapper = registrationMapper;
@@ -63,6 +68,8 @@ public class NodeRegistrationService {
         this.objectMapper = objectMapper;
         this.restTemplate = restTemplate;
         this.discoveryPort = discoveryPort;
+        this.availabilityService = availabilityService;
+        this.offlineFailureThreshold = Math.max(1, offlineFailureThreshold);
     }
 
     public OperationResult discover(Set<String> requestedClusterIds) {
@@ -107,6 +114,8 @@ public class NodeRegistrationService {
         }
         LocalDateTime now = LocalDateTime.now();
         String labelsJson = writeJson(k8sNode.getMetadata().getLabels());
+        String observedStatus = observedStatus(k8sNode);
+        String observedReason = observedReason(k8sNode, observedStatus);
 
         NodeDiscoveryCandidate candidate = NodeDiscoveryCandidate.builder()
                 .clusterId(clusterId)
@@ -119,7 +128,7 @@ public class NodeRegistrationService {
                 .maxMemory(observed.getMaxMemory())
                 .currentCpu(observed.getCurrentCpu())
                 .currentMemory(observed.getCurrentMemory())
-                .observedStatus("ONLINE")
+                .observedStatus(observedStatus)
                 .labelsJson(labelsJson)
                 .lastSeenAt(now)
                 .build();
@@ -136,13 +145,29 @@ public class NodeRegistrationService {
             }
         }
         if (registered != null) {
+            String registeredObservedStatus = observedStatus;
+            String registeredObservedReason = observedReason;
+            if ("ONLINE".equals(registeredObservedStatus) && requiresDiscoveryAgent(registered.getType())
+                    && !isDiscoveryAgentHealthy(observed.getInternalIp())) {
+                registeredObservedStatus = "AGENT_UNHEALTHY";
+                registeredObservedReason = "data-discovery Agent health check failed";
+            }
+            String previousObservedStatus = registered.getObservedStatus();
             observed.setNodeId(registered.getNodeId());
             observed.setCluster(clusterId);
             observed.setK8sUid(k8sUid);
             observed.setLastSeenAt(now);
+            observed.setObservedStatus(registeredObservedStatus);
+            observed.setObservedStatusReason(registeredObservedReason);
             nodeMapper.updateNodeObservation(observed);
             if (candidate != null) {
                 registrationMapper.markCandidateRegistered(candidate.getCandidateId(), registered.getNodeId());
+            }
+            if (!same(previousObservedStatus, registeredObservedStatus)) {
+                audit("NODE", String.valueOf(registered.getNodeId()), "OBSERVED_STATUS_CHANGED",
+                        "node-observation-" + clusterId + "-" + k8sUid,
+                        safe(previousObservedStatus) + " -> " + registeredObservedStatus
+                                + ": " + safe(registeredObservedReason));
             }
         }
     }
@@ -155,7 +180,16 @@ public class NodeRegistrationService {
             uid = "synthetic:" + clusterId + ":" + node.getMetadata().getName();
         }
         registrationMapper.markCandidateOffline(clusterId, uid);
-        nodeMapper.markOfflineByClusterAndK8sUid(clusterId, uid);
+        recordOffline(clusterId, uid);
+    }
+
+    @Transactional
+    public void reconcileMissingNodes(String clusterId, Set<String> observedUids) {
+        for (NodeManagement node : nodeMapper.listRegisteredNodesByCluster(clusterId)) {
+            if (node.getK8sUid() != null && !observedUids.contains(node.getK8sUid())) {
+                recordOffline(clusterId, node.getK8sUid());
+            }
+        }
     }
 
     public List<NodeCandidateView> listCandidates(String query, String clusterId) {
@@ -218,6 +252,9 @@ public class NodeRegistrationService {
                 .lastUpdateTime(LocalDateTime.now())
                 .registrationStatus("REGISTERED")
                 .enabled(false)
+                .observedStatus(candidate.getObservedStatus())
+                .observedStatusReason(null)
+                .offlineObservationCount(0)
                 .labelsJson(writeJson(request.getLabels()))
                 .lastSeenAt(candidate.getLastSeenAt())
                 .rowVersion(0)
@@ -280,7 +317,7 @@ public class NodeRegistrationService {
         if (client == null) throw RegistrationException.invalid("K8s cluster client is unavailable");
         Node k8sNode = client.nodes().withName(node.getNodeName()).get();
         if (k8sNode == null) {
-            nodeMapper.updateRegistrationState(nodeId, "OFFLINE", false, false);
+            recordOffline(node.getCluster(), node.getK8sUid());
             throw RegistrationException.invalid("K8s node does not exist");
         }
         observeNode(k8sNode, client, node.getCluster());
@@ -325,7 +362,8 @@ public class NodeRegistrationService {
     }
 
     private RegisteredNodeView toView(NodeManagement node) {
-        return RegisteredNodeView.from(node, readLabels(node.getLabelsJson()));
+        return RegisteredNodeView.from(node, readLabels(node.getLabelsJson()),
+                availabilityService.evaluate(node));
     }
 
     @SuppressWarnings("unchecked")
@@ -341,6 +379,71 @@ public class NodeRegistrationService {
                 || !Boolean.TRUE.equals(body.get("dataDirectoryReadable"))) {
             throw new IllegalStateException("data-discovery Agent is not healthy");
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean isDiscoveryAgentHealthy(String internalIp) {
+        if (internalIp == null || internalIp.trim().isEmpty()) return false;
+        try {
+            String url = String.format("http://%s:%d/data-discovery/health", internalIp, discoveryPort);
+            ResponseEntity<Map> response = restTemplate.getForEntity(url, Map.class);
+            Map<String, Object> body = response.getBody();
+            return response.getStatusCode().is2xxSuccessful() && body != null
+                    && "UP".equals(String.valueOf(body.get("status")))
+                    && Boolean.TRUE.equals(body.get("dataDirectoryReadable"));
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private String observedStatus(Node node) {
+        if (node.getSpec() != null && Boolean.TRUE.equals(node.getSpec().getUnschedulable())) {
+            return "UNSCHEDULABLE";
+        }
+        if (node.getStatus() == null || node.getStatus().getConditions() == null) return "NOT_READY";
+        for (NodeCondition condition : node.getStatus().getConditions()) {
+            if ("Ready".equals(condition.getType())) {
+                return "True".equalsIgnoreCase(condition.getStatus()) ? "ONLINE" : "NOT_READY";
+            }
+        }
+        return "NOT_READY";
+    }
+
+    private String observedReason(Node node, String status) {
+        if ("UNSCHEDULABLE".equals(status)) return "Kubernetes node is cordoned";
+        if (node.getStatus() != null && node.getStatus().getConditions() != null) {
+            for (NodeCondition condition : node.getStatus().getConditions()) {
+                if ("Ready".equals(condition.getType()) && !"True".equalsIgnoreCase(condition.getStatus())) {
+                    String reason = condition.getReason();
+                    String message = condition.getMessage();
+                    return safe(reason) + (message == null || message.trim().isEmpty() ? "" : ": " + message);
+                }
+            }
+        }
+        return null;
+    }
+
+    private void recordOffline(String clusterId, String uid) {
+        if (uid == null || uid.trim().isEmpty()) return;
+        NodeManagement before = nodeMapper.getByClusterAndK8sUid(clusterId, uid);
+        if (before == null) return;
+        nodeMapper.markOfflineByClusterAndK8sUid(clusterId, uid, offlineFailureThreshold);
+        NodeManagement after = nodeMapper.getByClusterAndK8sUid(clusterId, uid);
+        if (after != null && !"OFFLINE".equals(before.getObservedStatus())
+                && "OFFLINE".equals(after.getObservedStatus())) {
+            audit("NODE", String.valueOf(after.getNodeId()), "OBSERVED_STATUS_CHANGED",
+                    "node-offline-" + clusterId + "-" + uid,
+                    safe(before.getObservedStatus()) + " -> OFFLINE after "
+                            + after.getOfflineObservationCount() + " missed observations");
+        }
+    }
+
+    private boolean same(String left, String right) {
+        return safe(left).equals(safe(right));
+    }
+
+    private String safe(String value) {
+        return value == null || value.trim().isEmpty() ? "UNKNOWN" : value.trim();
     }
 
     static boolean requiresDiscoveryAgent(String nodeRole) {
