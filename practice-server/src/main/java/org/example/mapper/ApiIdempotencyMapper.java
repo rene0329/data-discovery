@@ -31,7 +31,7 @@ public interface ApiIdempotencyMapper {
             "WHERE idempotency_key = #{key} AND resource_type = #{resourceType} " +
             "AND action = #{action} AND request_hash = #{requestHash} " +
             "AND execution_status = 'PROCESSING' " +
-            "AND created_at < DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 30 MINUTE)")
+            "AND created_at < DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 2 HOUR)")
     int takeOverStale(@Param("key") String key,
                       @Param("resourceType") String resourceType,
                       @Param("action") String action,

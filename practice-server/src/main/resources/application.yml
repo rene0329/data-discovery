@@ -129,7 +129,7 @@ alioss:
 app:
   runtime-image:
     verify-namespace: ${APP_RUNTIME_IMAGE_VERIFY_NAMESPACE:topic4-1}
-    verify-timeout-seconds: 600
+    verify-timeout-seconds: 3600
 
   orchestrator:
     job-wait-timeout-minutes: 30
