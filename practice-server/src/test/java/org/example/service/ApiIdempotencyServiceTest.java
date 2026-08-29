@@ -71,9 +71,41 @@ class ApiIdempotencyServiceTest {
                 .responseJson("{}")
                 .build());
 
-        assertThrows(RegistrationException.class, () -> service.execute(
+        RegistrationException exception = assertThrows(RegistrationException.class, () -> service.execute(
                 "NODE", "UPDATE", "key-0003", "2", "body", OperationResult.class,
                 () -> OperationResult.completed("updated"), item -> "2"));
+        assertEquals("IDEMPOTENCY_KEY_REUSED", exception.getErrorCode());
+    }
+
+    @Test
+    void missingReservedStateHasSpecificErrorCode() {
+        when(mapper.reserve(anyString(), anyString(), anyString(), anyString())).thenReturn(0);
+        when(mapper.find("key-0004", "NODE", "VERIFY")).thenReturn(null);
+
+        RegistrationException exception = assertThrows(RegistrationException.class,
+                () -> service.execute("NODE", "VERIFY", "key-0004", "2", null,
+                        OperationResult.class, () -> OperationResult.completed("verified"),
+                        item -> "2"));
+
+        assertEquals("IDEMPOTENCY_STATE_UNAVAILABLE", exception.getErrorCode());
+    }
+
+    @Test
+    void concurrentIdenticalRequestHasSpecificErrorCode() throws Exception {
+        when(mapper.reserve(anyString(), anyString(), anyString(), anyString())).thenReturn(0);
+        when(mapper.find("key-0005", "NODE", "VERIFY")).thenReturn(ApiIdempotencyRecord.builder()
+                .requestHash(hashFor("2", null))
+                .executionStatus("PROCESSING")
+                .build());
+        when(mapper.takeOverStale(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(0);
+
+        RegistrationException exception = assertThrows(RegistrationException.class,
+                () -> service.execute("NODE", "VERIFY", "key-0005", "2", null,
+                        OperationResult.class, () -> OperationResult.completed("verified"),
+                        item -> "2"));
+
+        assertEquals("IDEMPOTENCY_IN_PROGRESS", exception.getErrorCode());
     }
 
     private String hashFor(String target, Object request) throws Exception {

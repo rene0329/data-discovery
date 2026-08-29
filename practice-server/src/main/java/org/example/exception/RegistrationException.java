@@ -30,6 +30,10 @@ public class RegistrationException extends RuntimeException {
         return new RegistrationException(HttpStatus.CONFLICT, message);
     }
 
+    public static RegistrationException conflict(String errorCode, String message) {
+        return new RegistrationException(HttpStatus.CONFLICT, errorCode, message);
+    }
+
     public static RegistrationException invalid(String message) {
         return new RegistrationException(HttpStatus.UNPROCESSABLE_ENTITY, message);
     }

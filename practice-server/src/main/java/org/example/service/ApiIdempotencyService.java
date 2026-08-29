@@ -31,17 +31,19 @@ public class ApiIdempotencyService {
         if (mapper.reserve(key, resourceType, action, requestHash) == 0) {
             ApiIdempotencyRecord existing = mapper.find(key, resourceType, action);
             if (existing == null) {
-                throw RegistrationException.conflict("idempotent request state is unavailable; retry later");
+                throw RegistrationException.conflict("IDEMPOTENCY_STATE_UNAVAILABLE",
+                        "idempotent request state is unavailable; retry later");
             }
             if (!requestHash.equals(existing.getRequestHash())) {
-                throw RegistrationException.conflict(
+                throw RegistrationException.conflict("IDEMPOTENCY_KEY_REUSED",
                         "Idempotency-Key was already used with a different request");
             }
             if ("COMPLETED".equals(existing.getExecutionStatus())) {
                 return read(existing.getResponseJson(), responseType);
             }
             if (mapper.takeOverStale(key, resourceType, action, requestHash) != 1) {
-                throw RegistrationException.conflict("an identical request is still being processed");
+                throw RegistrationException.conflict("IDEMPOTENCY_IN_PROGRESS",
+                        "an identical request is still being processed");
             }
         }
 
