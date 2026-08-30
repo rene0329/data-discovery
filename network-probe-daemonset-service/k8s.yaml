@@ -49,7 +49,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: network-probe
-          image: ghcr.io/rene0329/data-discovery-practice-network-probe:latest
+          image: ghcr.io/rene0329/data-discovery-network-probe:latest
           imagePullPolicy: IfNotPresent
           env:
             - name: LOCAL_NODE_NAME
