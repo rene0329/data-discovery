@@ -19,4 +19,6 @@ public interface NodeRegistrationMapper {
                                 @Param("registeredNodeId") Integer registeredNodeId);
     int markCandidateOffline(@Param("clusterId") String clusterId,
                              @Param("k8sUid") String k8sUid);
+    int clearCandidateRegistration(@Param("clusterId") String clusterId,
+                                   @Param("k8sUid") String k8sUid);
 }

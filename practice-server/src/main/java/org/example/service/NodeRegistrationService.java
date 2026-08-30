@@ -373,12 +373,25 @@ public class NodeRegistrationService {
 
     @Transactional
     public void unregister(Integer nodeId, String requestId) {
-        requireNode(nodeId);
+        NodeManagement node = requireNode(nodeId);
+        if (Boolean.TRUE.equals(node.getEnabled()) || !"DISABLED".equals(node.getRegistrationStatus())) {
+            throw RegistrationException.conflict("node must be disabled before it can be unregistered");
+        }
         int replicas = nodeMapper.countDatasetReplicasByNode(nodeId);
         if (replicas > 0) {
             throw RegistrationException.conflict("node still has " + replicas + " registered dataset replicas");
         }
+        int activeTasks = nodeMapper.countActiveTasksByNodeName(node.getNodeName());
+        if (activeTasks > 0) {
+            throw RegistrationException.conflict("node still has " + activeTasks + " unfinished tasks");
+        }
+        int migrationTasks = nodeMapper.countActiveMigrationTasksByNode(nodeId);
+        if (migrationTasks > 0) {
+            throw RegistrationException.conflict("node still has " + migrationTasks + " unfinished migration tasks");
+        }
+        edgeMapper.deactivateByNodeId(nodeId);
         nodeMapper.softDeleteRegisteredNode(nodeId);
+        registrationMapper.clearCandidateRegistration(node.getCluster(), node.getK8sUid());
         audit("NODE", String.valueOf(nodeId), "UNREGISTER", requestId, null);
     }
 

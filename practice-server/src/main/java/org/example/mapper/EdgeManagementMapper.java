@@ -64,4 +64,8 @@ public interface EdgeManagementMapper {
     @Select("SELECT edge_id AS edgeId, source_id AS sourceId, target_id AS targetId, " +
             "bandwidth, latency, status FROM edge_management")
     List<EdgeManagement> selectAllEdges();
+
+    @Update("UPDATE edge_management SET status = 'inactive' " +
+            "WHERE source_id = #{nodeId} OR target_id = #{nodeId}")
+    int deactivateByNodeId(@Param("nodeId") Integer nodeId);
 }

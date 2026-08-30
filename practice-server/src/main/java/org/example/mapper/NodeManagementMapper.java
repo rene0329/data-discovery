@@ -102,6 +102,16 @@ public interface NodeManagementMapper {
 
     int countDatasetReplicasByNode(Integer nodeId);
 
+    @org.apache.ibatis.annotations.Select("SELECT COUNT(*) FROM migration_task " +
+            "WHERE (source_node_id = #{nodeId} OR target_node_id = #{nodeId}) " +
+            "AND status NOT IN ('COMPLETED', 'FAILED')")
+    int countActiveMigrationTasksByNode(Integer nodeId);
+
+    @org.apache.ibatis.annotations.Select("SELECT COUNT(*) FROM task_management " +
+            "WHERE schedule LIKE CONCAT('%', #{nodeName}, '%') " +
+            "AND status NOT IN ('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED')")
+    int countActiveTasksByNodeName(String nodeName);
+
     /**
      * [新增] 更新一个已存在的节点，只更新来自K8s的信息。
      * 注意：这个更新操作不会修改 current_cpu, current_memory 等运行时指标。
