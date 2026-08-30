@@ -857,11 +857,14 @@ public class CommonController {
             edgeMap.put("target", targetName);
             edgeMap.put("latency", edge.getLatency() != null ? edge.getLatency() : 0);
             edgeMap.put("bandwidth", edge.getBandwidth() != null ? edge.getBandwidth() : 0);
+            edgeMap.put("status", edge.getStatus() != null ? edge.getStatus() : "UNKNOWN");
             NodeManagement sourceNode = nodeList.stream()
                     .filter(node -> node.getNodeId().equals(edge.getSourceId())).findFirst().orElse(null);
             NodeManagement targetNode = nodeList.stream()
                     .filter(node -> node.getNodeId().equals(edge.getTargetId())).findFirst().orElse(null);
-            edgeMap.put("active", nodeAvailabilityService.isSchedulable(sourceNode)
+            boolean measured = "active".equalsIgnoreCase(edge.getStatus())
+                    || "UP".equalsIgnoreCase(edge.getStatus());
+            edgeMap.put("active", measured && nodeAvailabilityService.isSchedulable(sourceNode)
                     && nodeAvailabilityService.isSchedulable(targetNode));
             edgePayload.add(edgeMap);
         }

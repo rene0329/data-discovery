@@ -18,9 +18,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 @Service
-@ConditionalOnProperty(name = "app.node-sync.enabled", havingValue = "true", matchIfMissing = false)
 public class NetworkMetricsService {
 
     private static final Logger log = LoggerFactory.getLogger(NetworkMetricsService.class);
@@ -67,28 +65,44 @@ public class NetworkMetricsService {
         Integer sourceNodeId = sourceNode.getNodeId();
         Integer targetNodeId = targetNode.getNodeId();
 
-        EdgeManagement existingEdge = edgeManagementMapper.findBySourceAndTargetNode(sourceNodeId, targetNodeId);
+        if (sourceNodeId.equals(targetNodeId)) {
+            log.debug("Ignoring self-link metric for node '{}'.", metricsDto.getSourceNode());
+            return;
+        }
+        if (metricsDto.getLatencyMs() == null || metricsDto.getLatencyMs() < 0
+                || metricsDto.getBandwidthBps() == null || metricsDto.getBandwidthBps() <= 0) {
+            log.warn("Ignoring incomplete network metric {} -> {}.",
+                    metricsDto.getSourceNode(), metricsDto.getTargetNode());
+            return;
+        }
+
+        int normalizedSourceId = Math.min(sourceNodeId, targetNodeId);
+        int normalizedTargetId = Math.max(sourceNodeId, targetNodeId);
+        long bandwidthMbps = Math.max(1L, Math.round(metricsDto.getBandwidthBps() / 1_000_000.0));
+        EdgeManagement existingEdge = edgeManagementMapper.findBySourceAndTargetNode(normalizedSourceId, normalizedTargetId);
 
         if (existingEdge != null) {
-            existingEdge.setBandwidth(metricsDto.getBandwidthBps());
+            existingEdge.setSourceId(normalizedSourceId);
+            existingEdge.setTargetId(normalizedTargetId);
+            existingEdge.setBandwidth(bandwidthMbps);
             existingEdge.setLatency(metricsDto.getLatencyMs());
-            existingEdge.setStatus("UP");
+            existingEdge.setStatus("active");
             edgeManagementMapper.updateEdge(existingEdge);
-            log.debug("Updated network metrics for link {} (ID: {}) -> {} (ID: {}). Bandwidth: {} bps, Latency: {} ms",
+            log.debug("Updated network metrics for link {} (ID: {}) -> {} (ID: {}). Bandwidth: {} Mbps, Latency: {} ms",
                     metricsDto.getSourceNode(), sourceNodeId, metricsDto.getTargetNode(), targetNodeId,
-                    metricsDto.getBandwidthBps(), metricsDto.getLatencyMs());
+                    bandwidthMbps, metricsDto.getLatencyMs());
         } else {
             EdgeManagement newEdge = EdgeManagement.builder()
-                    .sourceId(sourceNodeId)
-                    .targetId(targetNodeId)
-                    .bandwidth(metricsDto.getBandwidthBps())
+                    .sourceId(normalizedSourceId)
+                    .targetId(normalizedTargetId)
+                    .bandwidth(bandwidthMbps)
                     .latency(metricsDto.getLatencyMs())
-                    .status("UP")
+                    .status("active")
                     .build();
             edgeManagementMapper.insertEdge(newEdge);
-            log.info("Inserted new network metrics for link {} (ID: {}) -> {} (ID: {}). Bandwidth: {} bps, Latency: {} ms",
+            log.info("Inserted new network metrics for link {} (ID: {}) -> {} (ID: {}). Bandwidth: {} Mbps, Latency: {} ms",
                     metricsDto.getSourceNode(), sourceNodeId, metricsDto.getTargetNode(), targetNodeId,
-                    metricsDto.getBandwidthBps(), metricsDto.getLatencyMs());
+                    bandwidthMbps, metricsDto.getLatencyMs());
         }
     }
 

@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: network-probe
+  namespace: topic4-1
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: topic4-network-probe-node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: topic4-network-probe-node-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: topic4-network-probe-node-reader
+subjects:
+  - kind: ServiceAccount
+    name: network-probe
+    namespace: topic4-1
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: network-probe
+  namespace: topic4-1
+spec:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: network-probe
+  template:
+    metadata:
+      labels:
+        app: network-probe
+    spec:
+      serviceAccountName: network-probe
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: network-probe
+          image: ghcr.io/rene0329/data-discovery-practice-network-probe:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: LOCAL_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CENTRAL_METRICS_URL
+              value: http://practice-server-svc.topic4-1.svc.cluster.local:8080/api/network/metrics/batch
+            - name: PROBE_ALL_NODES
+              value: "true"
+            - name: PROBE_INTERVAL_MS
+              value: "600000"
+            - name: PROBE_INITIAL_DELAY_MS
+              value: "30000"
+          ports:
+            - name: iperf3
+              containerPort: 5201
+              hostPort: 5201
+          readinessProbe:
+            tcpSocket:
+              port: iperf3
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

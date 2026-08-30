@@ -51,7 +51,9 @@ public interface EdgeManagementMapper {
      */
     @Select("SELECT edge_id AS edgeId, source_id AS sourceId, target_id AS targetId, " +
             "bandwidth, latency, status FROM edge_management " +
-            "WHERE source_id = #{sourceId} AND target_id = #{targetId}")
+            "WHERE (source_id = #{sourceId} AND target_id = #{targetId}) " +
+            "   OR (source_id = #{targetId} AND target_id = #{sourceId}) " +
+            "LIMIT 1")
     EdgeManagement findBySourceAndTargetNode(@Param("sourceId") Integer sourceId, @Param("targetId") Integer targetId);
 
     /**

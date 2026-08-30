@@ -57,7 +57,8 @@ public class NetworkProbeService {
     @Value("${probe.all.nodes:false}")
     private boolean probeAllNodes;
 
-    @Scheduled(fixedRateString = "${probe.interval.ms:600000}")
+    @Scheduled(initialDelayString = "${probe.initial-delay.ms:30000}",
+            fixedDelayString = "${probe.interval.ms:600000}")
     public void probeAndPushNetworkMetrics() {
         log.info("开始网络探测，本地节点: {}", localNodeName);
 
@@ -73,6 +74,10 @@ public class NetworkProbeService {
             String targetNodeName = node.getMetadata().getName();
             if (targetNodeName.equals(localNodeName)) {
                 continue; // 跳过自探测
+            }
+            // 每对节点只由名称较小的一端负责，避免两个方向并发覆盖同一条无向边。
+            if (localNodeName.compareTo(targetNodeName) > 0) {
+                continue;
             }
 
             String targetIP = getInternalIP(node);
@@ -174,10 +179,25 @@ public class NetworkProbeService {
      */
     private long probeBandwidth(String targetIP) {
         try {
-            Process process = Runtime.getRuntime().exec(
-                    new String[]{"iperf3", "-c", targetIP, "-t", "5", "-J"}
-            );
+            long forward = runIperf(targetIP, false);
+            long reverse = runIperf(targetIP, true);
+            if (forward < 0) return reverse;
+            if (reverse < 0) return forward;
+            return Math.min(forward, reverse);
+        } catch (Exception e) {
+            log.debug("iperf3 探测失败 {}: {}", targetIP, e.getMessage());
+            return -1;
+        }
+    }
+
+    private long runIperf(String targetIP, boolean reverse) {
+        try {
+            List<String> command = new ArrayList<>(Arrays.asList(
+                    "iperf3", "-c", targetIP, "-t", "5", "-J"));
+            if (reverse) command.add("-R");
+            Process process = Runtime.getRuntime().exec(command.toArray(new String[0]));
             if (!process.waitFor(20, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
                 return -1;
             }
 
@@ -204,7 +224,7 @@ public class NetworkProbeService {
             }
             return -1;
         } catch (Exception e) {
-            log.debug("iperf3 探测失败 {}: {}", targetIP, e.getMessage());
+            log.debug("iperf3 {}探测失败 {}: {}", reverse ? "反向" : "正向", targetIP, e.getMessage());
             return -1;
         }
     }

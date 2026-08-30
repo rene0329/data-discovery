@@ -612,7 +612,10 @@ public class K8sJobFactory {
             if (srcInfo != null && srcInfo.getNodeId() != null) {
                 int srcId = srcInfo.getNodeId();
                 for (EdgeManagement e : edgeManagementMapper.selectAllEdges()) {
-                    if (e.getLatency() == null) continue;
+                    boolean measured = "active".equalsIgnoreCase(e.getStatus())
+                            || "UP".equalsIgnoreCase(e.getStatus());
+                    if (!measured || e.getLatency() == null || e.getLatency() <= 0
+                            || e.getBandwidth() == null || e.getBandwidth() <= 0) continue;
                     int peerId = -1;
                     if (e.getSourceId() != null && e.getSourceId() == srcId && e.getTargetId() != null) {
                         peerId = e.getTargetId();
@@ -660,6 +663,15 @@ public class K8sJobFactory {
             boolean cpuOk = cpuFree >= cpuRequest * (1.0 + cpuHeadroom);
             boolean memOk = memFreeGi >= memoryRequestGi * (1.0 + memHeadroom);
             if (cpuOk && memOk) {
+                boolean localData = sourceNodeName != null && sourceNodeName.equals(nm.getNodeName());
+                boolean measuredNetwork = nm.getNodeId() != null
+                        && latencyToNode.containsKey(nm.getNodeId())
+                        && bandwidthToNode.containsKey(nm.getNodeId());
+                if (sourceNodeName != null && !localData && !measuredNetwork) {
+                    log.info("候选节点 '{}' 跳过：数据源 '{}' 到该节点的链路尚未测量或不可用",
+                            nm.getNodeName(), sourceNodeName);
+                    continue;
+                }
                 int datasetCount = nm.getNumDataset() != null ? nm.getNumDataset() : 0;
                 double latencyMs = nm.getNodeId() != null ? latencyToNode.getOrDefault(nm.getNodeId(), 0.0) : 0.0;
                 double bandwidthMbps = nm.getNodeId() != null ? bandwidthToNode.getOrDefault(nm.getNodeId(), 0.0) : 0.0;

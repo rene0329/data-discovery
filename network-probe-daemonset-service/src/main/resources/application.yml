@@ -1,3 +1,13 @@
 local:
   node:
-    name: local-test-node
+    name: ${LOCAL_NODE_NAME:local-test-node}
+central:
+  metrics:
+    url: ${CENTRAL_METRICS_URL:http://practice-server-svc:8080/api/network/metrics/batch}
+probe:
+  all:
+    nodes: ${PROBE_ALL_NODES:false}
+  interval:
+    ms: ${PROBE_INTERVAL_MS:600000}
+  initial-delay:
+    ms: ${PROBE_INITIAL_DELAY_MS:30000}

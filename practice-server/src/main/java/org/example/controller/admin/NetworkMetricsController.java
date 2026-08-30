@@ -1,6 +1,7 @@
 package org.example.controller.admin;
 
 import org.example.dto.NetworkEdgeDto;
+import org.example.dto.NetworkMetricDto;
 import org.example.service.NetworkMetricsService;
 import org.example.vo.ApiResponse;
 import org.slf4j.Logger;
@@ -9,6 +10,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -23,6 +26,17 @@ public class NetworkMetricsController {
 
     @Autowired(required = false)
     private NetworkMetricsService networkMetricsService;
+
+    @PostMapping("/metrics/batch")
+    public ResponseEntity<ApiResponse<Void>> receiveNetworkMetrics(
+            @RequestBody List<NetworkMetricDto> metrics) {
+        if (networkMetricsService == null) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.error(503, "Network metrics service is unavailable"));
+        }
+        networkMetricsService.processNetworkMetrics(metrics);
+        return ResponseEntity.ok(ApiResponse.ok(null));
+    }
 
     @GetMapping("/allMetrics")
     public ResponseEntity<ApiResponse<List<NetworkEdgeDto>>> getAllNetworkMetrics() {
