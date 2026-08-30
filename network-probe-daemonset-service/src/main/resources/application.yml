@@ -1,3 +1,10 @@
+spring:
+  main:
+    # This daemon initiates probes and reports results; it exposes no HTTP API.
+    # Disabling the embedded web server avoids hostNetwork port 8080 conflicts
+    # with the data-discovery Agent already running on every storage node.
+    web-application-type: none
+
 local:
   node:
     name: ${LOCAL_NODE_NAME:local-test-node}
