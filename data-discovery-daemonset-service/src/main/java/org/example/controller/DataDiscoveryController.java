@@ -84,6 +84,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
@@ -212,28 +213,75 @@ public class DataDiscoveryController {
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> uploadFile(
             @RequestParam("file") MultipartFile file,
-            @RequestParam("path") String relativePath) {
+            @RequestParam("path") String relativePath,
+            @RequestParam(value = "overwrite", defaultValue = "true") boolean overwrite) {
 
-        Path target = Paths.get(dataDirectory).resolve(relativePath).normalize();
+        Path root = Paths.get(dataDirectory).toAbsolutePath().normalize();
+        Path target = root.resolve(relativePath).normalize();
         // 安全检查：防止路径穿越
-        if (!target.startsWith(Paths.get(dataDirectory).normalize())) {
+        if (!target.startsWith(root)) {
             log.warn("拒绝路径穿越上传请求: {}", relativePath);
             Map<String, Object> err = new HashMap<>(); err.put("error", "path traversal rejected");
             return ResponseEntity.badRequest().body(err);
         }
+        if (file == null || file.isEmpty()) {
+            Map<String, Object> err = new HashMap<>(); err.put("error", "file must not be empty");
+            return ResponseEntity.badRequest().body(err);
+        }
+        if (!overwrite && Files.exists(target)) {
+            Map<String, Object> err = new HashMap<>(); err.put("error", "target file already exists");
+            return ResponseEntity.status(409).body(err);
+        }
+
+        Path tempFile = null;
         try {
             Files.createDirectories(target.getParent());
-            Files.copy(file.getInputStream(), target, StandardCopyOption.REPLACE_EXISTING);
+            tempFile = target.resolveSibling(target.getFileName() + ".part-" + UUID.randomUUID());
+            try (InputStream input = file.getInputStream();
+                 OutputStream output = Files.newOutputStream(tempFile)) {
+                byte[] buffer = new byte[1024 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+            try {
+                if (overwrite) {
+                    Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE,
+                            StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE);
+                }
+            } catch (AtomicMoveNotSupportedException ignored) {
+                if (overwrite) {
+                    Files.move(tempFile, target, StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    Files.move(tempFile, target);
+                }
+            }
+            tempFile = null;
             log.info("文件上传成功: {} ({} bytes)", target, file.getSize());
             Map<String, Object> result = new HashMap<>();
             result.put("status", "ok");
             result.put("path", relativePath);
+            result.put("absolutePath", target.toString());
             result.put("size", file.getSize());
             return ResponseEntity.ok(result);
+        } catch (FileAlreadyExistsException e) {
+            Map<String, Object> err = new HashMap<>(); err.put("error", "target file already exists");
+            return ResponseEntity.status(409).body(err);
         } catch (IOException e) {
             log.error("文件上传失败: {}", relativePath, e);
             Map<String, Object> err = new HashMap<>(); err.put("error", e.getMessage());
             return ResponseEntity.internalServerError().body(err);
+        } finally {
+            if (tempFile != null) {
+                try {
+                    Files.deleteIfExists(tempFile);
+                } catch (IOException cleanupError) {
+                    log.warn("清理上传临时文件失败 {}: {}", tempFile, cleanupError.getMessage());
+                }
+            }
         }
     }
 

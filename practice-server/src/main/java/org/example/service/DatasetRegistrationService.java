@@ -8,6 +8,7 @@ import org.example.dto.registration.OperationResult;
 import org.example.dto.registration.RegisteredDatasetView;
 import org.example.dto.registration.ResourceRequirements;
 import org.example.dto.registration.UpdateDatasetRequest;
+import org.example.dto.registration.UploadDatasetRequest;
 import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
@@ -22,9 +23,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
@@ -48,6 +54,10 @@ public class DatasetRegistrationService {
     private final RestTemplate restTemplate;
     private final int discoveryPort;
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
+    private final DatasetUploadClient uploadClient;
+    private final NodeAvailabilityService nodeAvailabilityService;
+    private final String dataDirectory;
+    private final TransactionTemplate transactionTemplate;
 
     public DatasetRegistrationService(DatasetRegistrationMapper mapper,
                                       NodeManagementMapper nodeMapper,
@@ -56,7 +66,11 @@ public class DatasetRegistrationService {
                                       ObjectMapper objectMapper,
                                       RestTemplate restTemplate,
                                       DatasetReplicaAvailabilityService replicaAvailabilityService,
-                                      @Value("${dispatch.data-discovery.port:8080}") int discoveryPort) {
+                                      DatasetUploadClient uploadClient,
+                                      NodeAvailabilityService nodeAvailabilityService,
+                                      PlatformTransactionManager transactionManager,
+                                      @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
+                                      @Value("${dispatch.data-discovery.data-directory:/dataset}") String dataDirectory) {
         this.mapper = mapper;
         this.nodeMapper = nodeMapper;
         this.runtimeImageMapper = runtimeImageMapper;
@@ -65,6 +79,10 @@ public class DatasetRegistrationService {
         this.restTemplate = restTemplate;
         this.discoveryPort = discoveryPort;
         this.replicaAvailabilityService = replicaAvailabilityService;
+        this.uploadClient = uploadClient;
+        this.nodeAvailabilityService = nodeAvailabilityService;
+        this.dataDirectory = dataDirectory;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     public OperationResult discover(Set<Integer> nodeIds) {
@@ -168,6 +186,81 @@ public class DatasetRegistrationService {
         mapper.markCandidateRegistered(candidate.getCandidateId(), dataset.getDatasetId());
         audit("DATASET", String.valueOf(dataset.getDatasetId()), "REGISTER", requestId, writeJson(request));
         return getDataset(dataset.getDatasetId());
+    }
+
+    /**
+     * Streams a new NPZ dataset to an available storage node, synchronously
+     * refreshes that node's discovery candidates, then reuses normal candidate
+     * registration to create the dataset and its first replica.
+     */
+    public RegisteredDatasetView uploadAndRegister(UploadDatasetRequest request,
+                                                   MultipartFile file,
+                                                   String requestId) {
+        validateUploadRequest(request, file);
+        NodeManagement node = nodeMapper.getNodeById(request.getNodeId());
+        if (node == null) throw RegistrationException.notFound("target node is not registered");
+        if (!isStorageRole(node.getType())) {
+            throw RegistrationException.invalid("UPLOAD_NODE_NOT_STORAGE",
+                    "dataset files can only be uploaded to STORAGE or COMPUTE_STORAGE nodes");
+        }
+        NodeAvailability availability = nodeAvailabilityService.evaluate(node);
+        if (!availability.isSchedulable()) {
+            throw RegistrationException.conflict("UPLOAD_NODE_UNAVAILABLE",
+                    "target node is unavailable: " + availability.getReason());
+        }
+        if (mapper.findDatasetByCodeAndVersion(request.getDatasetCode(), request.getVersion()) != null) {
+            throw RegistrationException.conflict("dataset code and version already exist");
+        }
+
+        String relativePath = uploadRelativePath(request);
+        Path root = Paths.get(dataDirectory).toAbsolutePath().normalize();
+        Path target = root.resolve(relativePath).normalize();
+        if (!target.startsWith(root)) {
+            throw RegistrationException.invalid("invalid dataset upload path");
+        }
+        String absolutePath = target.toString();
+        if (mapper.findReplicaByNodePath(node.getNodeId(), absolutePath) != null) {
+            throw RegistrationException.conflict("dataset file is already registered");
+        }
+
+        boolean uploaded = false;
+        try {
+            uploadClient.upload(node, file, relativePath);
+            uploaded = true;
+            uploadClient.scan(node);
+            DatasetDiscoveryCandidate candidate = mapper.findCandidateByNodePath(
+                    node.getNodeId(), absolutePath);
+            if (candidate == null || !"AVAILABLE".equals(candidate.getAvailability())) {
+                throw RegistrationException.invalid("DATASET_UPLOAD_NOT_DISCOVERED",
+                        "uploaded file was not discovered on the target node");
+            }
+            if (candidate.getSizeBytes() != null && candidate.getSizeBytes() != file.getSize()) {
+                throw RegistrationException.invalid("DATASET_UPLOAD_SIZE_MISMATCH",
+                        "uploaded file size does not match the discovered file");
+            }
+
+            RegisterDatasetRequest register = new RegisterDatasetRequest();
+            register.setCandidateId(candidate.getCandidateId());
+            register.setDatasetCode(request.getDatasetCode());
+            register.setName(request.getName());
+            register.setVersion(request.getVersion());
+            register.setDescription(request.getDescription());
+            register.setDataType(request.getDataType());
+            register.setLabels(request.getLabels());
+            register.setRequiredResources(request.getRequiredResources());
+            return transactionTemplate.execute(status -> register(register, requestId));
+        } catch (RuntimeException ex) {
+            if (uploaded) {
+                uploadClient.deleteQuietly(node, absolutePath);
+                try {
+                    uploadClient.scan(node);
+                } catch (RuntimeException cleanupError) {
+                    // The physical file cleanup is primary. A periodic scan will
+                    // reconcile a stale candidate if this best-effort scan fails.
+                }
+            }
+            throw ex;
+        }
     }
 
     @Transactional
@@ -379,6 +472,62 @@ public class DatasetRegistrationService {
         if (request.getDataType() == null || request.getDataType().trim().isEmpty()) {
             throw RegistrationException.invalid("dataType is required");
         }
+    }
+
+    private void validateUploadRequest(UploadDatasetRequest request, MultipartFile file) {
+        if (request == null || request.getNodeId() == null) {
+            throw RegistrationException.invalid("nodeId is required");
+        }
+        if (request.getDataType() == null || request.getDataType().trim().isEmpty()) {
+            request.setDataType("NPZ");
+        }
+        validateDatasetMetadata(request.getDatasetCode(), request.getName(),
+                request.getVersion(), request.getDataType());
+        if (file == null || file.isEmpty()) {
+            throw RegistrationException.invalid("dataset file is required and must not be empty");
+        }
+        String originalName = file.getOriginalFilename();
+        if (originalName == null || !originalName.toLowerCase().endsWith(".npz")) {
+            throw RegistrationException.invalid("only .npz dataset files are supported");
+        }
+        if (!"NPZ".equalsIgnoreCase(request.getDataType())) {
+            throw RegistrationException.invalid("dataType must be NPZ for uploaded files");
+        }
+        request.setDataType("NPZ");
+    }
+
+    private void validateDatasetMetadata(String datasetCode, String name,
+                                         String version, String dataType) {
+        if (datasetCode == null || !DATASET_CODE.matcher(datasetCode).matches()) {
+            throw RegistrationException.invalid("datasetCode is invalid");
+        }
+        if (datasetCode.length() > 128 || ".".equals(datasetCode) || "..".equals(datasetCode)) {
+            throw RegistrationException.invalid("datasetCode is invalid");
+        }
+        if (name == null || name.trim().isEmpty()) {
+            throw RegistrationException.invalid("name is required");
+        }
+        if (name.length() > 255) {
+            throw RegistrationException.invalid("name is too long");
+        }
+        if (version == null || version.length() > 64
+                || ".".equals(version) || "..".equals(version)
+                || !DATASET_CODE.matcher(version).matches()) {
+            throw RegistrationException.invalid("version is invalid");
+        }
+        if (dataType == null || dataType.trim().isEmpty()) {
+            throw RegistrationException.invalid("dataType is required");
+        }
+    }
+
+    private String uploadRelativePath(UploadDatasetRequest request) {
+        return "uploads/" + request.getDatasetCode() + "/" + request.getVersion()
+                + "/" + request.getDatasetCode() + "-" + request.getVersion() + ".npz";
+    }
+
+    private boolean isStorageRole(String role) {
+        return role != null && ("storage".equalsIgnoreCase(role.trim())
+                || "compute-storage".equalsIgnoreCase(role.trim()));
     }
 
     private String writeJson(Object value) {

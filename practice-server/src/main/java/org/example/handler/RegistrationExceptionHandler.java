@@ -14,6 +14,9 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 @Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice(basePackages = "org.example.controller.registration")
@@ -43,7 +46,7 @@ public class RegistrationExceptionHandler {
             HttpMediaTypeNotSupportedException ex) {
         return ResponseEntity.status(415)
                 .body(ApiV1Response.error(415, "UNSUPPORTED_MEDIA_TYPE",
-                        "Content-Type must be application/json"));
+                        "Content-Type must be application/json, or multipart/form-data for dataset upload"));
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
@@ -55,10 +58,24 @@ public class RegistrationExceptionHandler {
     }
 
     @ExceptionHandler({MethodArgumentTypeMismatchException.class,
-            MissingServletRequestParameterException.class, MissingRequestHeaderException.class})
+            MissingServletRequestParameterException.class, MissingRequestHeaderException.class,
+            MissingServletRequestPartException.class})
     public ResponseEntity<ApiV1Response<Object>> handleRequestParameter(Exception ex) {
         return ResponseEntity.badRequest()
                 .body(ApiV1Response.error(400, "INVALID_ARGUMENT", "invalid request parameter"));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiV1Response<Object>> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
+        return ResponseEntity.status(413)
+                .body(ApiV1Response.error(413, "UPLOAD_TOO_LARGE",
+                        "dataset file exceeds the 4096 MB upload limit"));
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ApiV1Response<Object>> handleInvalidMultipart(MultipartException ex) {
+        return ResponseEntity.badRequest()
+                .body(ApiV1Response.error(400, "INVALID_MULTIPART", "invalid multipart request"));
     }
 
     @ExceptionHandler(Exception.class)

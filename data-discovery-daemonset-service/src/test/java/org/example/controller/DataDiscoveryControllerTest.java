@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -75,6 +76,41 @@ class DataDiscoveryControllerTest {
         ResponseEntity<Map<String, Object>> response = controller.copyFrom(request);
 
         assertEquals(400, response.getStatusCodeValue());
+    }
+
+    @Test
+    void uploadPublishesFileAtomicallyWithoutOverwrite() throws Exception {
+        DataDiscoveryController controller = controller();
+        byte[] payload = "uploaded-dataset".getBytes(StandardCharsets.UTF_8);
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "dataset.npz", "application/octet-stream", payload);
+
+        ResponseEntity<Map<String, Object>> response =
+                controller.uploadFile(file, "uploads/demo/1.0/demo.npz", false);
+
+        assertEquals(200, response.getStatusCodeValue());
+        assertArrayEquals(payload, Files.readAllBytes(
+                tempDir.resolve("uploads/demo/1.0/demo.npz")));
+        try (java.util.stream.Stream<Path> paths = Files.walk(tempDir)) {
+            assertFalse(paths.anyMatch(path -> path.getFileName().toString().contains(".part-")));
+        }
+    }
+
+    @Test
+    void uploadRejectsExistingTargetWhenOverwriteIsDisabled() throws Exception {
+        DataDiscoveryController controller = controller();
+        Path target = tempDir.resolve("uploads/demo/1.0/demo.npz");
+        Files.createDirectories(target.getParent());
+        Files.write(target, "original".getBytes(StandardCharsets.UTF_8));
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "dataset.npz", "application/octet-stream",
+                "replacement".getBytes(StandardCharsets.UTF_8));
+
+        ResponseEntity<Map<String, Object>> response =
+                controller.uploadFile(file, "uploads/demo/1.0/demo.npz", false);
+
+        assertEquals(409, response.getStatusCodeValue());
+        assertEquals("original", new String(Files.readAllBytes(target), StandardCharsets.UTF_8));
     }
 
     private DataDiscoveryController controller() {

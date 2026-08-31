@@ -3,6 +3,7 @@ package org.example.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.dto.registration.OperationResult;
 import org.example.dto.registration.RegisterDatasetRequest;
+import org.example.dto.registration.UploadDatasetRequest;
 import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
@@ -14,8 +15,12 @@ import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
@@ -26,7 +31,11 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
 
@@ -36,6 +45,8 @@ class DatasetRegistrationServiceTest {
     private RestTemplate restTemplate;
     private DatasetRegistrationService service;
     private DatasetReplicaAvailabilityService replicaAvailabilityService;
+    private DatasetUploadClient uploadClient;
+    private NodeAvailabilityService nodeAvailabilityService;
 
     @BeforeEach
     void setUp() {
@@ -43,9 +54,14 @@ class DatasetRegistrationServiceTest {
         nodeMapper = mock(NodeManagementMapper.class);
         restTemplate = mock(RestTemplate.class);
         replicaAvailabilityService = mock(DatasetReplicaAvailabilityService.class);
+        uploadClient = mock(DatasetUploadClient.class);
+        nodeAvailabilityService = mock(NodeAvailabilityService.class);
+        PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         service = new DatasetRegistrationService(mapper, nodeMapper, mock(RuntimeImageMapper.class),
                 mock(RegistrationAuditMapper.class), new ObjectMapper(), restTemplate,
-                replicaAvailabilityService, 8080);
+                replicaAvailabilityService, uploadClient, nodeAvailabilityService,
+                transactionManager, 8080, "/dataset");
     }
 
     @Test
@@ -115,5 +131,104 @@ class DatasetRegistrationServiceTest {
         assertEquals(1, view.getAvailableReplicaCount());
         assertEquals(2, view.getTotalReplicaCount());
         assertEquals("节点未启用", view.getStatusReason());
+    }
+
+    @Test
+    void uploadRejectsNonStorageNodeBeforeSendingFile() {
+        UploadDatasetRequest request = uploadRequest();
+        NodeManagement compute = NodeManagement.builder().nodeId(1).nodeName("compute-1")
+                .internalIp("10.0.0.1").type("compute").registrationStatus("ACTIVE")
+                .enabled(true).observedStatus("ONLINE").build();
+        when(nodeMapper.getNodeById(1)).thenReturn(compute);
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "sales.npz", "application/octet-stream", new byte[]{1, 2, 3});
+
+        assertThrows(RegistrationException.class,
+                () -> service.uploadAndRegister(request, file, "upload-request-1"));
+
+        verify(uploadClient, never()).upload(any(), any(), anyString());
+    }
+
+    @Test
+    void uploadRegistersDiscoveredFileAsFirstReplica() {
+        UploadDatasetRequest request = uploadRequest();
+        request.setDataType(null);
+        NodeManagement storage = NodeManagement.builder().nodeId(1).nodeName("storage-1")
+                .internalIp("10.0.0.1").type("storage").registrationStatus("ACTIVE")
+                .enabled(true).observedStatus("ONLINE").build();
+        when(nodeMapper.getNodeById(1)).thenReturn(storage);
+        when(nodeAvailabilityService.evaluate(storage))
+                .thenReturn(new NodeAvailability("AVAILABLE", true, null));
+
+        DatasetDiscoveryCandidate candidate = DatasetDiscoveryCandidate.builder()
+                .candidateId(9L).nodeId(1)
+                .filePath("/dataset/uploads/sales/1.0/sales-1.0.npz")
+                .fileName("sales-1.0.npz").fileType("NPZ").sizeBytes(3L)
+                .availability("AVAILABLE").lastSeenAt(LocalDateTime.now()).build();
+        when(mapper.findCandidateByNodePath(1, candidate.getFilePath())).thenReturn(candidate);
+        when(mapper.findCandidateById(9L)).thenReturn(candidate);
+        when(mapper.findDatasetByCodeAndVersion("sales", "1.0")).thenReturn(null);
+        when(mapper.findReplicaByNodePath(1, candidate.getFilePath())).thenReturn(null);
+        doAnswer(invocation -> {
+            RegisteredDataset inserted = invocation.getArgument(0);
+            inserted.setDatasetId(44L);
+            return 1;
+        }).when(mapper).insertDataset(any(RegisteredDataset.class));
+        doAnswer(invocation -> {
+            DatasetReplica inserted = invocation.getArgument(0);
+            inserted.setReplicaId(55L);
+            return 1;
+        }).when(mapper).insertReplica(any(DatasetReplica.class));
+        RegisteredDataset saved = RegisteredDataset.builder().datasetId(44L)
+                .datasetCode("sales").datasetVersion("1.0").name("Sales")
+                .dataType("NPZ").status("DRAFT").rowVersion(0).build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(55L).datasetId(44L)
+                .nodeId(1).filePath(candidate.getFilePath()).sizeBytes(3L)
+                .availability("AVAILABLE").build();
+        when(mapper.findDatasetById(44L)).thenReturn(saved);
+        when(mapper.listReplicas(44L)).thenReturn(Collections.singletonList(replica));
+        doAnswer(invocation -> {
+            DatasetReplica item = invocation.getArgument(0);
+            item.setEffectiveAvailability("USABLE");
+            return null;
+        }).when(replicaAvailabilityService).enrich(any(DatasetReplica.class));
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "sales.npz", "application/octet-stream", new byte[]{1, 2, 3});
+
+        org.example.dto.registration.RegisteredDatasetView result =
+                service.uploadAndRegister(request, file, "upload-request-2");
+
+        assertEquals(44L, result.getDatasetId());
+        assertEquals(1, result.getTotalReplicaCount());
+        ArgumentCaptor<RegisteredDataset> datasetCaptor = ArgumentCaptor.forClass(RegisteredDataset.class);
+        verify(mapper).insertDataset(datasetCaptor.capture());
+        assertEquals("NPZ", datasetCaptor.getValue().getDataType());
+        verify(uploadClient).upload(eq(storage), eq(file),
+                eq("uploads/sales/1.0/sales-1.0.npz"));
+        verify(uploadClient).scan(storage);
+        verify(uploadClient, never()).deleteQuietly(any(), anyString());
+    }
+
+    @Test
+    void uploadRejectsDotPathSegmentBeforeSendingFile() {
+        UploadDatasetRequest request = uploadRequest();
+        request.setVersion("..");
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "sales.npz", "application/octet-stream", new byte[]{1});
+
+        assertThrows(RegistrationException.class,
+                () -> service.uploadAndRegister(request, file, "upload-request-invalid"));
+
+        verify(uploadClient, never()).upload(any(), any(), anyString());
+    }
+
+    private UploadDatasetRequest uploadRequest() {
+        UploadDatasetRequest request = new UploadDatasetRequest();
+        request.setNodeId(1);
+        request.setDatasetCode("sales");
+        request.setName("Sales");
+        request.setVersion("1.0");
+        request.setDataType("NPZ");
+        return request;
     }
 }

@@ -7,6 +7,7 @@ import org.example.dto.registration.RegisterDatasetRequest;
 import org.example.dto.registration.RegisterReplicaRequest;
 import org.example.dto.registration.RegisteredDatasetView;
 import org.example.dto.registration.UpdateDatasetRequest;
+import org.example.dto.registration.UploadDatasetRequest;
 import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.DatasetReplica;
 import org.example.exception.RegistrationException;
@@ -15,6 +16,7 @@ import org.example.service.ApiIdempotencyService;
 import org.example.vo.ApiV1Response;
 import org.example.vo.PageResult;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,7 +28,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Collections;
 import java.util.List;
@@ -82,6 +86,22 @@ public class DatasetRegistrationController {
         String id = requestId(requestId);
         RegisteredDatasetView dataset = idempotency.execute("DATASET", "REGISTER", id,
                 null, request, RegisteredDatasetView.class, () -> service.register(request, id),
+                item -> String.valueOf(item.getDatasetId()));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(dataset));
+    }
+
+    @PostMapping(value = "/datasets/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiV1Response<RegisteredDatasetView>> uploadAndRegister(
+            @RequestPart("metadata") UploadDatasetRequest request,
+            @RequestPart("file") MultipartFile file,
+            @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
+        String id = requestId(requestId);
+        String fileIdentity = (request == null ? "" : String.valueOf(request.getNodeId())) + "|"
+                + (file == null ? "" : String.valueOf(file.getOriginalFilename())) + "|"
+                + (file == null ? 0L : file.getSize());
+        RegisteredDatasetView dataset = idempotency.execute("DATASET", "UPLOAD_REGISTER", id,
+                fileIdentity, request, RegisteredDatasetView.class,
+                () -> service.uploadAndRegister(request, file, id),
                 item -> String.valueOf(item.getDatasetId()));
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(dataset));
     }

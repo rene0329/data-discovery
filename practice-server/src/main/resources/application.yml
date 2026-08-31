@@ -9,6 +9,12 @@ spring:
   application:
     name: practice-server # 应用名称，用于日志和K8s标签
 
+  servlet:
+    multipart:
+      # Dataset uploads are streamed onward to the selected storage Agent.
+      max-file-size: 4096MB
+      max-request-size: 4096MB
+
   datasource:
     druid: # 或者使用 hikari，你的application-dev.yml中是hikari
       driver-class-name: com.mysql.cj.jdbc.Driver
