@@ -8,6 +8,7 @@ import java.util.List;
 public class SchedulingPlanRequest {
     private String externalPlanId;
     private String taskId;
+    private Long runtimeImageId;
     private Algorithm algorithm;
     private List<Assignment> assignments;
 

@@ -23,6 +23,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -39,6 +40,18 @@ class SchedulingControllerTest {
                 .setControllerAdvice(new RegistrationExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(new JacksonObjectMapper()))
                 .build();
+    }
+
+    @Test
+    void explicitComputeRoutePassesTheSelectedImageAndRequiresIt() throws Exception {
+        when(service.submit(any())).thenReturn(new SchedulingPlanAccepted(41L, "manual-2", "manual-2", "ACCEPTED"));
+        mvc.perform(post("/api/v1/scheduling/compute-plans").contentType("application/json")
+                        .content("{\"externalPlanId\":\"manual-2\",\"taskId\":\"manual-2\",\"runtimeImageId\":7,\"assignments\":[{\"datasetId\":10,\"replicaId\":20,\"sourceNodeId\":3,\"targetNodeId\":3,\"action\":\"USE_IN_PLACE\"}]}"))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.data.planId").value(41));
+        verify(service).submit(argThat(request -> Long.valueOf(7L).equals(request.getRuntimeImageId())));
+        mvc.perform(post("/api/v1/scheduling/compute-plans").contentType("application/json").content("{}"))
+                .andExpect(status().isUnprocessableEntity());
+        verify(service, never()).submitDataPlan(any());
     }
 
     @Test

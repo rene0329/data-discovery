@@ -265,6 +265,18 @@ public class K8sTaskOrchestratorService {
         NodeManagement sourceNode = nodeManagementMapper.getNodeById(assignment.getSourceNodeId());
         NodeManagement targetNode = nodeManagementMapper.getNodeById(assignment.getTargetNodeId());
         if (sourceNode == null || targetNode == null) throw new IllegalStateException("源节点或目标节点不存在");
+        if (!SchedulingService.isComputeNode(targetNode)) throw new IllegalStateException("目标节点不具备计算能力");
+        // Validate the selected image before any transfer or source deletion.
+        TaskManagement task = taskManagementMapper.getTaskByTaskId(taskId);
+        Long imageId = task != null && task.getRuntimeImageId() != null
+                ? task.getRuntimeImageId() : dataset.getDefaultRuntimeImageId();
+        RuntimeImage image = imageId == null ? null : runtimeImageMapper.findById(imageId);
+        if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())
+                || image.getResolvedDigest() == null || image.getResolvedDigest().trim().isEmpty()) {
+            throw new IllegalStateException("运行镜像不可用于调度: " + imageId);
+        }
+        image.setCommand(readStringList(image.getCommandJson()));
+        image.setArgsTemplate(readStringList(image.getArgsTemplateJson()));
         // Recheck after queuing and before copying: a previously accepted path may have failed.
         networkTopologyService.requirePath(sourceNode.getNodeId(), targetNode.getNodeId());
         NodeManagement executionSource = sourceNode;
@@ -295,14 +307,6 @@ public class K8sTaskOrchestratorService {
                         replica.getReplicaId(), "MISSING", false);
             }
         }
-        Long imageId = dataset.getDefaultRuntimeImageId();
-        RuntimeImage image = imageId == null ? null : runtimeImageMapper.findById(imageId);
-        if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())) {
-            throw new IllegalStateException("数据集默认运行镜像不可用: " + imageId);
-        }
-        image.setCommand(readStringList(image.getCommandJson()));
-        image.setArgsTemplate(readStringList(image.getArgsTemplateJson()));
-
         String fileName = replica.getFilePath();
         int slash = fileName == null ? -1 : fileName.lastIndexOf('/');
         if (slash >= 0) fileName = fileName.substring(slash + 1);

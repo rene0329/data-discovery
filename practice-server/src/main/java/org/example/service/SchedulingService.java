@@ -16,11 +16,13 @@ import org.example.entity.RegisteredDataset;
 import org.example.entity.SchedulingAssignment;
 import org.example.entity.SchedulingPlan;
 import org.example.entity.TaskManagement;
+import org.example.entity.RuntimeImage;
 import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.SchedulingPlanMapper;
 import org.example.mapper.TaskManagementMapper;
+import org.example.mapper.RuntimeImageMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -61,6 +63,7 @@ public class SchedulingService {
     private final NetworkTopologyService networkTopologyService;
     private final DatasetSchedulingExecutor datasetSchedulingExecutor;
     private final DatasetHeatService heat;
+    private final RuntimeImageMapper imageMapper;
 
     public SchedulingService(DatasetRegistrationMapper datasetMapper,
                              NodeManagementMapper nodeMapper,
@@ -72,7 +75,8 @@ public class SchedulingService {
                              ObjectMapper objectMapper,
                              NetworkTopologyService networkTopologyService,
                              DatasetSchedulingExecutor datasetSchedulingExecutor,
-                             DatasetHeatService heat) {
+                             DatasetHeatService heat,
+                             RuntimeImageMapper imageMapper) {
         this.datasetMapper = datasetMapper;
         this.nodeMapper = nodeMapper;
         this.planMapper = planMapper;
@@ -84,6 +88,7 @@ public class SchedulingService {
         this.networkTopologyService = networkTopologyService;
         this.datasetSchedulingExecutor = datasetSchedulingExecutor;
         this.heat = heat;
+        this.imageMapper = imageMapper;
     }
 
     public SchedulingPageResult<SchedulableDatasetView> listDatasets(
@@ -150,6 +155,13 @@ public class SchedulingService {
             }
             return accepted(existing);
         }
+        if (!dataOnly && request.getRuntimeImageId() != null) {
+            RuntimeImage image = imageMapper.findById(request.getRuntimeImageId());
+            if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())
+                    || blank(image.getResolvedDigest())) {
+                throw RegistrationException.conflict("runtime image is not verified and enabled: " + request.getRuntimeImageId());
+            }
+        }
 
         List<SchedulingAssignment> assignments = new ArrayList<>();
         List<Long> datasetIds = new ArrayList<>();
@@ -177,6 +189,9 @@ public class SchedulingService {
                     || item.getSourceNodeId().equals(item.getTargetNodeId()))) {
                 throw RegistrationException.invalid("data transfer requires a different STORAGE or COMPUTE_STORAGE target node");
             }
+            if (!dataOnly && !isComputeNode(target)) {
+                throw RegistrationException.invalid("compute scheduling requires a COMPUTE or COMPUTE_STORAGE target node");
+            }
             String action = item.getAction().trim().toUpperCase(Locale.ROOT);
             if ("USE_IN_PLACE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId())) {
                 throw RegistrationException.invalid("USE_IN_PLACE requires sourceNodeId = targetNodeId");
@@ -194,7 +209,7 @@ public class SchedulingService {
             datasetNames.add(dataset.getName());
         }
 
-        TaskManagement task = dataOnly ? null : resolveOrCreateTask(request.getTaskId(), datasetIds, datasetNames);
+        TaskManagement task = dataOnly ? null : resolveOrCreateTask(request.getTaskId(), datasetIds, datasetNames, request.getRuntimeImageId());
         SchedulingPlan plan = SchedulingPlan.builder()
                 .externalPlanId(request.getExternalPlanId().trim())
                 // Retain the required correlation field without creating a compute task.
@@ -306,14 +321,20 @@ public class SchedulingService {
     }
 
     private TaskManagement resolveOrCreateTask(String externalTaskId, List<Long> datasetIds,
-                                                List<String> datasetNames) {
+                                                List<String> datasetNames, Long runtimeImageId) {
         Integer candidateId = parseInternalTaskId(externalTaskId);
         TaskManagement task = candidateId == null ? null : taskMapper.getTaskByTaskId(candidateId);
-        if (task != null) return task;
+        if (task != null) {
+            if (runtimeImageId != null && !runtimeImageId.equals(task.getRuntimeImageId())) {
+                throw RegistrationException.conflict("runtimeImageId differs from the existing task; use a new taskId");
+            }
+            return task;
+        }
         task = TaskManagement.builder()
                 .taskName(externalTaskId)
                 .selectedData(datasetNames.toString())
                 .datasetIdsJson(writeJson(datasetIds))
+                .runtimeImageId(runtimeImageId)
                 .status("已接收")
                 .createTime(LocalDateTime.now())
                 .build();
@@ -328,6 +349,9 @@ public class SchedulingService {
         if (request.getAssignments() == null || request.getAssignments().isEmpty()) {
             throw RegistrationException.invalid("assignments must not be empty");
         }
+        if (dataOnly && request.getRuntimeImageId() != null) {
+            throw RegistrationException.invalid("runtimeImageId is only supported by compute scheduling plans");
+        }
         for (SchedulingPlanRequest.Assignment item : request.getAssignments()) {
             if (item == null || item.getDatasetId() == null || item.getReplicaId() == null
                     || item.getSourceNodeId() == null || item.getTargetNodeId() == null
@@ -336,6 +360,11 @@ public class SchedulingService {
                 throw RegistrationException.invalid("invalid scheduling assignment");
             }
         }
+    }
+
+    static boolean isComputeNode(NodeManagement node) {
+        return node != null && ("compute".equalsIgnoreCase(node.getType())
+                || "compute-storage".equalsIgnoreCase(node.getType()));
     }
 
     private SchedulingPlanAccepted accepted(SchedulingPlan plan) {

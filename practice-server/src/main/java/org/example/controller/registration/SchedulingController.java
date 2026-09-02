@@ -6,6 +6,7 @@ import org.example.dto.scheduling.SchedulingPlanAccepted;
 import org.example.dto.scheduling.SchedulingPlanDetail;
 import org.example.dto.scheduling.SchedulingPlanRequest;
 import org.example.entity.SchedulingPlan;
+import org.example.exception.RegistrationException;
 import org.example.service.SchedulingService;
 import org.example.vo.ApiV1Response;
 import org.springframework.http.HttpStatus;
@@ -66,6 +67,16 @@ public class SchedulingController {
             @RequestBody SchedulingPlanRequest request) {
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(success(service.submitDataPlan(request)));
+    }
+
+    // A separate route prevents older servers silently ignoring a selected image.
+    @PostMapping("/compute-plans")
+    public ResponseEntity<ApiV1Response<SchedulingPlanAccepted>> submitComputePlan(
+            @RequestBody SchedulingPlanRequest request) {
+        if (request.getRuntimeImageId() == null) {
+            throw RegistrationException.invalid("runtimeImageId is required for an explicit compute plan");
+        }
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(success(service.submit(request)));
     }
 
     private <T> ApiV1Response<T> success(T data) {

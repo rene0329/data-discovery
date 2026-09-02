@@ -12,11 +12,14 @@ import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
 import org.example.entity.SchedulingAssignment;
 import org.example.entity.SchedulingPlan;
+import org.example.entity.RuntimeImage;
+import org.example.entity.TaskManagement;
 import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.SchedulingPlanMapper;
 import org.example.mapper.TaskManagementMapper;
+import org.example.mapper.RuntimeImageMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -48,6 +51,7 @@ class SchedulingServiceTest {
     private SchedulingService service;
     private NetworkTopologyService topology;
     private DatasetSchedulingExecutor dataExecutor;
+    private RuntimeImageMapper imageMapper;
 
     @BeforeEach
     void setUp() {
@@ -60,9 +64,10 @@ class SchedulingServiceTest {
         orchestrator = mock(K8sTaskOrchestratorService.class);
         topology = mock(NetworkTopologyService.class);
         dataExecutor = mock(DatasetSchedulingExecutor.class);
+        imageMapper = mock(RuntimeImageMapper.class);
         service = new SchedulingService(datasetMapper, nodeMapper, planMapper, taskMapper,
                 replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), topology, dataExecutor,
-                mock(DatasetHeatService.class));
+                mock(DatasetHeatService.class), imageMapper);
     }
 
     @Test
@@ -145,7 +150,7 @@ class SchedulingServiceTest {
         when(datasetMapper.findDatasetById(10L)).thenReturn(dataset);
         when(datasetMapper.findReplicaById(20L)).thenReturn(replica);
         when(replicaAvailabilityService.evaluate(replica)).thenReturn(new ReplicaAvailability("USABLE", true, null));
-        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).build());
+        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).type("compute-storage").build());
         when(nodeAvailabilityService.isSchedulable(any(NodeManagement.class))).thenReturn(true);
         when(topology.requirePath(3, 4)).thenThrow(RegistrationException.conflict("No available logical topology path"));
         SchedulingPlanRequest request = new SchedulingPlanRequest();
@@ -171,7 +176,7 @@ class SchedulingServiceTest {
         when(datasetMapper.findReplicaById(20L)).thenReturn(replica);
         when(replicaAvailabilityService.evaluate(replica))
                 .thenReturn(new ReplicaAvailability("USABLE", true, null));
-        when(nodeMapper.getNodeById(3)).thenReturn(NodeManagement.builder().nodeId(3).build());
+        when(nodeMapper.getNodeById(3)).thenReturn(NodeManagement.builder().nodeId(3).type("compute-storage").build());
         when(nodeAvailabilityService.isSchedulable(any(NodeManagement.class))).thenReturn(true);
         doAnswer(invocation -> {
             org.example.entity.TaskManagement task = invocation.getArgument(0);
@@ -258,6 +263,76 @@ class SchedulingServiceTest {
                 .planId(40L).externalPlanId("manual-1").status("COMPLETED").build());
         assertEquals("COMPLETED", service.submitDataPlan(request).getStatus());
         verifyNoInteractions(dataExecutor, taskMapper, orchestrator);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"USE_IN_PLACE", "COPY_AND_USE", "MOVE_AND_USE"})
+    void computePlansPersistSelectedImageWithoutChangingDatasetDefault(String action) {
+        SchedulingPlanRequest request = computePlan(action);
+        service.submit(request);
+        ArgumentCaptor<TaskManagement> task = ArgumentCaptor.forClass(TaskManagement.class);
+        verify(taskMapper).submitData(task.capture());
+        assertEquals(7L, task.getValue().getRuntimeImageId());
+        verify(datasetMapper, org.mockito.Mockito.never()).bindRuntimeImage(any(), any());
+        verify(orchestrator).executeExternalPlan(any(), any(), any());
+        verifyNoInteractions(dataExecutor);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"MISSING", "DISABLED", "INVALID", "UNVERIFIED"})
+    void rejectsUnusableSelectedImageBeforeAnyPlanOrTaskIsWritten(String state) {
+        SchedulingPlanRequest request = computePlan("MOVE_AND_USE");
+        when(imageMapper.findById(7L)).thenReturn("MISSING".equals(state) ? null : RuntimeImage.builder()
+                .runtimeImageId(7L).status("INVALID".equals(state) ? "INVALID" : "READY")
+                .enabled(!"DISABLED".equals(state)).resolvedDigest("UNVERIFIED".equals(state) ? null : "sha256:one").build());
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+        verifyNoInteractions(taskMapper, orchestrator, dataExecutor);
+    }
+
+    @Test
+    void storageOnlyNodeCannotRunAnImageAndInPlaceRequiresSameSourceAndTarget() {
+        SchedulingPlanRequest request = computePlan("USE_IN_PLACE");
+        when(nodeMapper.getNodeById(3)).thenReturn(NodeManagement.builder().nodeId(3).type("storage").build());
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        request.getAssignments().get(0).setTargetNodeId(4);
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verifyNoInteractions(taskMapper, orchestrator, dataExecutor);
+    }
+
+    @Test
+    void dataOnlyEndpointRejectsImageToAvoidSilentlyIgnoringComputeIntent() {
+        SchedulingPlanRequest request = dataPlan("COPY");
+        request.setRuntimeImageId(7L);
+        assertThrows(RegistrationException.class, () -> service.submitDataPlan(request));
+        verifyNoInteractions(planMapper, taskMapper, orchestrator, dataExecutor);
+    }
+
+    @Test
+    void doesNotReplaceTheImageOfAnExistingTask() {
+        SchedulingPlanRequest request = computePlan("COPY_AND_USE");
+        request.setTaskId("30");
+        when(taskMapper.getTaskByTaskId(30)).thenReturn(TaskManagement.builder().taskId(30).runtimeImageId(8L).build());
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+        verify(taskMapper, org.mockito.Mockito.never()).submitData(any());
+        verifyNoInteractions(orchestrator);
+    }
+
+    private SchedulingPlanRequest computePlan(String action) {
+        SchedulingPlanRequest request = dataPlan(action);
+        request.setTaskId("manual-compute");
+        request.setRuntimeImageId(7L);
+        when(imageMapper.findById(7L)).thenReturn(RuntimeImage.builder().runtimeImageId(7L)
+                .status("READY").enabled(true).resolvedDigest("sha256:one").build());
+        when(nodeMapper.getNodeById(3)).thenReturn(NodeManagement.builder().nodeId(3).type("compute-storage").build());
+        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).type("compute-storage").build());
+        if ("USE_IN_PLACE".equals(action)) request.getAssignments().get(0).setTargetNodeId(3);
+        doAnswer(invocation -> {
+            ((TaskManagement) invocation.getArgument(0)).setTaskId(30);
+            return 1;
+        }).when(taskMapper).submitData(any());
+        return request;
     }
 
     private SchedulingPlanRequest dataPlan(String action) {
