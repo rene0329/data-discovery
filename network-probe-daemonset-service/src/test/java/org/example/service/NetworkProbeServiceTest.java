@@ -80,6 +80,40 @@ class NetworkProbeServiceTest {
     }
 
     @Test
+    void busyIperfServerRetriesThenUsesTheRealMeasurement() throws Exception {
+        NetworkProbeService probe = spy(new NetworkProbeService());
+        doNothing().when(probe).waitForIperfRetry(anyInt());
+        String busy = "{\"error\":\"the server is busy running a test. try again later\"}";
+        doReturn(busy, busy, "{\"end\":{\"sum_received\":{\"bits_per_second\":92896362.19}}}")
+                .when(probe).runIperfCommand("10.212.14.88", false);
+        assertEquals(92896362L, probe.runIperf("10.212.14.88", false));
+        verify(probe, times(3)).runIperfCommand("10.212.14.88", false);
+        verify(probe).waitForIperfRetry(1);
+        verify(probe).waitForIperfRetry(2);
+    }
+
+    @Test
+    void persistentContentionIsBoundedAndStillFails() throws Exception {
+        NetworkProbeService probe = spy(new NetworkProbeService());
+        doNothing().when(probe).waitForIperfRetry(anyInt());
+        doReturn("{\"error\":\"the server is busy running a test. try again later\"}")
+                .when(probe).runIperfCommand("10.212.14.88", true);
+        assertEquals(-1, probe.runIperf("10.212.14.88", true));
+        verify(probe, times(4)).runIperfCommand("10.212.14.88", true);
+        verify(probe, times(3)).waitForIperfRetry(anyInt());
+    }
+
+    @Test
+    void connectionFailuresDoNotEnterTheContentionRetryLoop() throws Exception {
+        NetworkProbeService probe = spy(new NetworkProbeService());
+        doReturn("{\"error\":\"unable to connect to server: Connection refused\"}")
+                .when(probe).runIperfCommand("10.212.14.88", false);
+        assertEquals(-1, probe.runIperf("10.212.14.88", false));
+        verify(probe).runIperfCommand("10.212.14.88", false);
+        verify(probe, never()).waitForIperfRetry(anyInt());
+    }
+
+    @Test
     void reportsParsedMetricsAndStillReportsFailedProbes() {
         KubernetesClient k8s = mock(KubernetesClient.class, RETURNS_DEEP_STUBS);
         when(k8s.nodes().list()).thenReturn(new NodeListBuilder().withItems(

@@ -210,7 +210,29 @@ public class NetworkProbeService {
         }
     }
 
-    private long runIperf(String targetIP, boolean reverse) {
+    long runIperf(String targetIP, boolean reverse) {
+        try {
+            for (int attempt = 0; attempt <= 3; attempt++) {
+                String output = runIperfCommand(targetIP, reverse);
+                if (output == null) return -1;
+                if (isIperfBusy(output) && attempt < 3) {
+                    log.info("iperf3 服务忙 {}，等待 {} 秒后重试", targetIP, 5 * (attempt + 1));
+                    waitForIperfRetry(attempt + 1);
+                    continue;
+                }
+                return parseBandwidth(output);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return -1;
+    }
+
+    void waitForIperfRetry(int retry) throws InterruptedException {
+        TimeUnit.SECONDS.sleep(5L * retry);
+    }
+
+    String runIperfCommand(String targetIP, boolean reverse) {
         try {
             List<String> command = new ArrayList<>(Arrays.asList(
                     "iperf3", "-c", targetIP, "-t", "5", "-J"));
@@ -218,16 +240,28 @@ public class NetworkProbeService {
             Process process = Runtime.getRuntime().exec(command.toArray(new String[0]));
             if (!process.waitFor(20, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                return -1;
+                return null;
             }
-            if (process.exitValue() != 0) return -1;
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                     process.getInputStream(), StandardCharsets.UTF_8))) {
-                return parseBandwidth(reader.lines().collect(Collectors.joining("\n")));
+                String output = reader.lines().collect(Collectors.joining("\n"));
+                // iperf exits nonzero when another client owns the server. Preserve that
+                // response for bounded retries instead of treating contention as a broken link.
+                return process.exitValue() == 0 || isIperfBusy(output) ? output : null;
             }
         } catch (Exception e) {
             log.debug("iperf3 {}探测失败 {}: {}", reverse ? "反向" : "正向", targetIP, e.getMessage());
-            return -1;
+            return null;
+        }
+    }
+
+    static boolean isIperfBusy(String output) {
+        try {
+            JsonNode result = JSON.readTree(output);
+            return result != null && result.path("error").asText("")
+                    .contains("server is busy running a test");
+        } catch (java.io.IOException e) {
+            return false;
         }
     }
 
