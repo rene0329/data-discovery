@@ -47,11 +47,8 @@ public interface NodeManagementMapper {
             "AND registration_status = 'ACTIVE' AND enabled = 1 AND deleted_at IS NULL")
     List<NodeManagement> getComputeCapableNodes();
 
-    // 获取所有节点
-        @Select("SELECT node_id AS nodeId, node_name AS nodeName, external_ip AS externalIp, internal_ip AS internalIp, type, cluster, " +
-            "current_cpu AS currentCpu, max_cpu AS maxCpu, current_memory AS currentMemory, max_memory AS maxMemory, " +
-            "num_dataset AS numDataset, last_update_time AS lastUpdateTime " +
-            "FROM node_management WHERE deleted_at IS NULL")
+    // Include registration and observation fields required by NodeAvailabilityService.
+    @Select("SELECT * FROM node_management WHERE deleted_at IS NULL")
     List<NodeManagement> selectAllNodes();
     String getNodeIpByDataServer(String dataServer);
     String getNodeIpById(Integer nodeId);
