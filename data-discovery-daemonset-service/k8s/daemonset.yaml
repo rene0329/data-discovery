@@ -99,6 +99,16 @@ spec:
               cpu: "500m"
               memory: "512Mi"
 
+          # Allow cold starts on the 500m CPU-limited edge nodes to finish
+          # before liveness checks can restart the application.
+          startupProbe:
+            httpGet:
+              path: /data-discovery/health
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 30
+
           livenessProbe:
             httpGet:
               path: /data-discovery/health
