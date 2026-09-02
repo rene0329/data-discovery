@@ -6,12 +6,20 @@ spring:
     web-application-type: none
 
 local:
+  cluster:
+    id: ${LOCAL_CLUSTER_ID:in-cluster-default}
   node:
     name: ${LOCAL_NODE_NAME:local-test-node}
 central:
+  public-ip:
+    url: ${CENTRAL_PUBLIC_IP_URL:http://practice-server-svc:8080/api/network/nodes/public-ip}
   metrics:
     url: ${CENTRAL_METRICS_URL:http://practice-server-svc:8080/api/network/metrics/batch}
 probe:
+  public-ip:
+    url: ${PUBLIC_IP_LOOKUP_URL:https://api-ipv4.ip.sb/ip}
+    initial-delay-ms: ${PUBLIC_IP_INITIAL_DELAY_MS:10000}
+    interval-ms: ${PUBLIC_IP_INTERVAL_MS:600000}
   all:
     nodes: ${PROBE_ALL_NODES:false}
   interval:

@@ -83,6 +83,11 @@ public interface NodeManagementMapper {
 
     int updateNodeObservation(NodeManagement node);
 
+    int updateObservedPublicIp(@Param("cluster") String cluster,
+                               @Param("k8sUid") String k8sUid,
+                               @Param("nodeName") String nodeName,
+                               @Param("publicIp") String publicIp);
+
     int attachK8sIdentity(@Param("nodeId") Integer nodeId,
                           @Param("cluster") String cluster,
                           @Param("k8sUid") String k8sUid);

@@ -839,6 +839,8 @@ public class CommonController {
             nodeMap.put("id", node.getNodeName());
             nodeMap.put("nodeId", node.getNodeId());
             nodeMap.put("cluster", node.getCluster());
+            nodeMap.put("internalIp", node.getInternalIp());
+            nodeMap.put("externalIp", node.getExternalIp());
             nodeMap.put("label", node.getNodeName());
             nodeMap.put("x", (int)(cx + radius * Math.cos(angle)));
             nodeMap.put("y", (int)(cy + radius * Math.sin(angle)));

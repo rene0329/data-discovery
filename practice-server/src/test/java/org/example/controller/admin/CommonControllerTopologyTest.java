@@ -34,6 +34,7 @@ class CommonControllerTopologyTest {
         EdgeManagementMapper edges = mock(EdgeManagementMapper.class);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         NodeManagement active = NodeManagement.builder().nodeId(1).nodeName("active")
+                .internalIp("10.0.0.1").externalIp("8.8.8.8")
                 .registrationStatus("ACTIVE").enabled(true).observedStatus("ONLINE")
                 .lastSeenAt(now).build();
         NodeManagement disabled = NodeManagement.builder().nodeId(2).nodeName("disabled")
@@ -53,6 +54,8 @@ class CommonControllerTopologyTest {
         assertEquals(2, ((List<?>) managementData.get("nodes")).size());
         Map<String, Object> firstNode = (Map<String, Object>) ((List<?>) managementData.get("nodes")).get(0);
         assertEquals(1, firstNode.get("nodeId"));
+        assertEquals("10.0.0.1", firstNode.get("internalIp"));
+        assertEquals("8.8.8.8", firstNode.get("externalIp"));
         org.junit.jupiter.api.Assertions.assertNull(firstNode.get("cpu"));
         org.junit.jupiter.api.Assertions.assertNull(firstNode.get("memory"));
         Map<String, Object> edge = (Map<String, Object>) ((List<?>) managementData.get("edges")).get(0);

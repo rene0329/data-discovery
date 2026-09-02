@@ -58,6 +58,14 @@ spec:
                   fieldPath: spec.nodeName
             - name: CENTRAL_METRICS_URL
               value: http://practice-server-svc.topic4-1.svc.cluster.local:8080/api/network/metrics/batch
+            - name: LOCAL_CLUSTER_ID
+              value: in-cluster-default
+            - name: CENTRAL_PUBLIC_IP_URL
+              value: http://practice-server-svc.topic4-1.svc.cluster.local:8080/api/network/nodes/public-ip
+            - name: PUBLIC_IP_LOOKUP_URL
+              value: https://api-ipv4.ip.sb/ip
+            - name: PUBLIC_IP_INTERVAL_MS
+              value: "600000"
             - name: PROBE_ALL_NODES
               value: "true"
             - name: PROBE_INTERVAL_MS

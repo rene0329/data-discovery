@@ -166,7 +166,7 @@
 
     <update id="updateNodeObservation" parameterType="org.example.entity.NodeManagement">
         UPDATE node_management
-        SET node_name = #{nodeName}, external_ip = #{externalIp}, internal_ip = #{internalIp},
+        SET node_name = #{nodeName}, external_ip = COALESCE(NULLIF(#{externalIp}, ''), external_ip), internal_ip = #{internalIp},
             max_cpu = #{maxCpu}, max_memory = #{maxMemory}, current_cpu = #{currentCpu},
             current_memory = #{currentMemory}, num_dataset = #{numDataset},
             last_update_time = #{lastUpdateTime}, last_seen_at = #{lastSeenAt},
@@ -181,6 +181,12 @@
         SET cluster = #{cluster}, k8s_uid = #{k8sUid},
             display_name = COALESCE(display_name, node_name)
         WHERE node_id = #{nodeId} AND k8s_uid IS NULL AND deleted_at IS NULL
+    </update>
+
+    <update id="updateObservedPublicIp">
+        UPDATE node_management SET external_ip = #{publicIp}
+        WHERE cluster = #{cluster} AND k8s_uid = #{k8sUid} AND node_name = #{nodeName}
+          AND deleted_at IS NULL
     </update>
 
     <update id="updateRegistrationMetadata" parameterType="org.example.entity.NodeManagement">
@@ -229,7 +235,7 @@
     <update id="updateNodeFromK8s" parameterType="org.example.entity.NodeManagement">
         UPDATE node_management
         SET
-        external_ip = #{externalIp},
+        external_ip = COALESCE(NULLIF(#{externalIp}, ''), external_ip),
         internal_ip = #{internalIp},
         type = #{type},
         cluster = #{cluster},
