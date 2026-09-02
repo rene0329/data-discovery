@@ -36,7 +36,8 @@ class DatasetUploadClientTest {
         });
         server.start();
 
-        DatasetUploadClient client = new DatasetUploadClient(server.getAddress().getPort(), 1000, 5000);
+        DatasetUploadClient client = new DatasetUploadClient(
+                server.getAddress().getPort(), 1000, 5000, "/dataset");
         NodeManagement node = NodeManagement.builder().nodeName("storage-1")
                 .internalIp("127.0.0.1").build();
         MockMultipartFile file = new MockMultipartFile("file", "sales.npz",
@@ -51,6 +52,32 @@ class DatasetUploadClientTest {
         assertTrue(body.contains("\r\nfalse\r\n"));
         assertTrue(body.contains("name=\"file\"; filename=\"dataset.npz\""));
         assertTrue(body.contains("npz-payload"));
+    }
+
+    @Test
+    void copyFromSendsSourceUrlAndRelativeTargetPath() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/data-discovery/copy-from", exchange -> {
+            requestBody.set(new String(readAll(exchange.getRequestBody()), StandardCharsets.UTF_8));
+            byte[] response = "{\"status\":\"ok\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        DatasetUploadClient client = new DatasetUploadClient(
+                server.getAddress().getPort(), 1000, 5000, "/dataset");
+        NodeManagement source = NodeManagement.builder().nodeName("source")
+                .internalIp("127.0.0.1").build();
+        NodeManagement target = NodeManagement.builder().nodeName("target")
+                .internalIp("127.0.0.1").build();
+
+        client.copyFrom(source, target, "/dataset/mnist/mnist-1.0.npz", 123L);
+
+        assertTrue(requestBody.get().contains("/data-discovery/download/dataset/mnist/mnist-1.0.npz"));
+        assertTrue(requestBody.get().contains("\"path\":\"mnist/mnist-1.0.npz\""));
+        assertTrue(requestBody.get().contains("\"expectedSize\":123"));
     }
 
     private byte[] readAll(InputStream input) throws IOException {

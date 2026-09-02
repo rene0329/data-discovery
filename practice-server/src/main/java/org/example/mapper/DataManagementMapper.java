@@ -10,6 +10,12 @@ import java.util.List;
 
 @Mapper
 public interface DataManagementMapper {
+    @org.apache.ibatis.annotations.Update("UPDATE data_management SET data_heat = #{heat} WHERE data_id = #{dataId}")
+    int updateHeatById(@Param("dataId") Integer dataId, @Param("heat") Double heat);
+
+    @Select("SELECT * FROM data_management WHERE data_id = #{dataId}")
+    DataManagement findById(Integer dataId);
+
     @Select("select * from data_management where data_name = #{dataName}")
     DataManagement updateOneHeat(DataManagement dataManagement);
 

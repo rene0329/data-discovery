@@ -49,6 +49,10 @@ class CommonControllerTopologyTest {
         ResponseEntity<ApiResponse<Map<String, Object>>> management = controller.networkTopology(false);
         Map<String, Object> managementData = management.getBody().getData();
         assertEquals(2, ((List<?>) managementData.get("nodes")).size());
+        Map<String, Object> firstNode = (Map<String, Object>) ((List<?>) managementData.get("nodes")).get(0);
+        assertEquals(1, firstNode.get("nodeId"));
+        org.junit.jupiter.api.Assertions.assertNull(firstNode.get("cpu"));
+        org.junit.jupiter.api.Assertions.assertNull(firstNode.get("memory"));
         Map<String, Object> edge = (Map<String, Object>) ((List<?>) managementData.get("edges")).get(0);
         assertFalse((Boolean) edge.get("active"));
 

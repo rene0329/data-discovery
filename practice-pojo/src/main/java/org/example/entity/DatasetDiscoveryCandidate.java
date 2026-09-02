@@ -20,6 +20,7 @@ public class DatasetDiscoveryCandidate {
     private String fileType;
     private Long sizeBytes;
     private String checksum;
+    private String metadataJson;
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private LocalDateTime lastModifiedAt;
     private String availability;

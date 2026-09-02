@@ -44,5 +44,9 @@ public class NodeManagement {
     private LocalDateTime verifiedAt;
     private LocalDateTime deletedAt;
     private Integer rowVersion;
+    // Derived response fields; not persisted by MyBatis.
+    private String effectiveStatus;
+    private Boolean schedulable;
+    private String statusReason;
 
 }

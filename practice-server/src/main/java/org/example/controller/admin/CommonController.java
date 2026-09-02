@@ -2,6 +2,7 @@ package org.example.controller.admin;
 
 import lombok.extern.slf4j.Slf4j;
 import org.example.entity.*;
+import org.example.dto.registration.LegacyHeatUpdate;
 import org.example.mapper.DataManagementMapper;
 import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.MigrationTaskMapper;
@@ -621,9 +622,15 @@ public class CommonController {
      * 更新数据项（占位实现：调用 save 进行更新/插入）。
      */
     @PostMapping("/updateDataItem")
-    public ResponseEntity<ApiResponse<DataManagement>> updateDataItem(@RequestBody DataManagement data) {
-        dataManagementMapper.save(data);
-        DataManagement refreshed = dataManagementMapper.getData(data);
+    public ResponseEntity<ApiResponse<DataManagement>> updateDataItem(@RequestBody LegacyHeatUpdate data) {
+        if (data.getDataId() == null || data.getDataId() < 1 || data.getDataHeat() == null
+                || !Double.isFinite(data.getDataHeat()) || data.getDataHeat() < 0 || data.getDataHeat() > 100) {
+            throw new IllegalArgumentException("dataId is required; dataHeat must be between 0 and 100");
+        }
+        if (dataManagementMapper.updateHeatById(data.getDataId(), data.getDataHeat()) == 0) {
+            return ResponseEntity.status(404).body(ApiResponse.error(404, "physical dataset not found"));
+        }
+        DataManagement refreshed = dataManagementMapper.findById(data.getDataId());
         return ResponseEntity.ok(ApiResponse.ok(refreshed));
     }
 
@@ -766,6 +773,12 @@ public class CommonController {
             @RequestParam(defaultValue = "") String query) {
 
         List<NodeManagement> nodes = nodeManagementMapper.networkConfiguration(query);
+        for (NodeManagement node : nodes) {
+            NodeAvailability availability = nodeAvailabilityService.evaluate(node);
+            node.setEffectiveStatus(availability.getEffectiveStatus());
+            node.setSchedulable(availability.isSchedulable());
+            node.setStatusReason(availability.getReason());
+        }
 
         return ResponseEntity.ok(ApiResponse.ok(PageResult.of(nodes, page, pageSize)));
     }
@@ -775,13 +788,9 @@ public class CommonController {
      */
     @PostMapping("/updateNodeSettings")
     public ResponseEntity<ApiResponse<NodeManagement>> updateNodeSettings(@RequestBody NodeManagement node) {
-        // 仅示例：尝试按 nodeId 更新；如有更复杂字段，请在 mapper 中扩展
-        if (node.getNodeId() == null) {
-            return ResponseEntity.badRequest().body(ApiResponse.error(400, "nodeId is required"));
-        }
-        nodeManagementMapper.updateNodeFromK8s(node);
-        NodeManagement refreshed = nodeManagementMapper.getNodeById(node.getNodeId());
-        return ResponseEntity.ok(ApiResponse.ok(refreshed));
+        // Do not allow stale UI payloads to overwrite Kubernetes identity or live metrics.
+        return ResponseEntity.status(410).body(ApiResponse.error(410,
+                "use PATCH /api/v1/nodes/{nodeId} to edit displayName, role or labels with version"));
     }
 
     /**
@@ -821,19 +830,22 @@ public class CommonController {
             double angle = 2 * Math.PI * i / Math.max(total, 1) - Math.PI / 2;
             Map<String, Object> nodeMap = new HashMap<>();
             nodeMap.put("id", node.getNodeName());
+            nodeMap.put("nodeId", node.getNodeId());
+            nodeMap.put("cluster", node.getCluster());
             nodeMap.put("label", node.getNodeName());
             nodeMap.put("x", (int)(cx + radius * Math.cos(angle)));
             nodeMap.put("y", (int)(cy + radius * Math.sin(angle)));
             nodeMap.put("width", 110);
             nodeMap.put("height", 44);
             // cpu: 核心数百分比（currentCpu 单位为核，maxCpu 同单位）
-            double cpuPct = (node.getCurrentCpu() != null && node.getMaxCpu() != null && node.getMaxCpu() > 0)
-                    ? node.getCurrentCpu() / node.getMaxCpu() * 100.0 : 0.0;
-            nodeMap.put("cpu", Math.round(cpuPct * 10.0) / 10.0);
+            Double cpuPct = (node.getCurrentCpu() != null && node.getMaxCpu() != null && node.getMaxCpu() > 0)
+                    ? Math.round(node.getCurrentCpu() / node.getMaxCpu() * 1000.0) / 10.0 : null;
+            nodeMap.put("cpu", cpuPct);
             // disk(内存占用率): currentMemory/maxMemory * 100，单位均为 GB
-            double memPct = (node.getCurrentMemory() != null && node.getMaxMemory() != null && node.getMaxMemory() > 0)
-                    ? node.getCurrentMemory() / node.getMaxMemory() * 100.0 : 0.0;
-            nodeMap.put("disk", Math.round(memPct * 10.0) / 10.0);
+            Double memPct = (node.getCurrentMemory() != null && node.getMaxMemory() != null && node.getMaxMemory() > 0)
+                    ? Math.round(node.getCurrentMemory() / node.getMaxMemory() * 1000.0) / 10.0 : null;
+            nodeMap.put("memory", memPct);
+            nodeMap.put("disk", memPct); // Deprecated legacy alias; never a measured disk metric.
             nodeMap.put("registrationStatus", node.getRegistrationStatus());
             nodeMap.put("enabled", node.getEnabled());
             nodeMap.put("observedStatus", node.getObservedStatus());

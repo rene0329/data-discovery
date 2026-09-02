@@ -4,6 +4,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.DatasetReplica;
+import org.example.entity.DatasetMetadata;
 import org.example.entity.RegisteredDataset;
 
 import java.util.List;
@@ -51,4 +52,7 @@ public interface DatasetRegistrationMapper {
                                   @Param("availability") String availability,
                                   @Param("verified") boolean verified);
     int countAvailableReplicas(Long datasetId);
+
+    int upsertDatasetMetadata(DatasetMetadata metadata);
+    DatasetMetadata findDatasetMetadata(Long datasetId);
 }

@@ -9,6 +9,9 @@ public class RegisterDatasetRequest {
     private String version;
     private String description;
     private String dataType;
+    private String category;
+    private String format;
+    private String metadataJson;
     private Map<String, String> labels;
     private ResourceRequirements requiredResources;
 
@@ -24,6 +27,12 @@ public class RegisterDatasetRequest {
     public void setDescription(String description) { this.description = description; }
     public String getDataType() { return dataType; }
     public void setDataType(String dataType) { this.dataType = dataType; }
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+    public String getFormat() { return format; }
+    public void setFormat(String format) { this.format = format; }
+    public String getMetadataJson() { return metadataJson; }
+    public void setMetadataJson(String metadataJson) { this.metadataJson = metadataJson; }
     public Map<String, String> getLabels() { return labels; }
     public void setLabels(Map<String, String> labels) { this.labels = labels; }
     public ResourceRequirements getRequiredResources() { return requiredResources; }

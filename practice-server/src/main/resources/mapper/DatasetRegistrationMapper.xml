@@ -10,6 +10,7 @@
         <result property="fileType" column="file_type"/>
         <result property="sizeBytes" column="size_bytes"/>
         <result property="checksum" column="checksum"/>
+        <result property="metadataJson" column="metadata_json"/>
         <result property="lastModifiedAt" column="last_modified_at"/>
         <result property="availability" column="availability"/>
         <result property="registeredDatasetId" column="registered_dataset_id"/>
@@ -26,6 +27,8 @@
         <result property="datasetVersion" column="dataset_version"/>
         <result property="description" column="description"/>
         <result property="dataType" column="data_type"/>
+        <result property="category" column="category"/>
+        <result property="dataFormat" column="data_format"/>
         <result property="labelsJson" column="labels_json"/>
         <result property="requiredCpu" column="required_cpu"/>
         <result property="requiredMemoryGi" column="required_memory_gi"/>
@@ -38,6 +41,18 @@
         <result property="deletedAt" column="deleted_at"/>
         <result property="createdAt" column="created_at"/>
         <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <resultMap id="DatasetMetadataMap" type="org.example.entity.DatasetMetadata">
+        <id property="datasetId" column="dataset_id"/>
+        <result property="metadataVersion" column="metadata_version"/>
+        <result property="digestAlgorithm" column="digest_algorithm"/>
+        <result property="digestValue" column="digest_value"/>
+        <result property="schemaJson" column="schema_json"/>
+        <result property="profileJson" column="profile_json"/>
+        <result property="sourceJson" column="source_json"/>
+        <result property="schedulingHintsJson" column="scheduling_hints_json"/>
+        <result property="labelsJson" column="labels_json"/>
     </resultMap>
 
     <resultMap id="ReplicaMap" type="org.example.entity.DatasetReplica">
@@ -57,10 +72,10 @@
     <insert id="upsertCandidate" parameterType="org.example.entity.DatasetDiscoveryCandidate"
             useGeneratedKeys="true" keyProperty="candidateId">
         INSERT INTO dataset_discovery_candidate (
-            node_id, file_path, file_name, file_type, size_bytes, checksum,
+            node_id, file_path, file_name, file_type, size_bytes, checksum, metadata_json,
             last_modified_at, availability, registered_dataset_id, last_seen_at
         ) VALUES (
-            #{nodeId}, #{filePath}, #{fileName}, #{fileType}, #{sizeBytes}, #{checksum},
+            #{nodeId}, #{filePath}, #{fileName}, #{fileType}, #{sizeBytes}, #{checksum}, #{metadataJson},
             #{lastModifiedAt}, #{availability},
             (SELECT r.dataset_id FROM dataset_replica r
              WHERE r.node_id = #{nodeId} AND r.file_path = #{filePath} LIMIT 1),
@@ -69,6 +84,7 @@
         ON DUPLICATE KEY UPDATE
             file_name = VALUES(file_name), file_type = VALUES(file_type),
             size_bytes = VALUES(size_bytes), checksum = VALUES(checksum),
+            metadata_json = VALUES(metadata_json),
             last_modified_at = VALUES(last_modified_at), availability = VALUES(availability),
             registered_dataset_id = COALESCE(registered_dataset_id, VALUES(registered_dataset_id)),
             last_seen_at = VALUES(last_seen_at)
@@ -109,11 +125,12 @@
     <insert id="insertDataset" parameterType="org.example.entity.RegisteredDataset"
             useGeneratedKeys="true" keyProperty="datasetId">
         INSERT INTO registered_dataset (
-            legacy_data_id, dataset_code, name, dataset_version, description, data_type,
+            legacy_data_id, dataset_code, name, dataset_version, description, data_type, category, data_format,
             labels_json, required_cpu, required_memory_gi, required_gpu, status,
             default_runtime_image_id
         ) VALUES (
             #{legacyDataId}, #{datasetCode}, #{name}, #{datasetVersion}, #{description}, #{dataType},
+            #{category}, #{dataFormat},
             #{labelsJson}, #{requiredCpu}, #{requiredMemoryGi}, #{requiredGpu}, #{status},
             #{defaultRuntimeImageId}
         )
@@ -141,6 +158,7 @@
     <update id="updateDataset" parameterType="org.example.entity.RegisteredDataset">
         UPDATE registered_dataset
         SET name = #{name}, description = #{description}, data_type = #{dataType},
+            category = #{category}, data_format = #{dataFormat},
             labels_json = #{labelsJson}, required_cpu = #{requiredCpu},
             required_memory_gi = #{requiredMemoryGi}, required_gpu = #{requiredGpu},
             row_version = row_version + 1
@@ -211,5 +229,28 @@
     <select id="countAvailableReplicas" resultType="int">
         SELECT COUNT(*) FROM dataset_replica
         WHERE dataset_id = #{datasetId} AND availability = 'AVAILABLE'
+    </select>
+
+    <insert id="upsertDatasetMetadata" parameterType="org.example.entity.DatasetMetadata">
+        INSERT INTO dataset_metadata (
+            dataset_id, metadata_version, digest_algorithm, digest_value,
+            schema_json, profile_json, source_json, scheduling_hints_json, labels_json
+        ) VALUES (
+            #{datasetId}, #{metadataVersion}, #{digestAlgorithm}, #{digestValue},
+            #{schemaJson}, #{profileJson}, #{sourceJson}, #{schedulingHintsJson}, #{labelsJson}
+        )
+        ON DUPLICATE KEY UPDATE
+            metadata_version = VALUES(metadata_version),
+            digest_algorithm = VALUES(digest_algorithm),
+            digest_value = VALUES(digest_value),
+            schema_json = VALUES(schema_json),
+            profile_json = VALUES(profile_json),
+            source_json = VALUES(source_json),
+            scheduling_hints_json = VALUES(scheduling_hints_json),
+            labels_json = VALUES(labels_json)
+    </insert>
+
+    <select id="findDatasetMetadata" resultMap="DatasetMetadataMap">
+        SELECT * FROM dataset_metadata WHERE dataset_id = #{datasetId}
     </select>
 </mapper>

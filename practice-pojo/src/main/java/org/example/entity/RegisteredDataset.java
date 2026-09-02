@@ -20,6 +20,8 @@ public class RegisteredDataset {
     private String datasetVersion;
     private String description;
     private String dataType;
+    private String category;
+    private String dataFormat;
     private String labelsJson;
     private Double requiredCpu;
     private Double requiredMemoryGi;

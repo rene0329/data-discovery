@@ -3,6 +3,7 @@ package org.example.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.example.dto.registration.RegisterDatasetRequest;
 import org.example.dto.registration.OperationResult;
 import org.example.dto.registration.RegisteredDatasetView;
@@ -10,6 +11,7 @@ import org.example.dto.registration.ResourceRequirements;
 import org.example.dto.registration.UpdateDatasetRequest;
 import org.example.dto.registration.UploadDatasetRequest;
 import org.example.entity.DatasetDiscoveryCandidate;
+import org.example.entity.DatasetMetadata;
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
@@ -139,9 +141,14 @@ public class DatasetRegistrationService {
     public RegisteredDatasetView register(RegisterDatasetRequest request, String requestId) {
         String existingResourceId = auditMapper.findResourceIdByRequest("DATASET", "REGISTER", requestId);
         if (existingResourceId != null) return getDataset(Long.valueOf(existingResourceId));
-        validateRegisterRequest(request);
+        if (request == null || request.getCandidateId() == null) {
+            throw RegistrationException.invalid("candidateId is required");
+        }
         DatasetDiscoveryCandidate candidate = mapper.findCandidateById(request.getCandidateId());
         if (candidate == null) throw RegistrationException.notFound("dataset candidate not found");
+        String metadataJson = firstText(request.getMetadataJson(), candidate.getMetadataJson());
+        applyMetadata(request, metadataJson);
+        validateRegisterRequest(request);
         if (candidate.getRegisteredDatasetId() != null) {
             throw RegistrationException.conflict("dataset candidate is already registered");
         }
@@ -164,6 +171,8 @@ public class DatasetRegistrationService {
                 .datasetVersion(request.getVersion())
                 .description(request.getDescription())
                 .dataType(request.getDataType())
+                .category(firstText(request.getCategory(), "OTHER"))
+                .dataFormat(firstText(request.getFormat(), request.getDataType(), "NPZ"))
                 .labelsJson(writeJson(request.getLabels()))
                 .requiredCpu(resources == null ? null : resources.getCpu())
                 .requiredMemoryGi(resources == null ? null : resources.getMemoryGi())
@@ -172,6 +181,7 @@ public class DatasetRegistrationService {
                 .rowVersion(0)
                 .build();
         mapper.insertDataset(dataset);
+        persistDatasetMetadata(dataset.getDatasetId(), metadataJson, request);
 
         DatasetReplica replica = DatasetReplica.builder()
                 .datasetId(dataset.getDatasetId())
@@ -246,6 +256,9 @@ public class DatasetRegistrationService {
             register.setVersion(request.getVersion());
             register.setDescription(request.getDescription());
             register.setDataType(request.getDataType());
+            register.setCategory(request.getCategory());
+            register.setFormat(request.getFormat());
+            register.setMetadataJson(request.getMetadataJson());
             register.setLabels(request.getLabels());
             register.setRequiredResources(request.getRequiredResources());
             return transactionTemplate.execute(status -> register(register, requestId));
@@ -478,6 +491,7 @@ public class DatasetRegistrationService {
         if (request == null || request.getNodeId() == null) {
             throw RegistrationException.invalid("nodeId is required");
         }
+        applyMetadata(request);
         if (request.getDataType() == null || request.getDataType().trim().isEmpty()) {
             request.setDataType("NPZ");
         }
@@ -494,6 +508,9 @@ public class DatasetRegistrationService {
             throw RegistrationException.invalid("dataType must be NPZ for uploaded files");
         }
         request.setDataType("NPZ");
+        if (request.getFormat() == null || request.getFormat().trim().isEmpty()) {
+            request.setFormat("NPZ");
+        }
     }
 
     private void validateDatasetMetadata(String datasetCode, String name,
@@ -528,6 +545,107 @@ public class DatasetRegistrationService {
     private boolean isStorageRole(String role) {
         return role != null && ("storage".equalsIgnoreCase(role.trim())
                 || "compute-storage".equalsIgnoreCase(role.trim()));
+    }
+
+    private void applyMetadata(RegisterDatasetRequest request, String metadataJson) {
+        if (metadataJson == null || metadataJson.trim().isEmpty()) return;
+        try {
+            JsonNode root = objectMapper.readTree(metadataJson);
+            JsonNode dataset = root.path("dataset");
+            if (blank(request.getDatasetCode())) request.setDatasetCode(text(dataset, "datasetCode"));
+            if (blank(request.getName())) request.setName(text(dataset, "name"));
+            if (blank(request.getVersion())) request.setVersion(text(dataset, "version"));
+            if (blank(request.getDescription())) request.setDescription(text(dataset, "description"));
+            if (blank(request.getCategory())) request.setCategory(text(dataset, "category"));
+            if (blank(request.getFormat())) request.setFormat(text(dataset, "format"));
+            if (blank(request.getDataType())) request.setDataType(firstText(request.getFormat(), "NPZ"));
+            if (request.getLabels() == null && root.path("labels").isObject()) {
+                request.setLabels(objectMapper.convertValue(root.path("labels"), STRING_MAP));
+            }
+            JsonNode resources = root.path("schedulingHints").path("requiredResources");
+            if (request.getRequiredResources() == null && resources.isObject()) {
+                request.setRequiredResources(resources(resources));
+            }
+        } catch (JsonProcessingException ex) {
+            throw RegistrationException.invalid("invalid dataset metadata JSON");
+        }
+    }
+
+    private void applyMetadata(UploadDatasetRequest request) {
+        if (blank(request.getMetadataJson())) return;
+        RegisterDatasetRequest parsed = new RegisterDatasetRequest();
+        parsed.setDatasetCode(request.getDatasetCode());
+        parsed.setName(request.getName());
+        parsed.setVersion(request.getVersion());
+        parsed.setDescription(request.getDescription());
+        parsed.setDataType(request.getDataType());
+        parsed.setCategory(request.getCategory());
+        parsed.setFormat(request.getFormat());
+        parsed.setLabels(request.getLabels());
+        parsed.setRequiredResources(request.getRequiredResources());
+        applyMetadata(parsed, request.getMetadataJson());
+        request.setDatasetCode(parsed.getDatasetCode());
+        request.setName(parsed.getName());
+        request.setVersion(parsed.getVersion());
+        request.setDescription(parsed.getDescription());
+        request.setDataType(parsed.getDataType());
+        request.setCategory(parsed.getCategory());
+        request.setFormat(parsed.getFormat());
+        request.setLabels(parsed.getLabels());
+        request.setRequiredResources(parsed.getRequiredResources());
+    }
+
+    private void persistDatasetMetadata(Long datasetId, String metadataJson,
+                                        RegisterDatasetRequest request) {
+        try {
+            JsonNode root = blank(metadataJson) ? objectMapper.createObjectNode()
+                    : objectMapper.readTree(metadataJson);
+            JsonNode digest = root.path("digest");
+            DatasetMetadata metadata = DatasetMetadata.builder()
+                    .datasetId(datasetId)
+                    .metadataVersion(firstText(text(root, "metadataVersion"), "1.0"))
+                    .digestAlgorithm(text(digest, "algorithm"))
+                    .digestValue(text(digest, "value"))
+                    .schemaJson(json(root.get("schema")))
+                    .profileJson(json(root.get("profile")))
+                    .sourceJson(json(root.get("source")))
+                    .schedulingHintsJson(json(root.get("schedulingHints")))
+                    .labelsJson(root.has("labels") ? json(root.get("labels")) : writeJson(request.getLabels()))
+                    .build();
+            mapper.upsertDatasetMetadata(metadata);
+        } catch (JsonProcessingException ex) {
+            throw RegistrationException.invalid("invalid dataset metadata JSON");
+        }
+    }
+
+    private ResourceRequirements resources(JsonNode node) {
+        ResourceRequirements result = new ResourceRequirements();
+        if (node.has("cpu") && node.get("cpu").isNumber()) result.setCpu(node.get("cpu").doubleValue());
+        if (node.has("memoryGi") && node.get("memoryGi").isNumber()) {
+            result.setMemoryGi(node.get("memoryGi").doubleValue());
+        }
+        if (node.has("gpu") && node.get("gpu").isNumber()) result.setGpu(node.get("gpu").doubleValue());
+        return result;
+    }
+
+    private String json(JsonNode node) throws JsonProcessingException {
+        return node == null || node.isMissingNode() || node.isNull() ? null
+                : objectMapper.writeValueAsString(node);
+    }
+
+    private String text(JsonNode node, String field) {
+        if (node == null || !node.hasNonNull(field)) return null;
+        String value = node.get(field).asText();
+        return blank(value) ? null : value;
+    }
+
+    private boolean blank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private String firstText(String... values) {
+        for (String value : values) if (!blank(value)) return value;
+        return null;
     }
 
     private String writeJson(Object value) {

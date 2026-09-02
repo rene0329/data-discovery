@@ -132,6 +132,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
@@ -254,6 +255,7 @@ public class FileDiscoveryService {
                             fileData.setSizeBytes(attrs.size());
                             fileData.setLastModified(attrs.lastModifiedTime().to(TimeUnit.MILLISECONDS));
                             fileData.setFileType(determineFileType(filePath));
+                            fileData.setMetadataJson(readCompanionMetadata(filePath));
 
                             if (enableMd5) {
                                 fileData.setMd5Hash(calculateMd5(filePath));
@@ -339,6 +341,7 @@ public class FileDiscoveryService {
                     .fileType(fileData.getFileType())
                     .sizeBytes(fileData.getSizeBytes())
                     .checksum(fileData.getMd5Hash())
+                    .metadataJson(fileData.getMetadataJson())
                     .lastModifiedAt(LocalDateTime.ofInstant(
                             java.time.Instant.ofEpochMilli(fileData.getLastModified()),
                             java.time.ZoneId.systemDefault()))
@@ -351,6 +354,14 @@ public class FileDiscoveryService {
 
         log.info("候选文件同步完成: 观测 {}, 标记缺失 {}。注册数据集未被自动删除。",
                 observedCount, missingCount);
+    }
+
+    private String readCompanionMetadata(Path npzPath) throws IOException {
+        String fileName = npzPath.getFileName().toString();
+        String baseName = fileName.substring(0, fileName.length() - ".npz".length());
+        Path metadataPath = npzPath.resolveSibling(baseName + ".meta.json");
+        if (!Files.isRegularFile(metadataPath)) return null;
+        return new String(Files.readAllBytes(metadataPath), StandardCharsets.UTF_8);
     }
 
     // ── 数据集元信息映射（按文件名去扩展名后的 baseName 匹配） ─────────────

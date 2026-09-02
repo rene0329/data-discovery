@@ -6,6 +6,7 @@ import org.example.dto.registration.RegisterDatasetRequest;
 import org.example.dto.registration.UploadDatasetRequest;
 import org.example.entity.DatasetDiscoveryCandidate;
 import org.example.entity.DatasetReplica;
+import org.example.entity.DatasetMetadata;
 import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
 import org.example.exception.RegistrationException;
@@ -102,6 +103,41 @@ class DatasetRegistrationServiceTest {
                 .thenReturn(DatasetReplica.builder().replicaId(3L).datasetId(2L).build());
 
         assertThrows(RegistrationException.class, () -> service.register(request, "request-1"));
+    }
+
+    @Test
+    void registrationUsesCompanionMetadataJson() {
+        String metadataJson = "{\"metadataVersion\":\"1.0\","
+                + "\"dataset\":{\"datasetCode\":\"mnist\",\"name\":\"MNIST\",\"version\":\"1.0\","
+                + "\"category\":\"IMAGE\",\"format\":\"NPZ\"},"
+                + "\"schema\":{\"type\":\"TENSOR\"},\"profile\":{\"sampleCount\":10},"
+                + "\"schedulingHints\":{\"requiredResources\":{\"cpu\":2,\"memoryGi\":4,\"gpu\":0}}}";
+        RegisterDatasetRequest request = new RegisterDatasetRequest();
+        request.setCandidateId(9L);
+        DatasetDiscoveryCandidate candidate = DatasetDiscoveryCandidate.builder()
+                .candidateId(9L).nodeId(1).filePath("/dataset/mnist-1.0.npz")
+                .metadataJson(metadataJson).availability("AVAILABLE").build();
+        when(mapper.findCandidateById(9L)).thenReturn(candidate);
+        when(nodeMapper.getNodeById(1)).thenReturn(NodeManagement.builder().nodeId(1).build());
+        doAnswer(invocation -> {
+            RegisteredDataset value = invocation.getArgument(0);
+            value.setDatasetId(44L);
+            return 1;
+        }).when(mapper).insertDataset(any(RegisteredDataset.class));
+        when(mapper.findDatasetById(44L)).thenReturn(RegisteredDataset.builder()
+                .datasetId(44L).datasetCode("mnist").name("MNIST").datasetVersion("1.0")
+                .category("IMAGE").dataFormat("NPZ").status("DRAFT").build());
+        when(mapper.listReplicas(44L)).thenReturn(Collections.emptyList());
+
+        service.register(request, "metadata-request");
+
+        ArgumentCaptor<RegisteredDataset> datasetCaptor = ArgumentCaptor.forClass(RegisteredDataset.class);
+        verify(mapper).insertDataset(datasetCaptor.capture());
+        assertEquals("IMAGE", datasetCaptor.getValue().getCategory());
+        assertEquals(2.0, datasetCaptor.getValue().getRequiredCpu());
+        ArgumentCaptor<DatasetMetadata> metadataCaptor = ArgumentCaptor.forClass(DatasetMetadata.class);
+        verify(mapper).upsertDatasetMetadata(metadataCaptor.capture());
+        assertEquals("{\"sampleCount\":10}", metadataCaptor.getValue().getProfileJson());
     }
 
     @Test

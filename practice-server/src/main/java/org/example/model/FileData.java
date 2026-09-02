@@ -13,6 +13,7 @@ public class FileData implements Serializable {
     private long lastModified;     // 最后修改时间 (Unix 毫秒时间戳)
     private String fileType;       // 文件类型推断 (e.g., "CSV", "PARQUET", "UNKNOWN")
     private String md5Hash;        // 文件内容的MD5哈希 (可选，当前已决定不计算，但可预留字段)
+    private String metadataJson;   // 同名 *.meta.json 的原始内容
 
     // --- 构造函数 (可选，方便创建对象) ---
     public FileData() {}
@@ -44,6 +45,9 @@ public class FileData implements Serializable {
 
     public String getMd5Hash() { return md5Hash; }
     public void setMd5Hash(String md5Hash) { this.md5Hash = md5Hash; }
+
+    public String getMetadataJson() { return metadataJson; }
+    public void setMetadataJson(String metadataJson) { this.metadataJson = metadataJson; }
 
 
     // --- toString, equals, hashCode (推荐添加，方便调试和集合操作) ---

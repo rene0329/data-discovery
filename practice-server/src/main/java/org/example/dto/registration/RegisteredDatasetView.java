@@ -13,6 +13,8 @@ public class RegisteredDatasetView {
     private String version;
     private String description;
     private String dataType;
+    private String category;
+    private String format;
     private String status;
     private Map<String, String> labels;
     private ResourceRequirements requiredResources;
@@ -33,6 +35,8 @@ public class RegisteredDatasetView {
         view.version = entity.getDatasetVersion();
         view.description = entity.getDescription();
         view.dataType = entity.getDataType();
+        view.category = entity.getCategory();
+        view.format = entity.getDataFormat();
         view.status = entity.getStatus();
         view.labels = labels;
         ResourceRequirements resources = new ResourceRequirements();
@@ -52,6 +56,8 @@ public class RegisteredDatasetView {
     public String getVersion() { return version; }
     public String getDescription() { return description; }
     public String getDataType() { return dataType; }
+    public String getCategory() { return category; }
+    public String getFormat() { return format; }
     public String getStatus() { return status; }
     public Map<String, String> getLabels() { return labels; }
     public ResourceRequirements getRequiredResources() { return requiredResources; }

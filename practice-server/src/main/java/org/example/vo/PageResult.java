@@ -29,11 +29,12 @@ public class PageResult<T> {
             return new PageResult<>(Collections.emptyList(), 0, pageNum, pageSize);
         }
         int totalItems = fullList.size();
-        int fromIndex = Math.max(0, (pageNum - 1) * pageSize);
-        int toIndex = Math.min(fromIndex + pageSize, totalItems);
-        if (fromIndex >= totalItems) {
+        long offset = (long) (pageNum - 1) * pageSize;
+        if (offset >= totalItems) {
             return new PageResult<>(Collections.emptyList(), totalItems, pageNum, pageSize);
         }
+        int fromIndex = (int) offset;
+        int toIndex = (int) Math.min(offset + pageSize, totalItems);
         List<T> sub = fullList.subList(fromIndex, toIndex);
         return new PageResult<>(sub, totalItems, pageNum, pageSize);
     }

@@ -16,6 +16,7 @@ import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
 import org.example.entity.DatasetReplica;
 import org.example.entity.RuntimeImage;
+import org.example.entity.SchedulingAssignment;
 import org.example.entity.TaskManagement;
 import org.example.factory.JobCreationResult;
 import org.example.factory.K8sJobFactory;
@@ -25,6 +26,7 @@ import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.RuntimeImageMapper;
 import org.example.mapper.TaskManagementMapper;
+import org.example.mapper.SchedulingPlanMapper;
 import org.example.vo.DataItemResult;
 import org.example.dto.registration.ResourceRequirements;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -67,6 +69,8 @@ public class K8sTaskOrchestratorService {
     private final String centralNodeIp;
     private final Executor dataProcessingExecutor;
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
+    private final SchedulingPlanMapper schedulingPlanMapper;
+    private final DatasetUploadClient datasetUploadClient;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
     /** 当亲和性调度的目标节点就是数据所在源节点时，跳过实际 Job 直接返回此基础时间(ms)，当文件大小为0时兜底使用。*/
@@ -113,7 +117,9 @@ public class K8sTaskOrchestratorService {
             @Value("${dispatch.central-node.name:}") String centralNodeName,
             @Value("${dispatch.central-node.ip:}") String centralNodeIp,
             @Qualifier("dataProcessingExecutor") Executor dataProcessingExecutor,
-            DatasetReplicaAvailabilityService replicaAvailabilityService
+            DatasetReplicaAvailabilityService replicaAvailabilityService,
+            SchedulingPlanMapper schedulingPlanMapper,
+            DatasetUploadClient datasetUploadClient
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -127,6 +133,8 @@ public class K8sTaskOrchestratorService {
         this.centralNodeIp = centralNodeIp;
         this.dataProcessingExecutor = dataProcessingExecutor;
         this.replicaAvailabilityService = replicaAvailabilityService;
+        this.schedulingPlanMapper = schedulingPlanMapper;
+        this.datasetUploadClient = datasetUploadClient;
     }
 
 
@@ -207,6 +215,114 @@ public class K8sTaskOrchestratorService {
             log.error("注册资源任务 {} 执行失败", taskId, e);
             updateTaskStatusToFailed(taskId, e.getMessage());
         }
+    }
+
+    @Async
+    public void executeExternalPlan(Long planId, Integer taskId,
+                                    List<SchedulingAssignment> assignments) {
+        schedulingPlanMapper.updatePlanStatus(planId, "RUNNING", null);
+        List<String> schedules = new ArrayList<>();
+        double totalSeconds = 0.0;
+        int successCount = 0;
+        String lastError = null;
+        for (SchedulingAssignment assignment : assignments) {
+            try {
+                schedulingPlanMapper.updateAssignmentStatus(
+                        assignment.getAssignmentId(), "RUNNING", null);
+                DataItemResult result = processExternalAssignment(taskId, assignment);
+                if (result == null) throw new IllegalStateException("assignment execution failed");
+                schedules.add(result.getScheduleT1());
+                totalSeconds += result.getT1Seconds();
+                successCount++;
+                schedulingPlanMapper.updateAssignmentStatus(
+                        assignment.getAssignmentId(), "COMPLETED", null);
+            } catch (Exception ex) {
+                lastError = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+                log.error("外部调度方案 {} 的 assignment {} 执行失败",
+                        planId, assignment.getAssignmentId(), ex);
+                schedulingPlanMapper.updateAssignmentStatus(
+                        assignment.getAssignmentId(), "FAILED", lastError);
+            }
+        }
+        String status = successCount == assignments.size() ? "COMPLETED"
+                : successCount == 0 ? "FAILED" : "PARTIAL_COMPLETED";
+        schedulingPlanMapper.updatePlanStatus(planId, status, lastError);
+        updateFinalTaskStatus(taskId, totalSeconds, totalSeconds, schedules,
+                Collections.<String>emptyList(), successCount, assignments.size());
+    }
+
+    private DataItemResult processExternalAssignment(Integer taskId,
+                                                      SchedulingAssignment assignment) {
+        RegisteredDataset dataset = datasetRegistrationMapper.findDatasetById(assignment.getDatasetId());
+        DatasetReplica replica = datasetRegistrationMapper.findReplicaById(assignment.getReplicaId());
+        if (dataset == null || replica == null || !dataset.getDatasetId().equals(replica.getDatasetId())) {
+            throw new IllegalStateException("数据集或副本不存在");
+        }
+        NodeManagement sourceNode = nodeManagementMapper.getNodeById(assignment.getSourceNodeId());
+        NodeManagement targetNode = nodeManagementMapper.getNodeById(assignment.getTargetNodeId());
+        if (sourceNode == null || targetNode == null) throw new IllegalStateException("源节点或目标节点不存在");
+        NodeManagement executionSource = sourceNode;
+        if (("COPY_AND_USE".equals(assignment.getAction())
+                || "MOVE_AND_USE".equals(assignment.getAction()))
+                && !sourceNode.getNodeId().equals(targetNode.getNodeId())) {
+            datasetUploadClient.copyFrom(sourceNode, targetNode, replica.getFilePath(), replica.getSizeBytes());
+            datasetUploadClient.scan(targetNode);
+            DatasetReplica targetReplica = datasetRegistrationMapper.findReplicaByDatasetNodePath(
+                    dataset.getDatasetId(), targetNode.getNodeId(), replica.getFilePath());
+            if (targetReplica == null) {
+                targetReplica = DatasetReplica.builder()
+                        .datasetId(dataset.getDatasetId())
+                        .nodeId(targetNode.getNodeId())
+                        .filePath(replica.getFilePath())
+                        .sizeBytes(replica.getSizeBytes())
+                        .checksum(replica.getChecksum())
+                        .availability("AVAILABLE")
+                        .lastSeenAt(LocalDateTime.now())
+                        .verifiedAt(LocalDateTime.now())
+                        .build();
+                datasetRegistrationMapper.insertReplica(targetReplica);
+            }
+            executionSource = targetNode;
+            if ("MOVE_AND_USE".equals(assignment.getAction())) {
+                datasetUploadClient.deleteQuietly(sourceNode, replica.getFilePath());
+                datasetRegistrationMapper.updateReplicaAvailability(
+                        replica.getReplicaId(), "MISSING", false);
+            }
+        }
+        Long imageId = dataset.getDefaultRuntimeImageId();
+        RuntimeImage image = imageId == null ? null : runtimeImageMapper.findById(imageId);
+        if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())) {
+            throw new IllegalStateException("数据集默认运行镜像不可用: " + imageId);
+        }
+        image.setCommand(readStringList(image.getCommandJson()));
+        image.setArgsTemplate(readStringList(image.getArgsTemplateJson()));
+
+        String fileName = replica.getFilePath();
+        int slash = fileName == null ? -1 : fileName.lastIndexOf('/');
+        if (slash >= 0) fileName = fileName.substring(slash + 1);
+        if (fileName == null || fileName.isEmpty()) fileName = dataset.getDatasetCode();
+        DataManagement dataInfo = DataManagement.builder()
+                .dataId(dataset.getLegacyDataId())
+                .dataName(fileName)
+                .dataSize(replica.getSizeBytes())
+                .dataServer(executionSource.getNodeName())
+                .dataNodeId(executionSource.getNodeId())
+                .filePath(replica.getFilePath())
+                .requiredCpu(dataset.getRequiredCpu())
+                .requiredMemory(dataset.getRequiredMemoryGi())
+                .build();
+        AtomicReference<String> selectedNode = new AtomicReference<>(targetNode.getNodeName());
+        long durationMs = executeJobAndMeasureInitContainer(
+                taskId, "external", executionSource, targetNode.getNodeName(), null,
+                dataInfo, dataset.getDatasetId(), image, dataset.getRequiredGpu(), selectedNode);
+        if (durationMs < 0) throw new IllegalStateException("K8s Job 执行失败");
+
+        DataItemResult result = new DataItemResult();
+        result.setT1Seconds(durationMs / 1000.0);
+        result.setT2Seconds(durationMs / 1000.0);
+        result.setScheduleT1(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
+                + " -> " + selectedNode.get() + " [" + assignment.getAction() + "]");
+        return result;
     }
 
 

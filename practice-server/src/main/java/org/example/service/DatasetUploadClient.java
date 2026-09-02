@@ -18,6 +18,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.UUID;
 
 /**
@@ -33,14 +35,17 @@ public class DatasetUploadClient {
     private final int discoveryPort;
     private final int connectTimeoutMs;
     private final int readTimeoutMs;
+    private final String dataDirectory;
 
     public DatasetUploadClient(
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
             @Value("${app.storage-transfer.connect-timeout-ms:5000}") int connectTimeoutMs,
-            @Value("${app.storage-transfer.read-timeout-ms:600000}") int readTimeoutMs) {
+            @Value("${app.storage-transfer.read-timeout-ms:600000}") int readTimeoutMs,
+            @Value("${dispatch.data-discovery.data-directory:/dataset}") String dataDirectory) {
         this.discoveryPort = discoveryPort;
         this.connectTimeoutMs = Math.max(1000, connectTimeoutMs);
         this.readTimeoutMs = Math.max(1000, readTimeoutMs);
+        this.dataDirectory = Paths.get(dataDirectory).toAbsolutePath().normalize().toString();
     }
 
     public void upload(NodeManagement node, MultipartFile file, String relativePath) {
@@ -111,6 +116,41 @@ public class DatasetUploadClient {
         }
     }
 
+    public void copyFrom(NodeManagement source, NodeManagement target,
+                         String absolutePath, Long expectedSize) {
+        requireAddress(source);
+        requireAddress(target);
+        HttpURLConnection connection = null;
+        try {
+            String sourceUrl = baseUrl(source) + "/data-discovery/download/"
+                    + encodeAbsolutePath(absolutePath);
+            String relativePath = relativeDataPath(absolutePath);
+            String body = "{\"sourceUrl\":\"" + jsonEscape(sourceUrl)
+                    + "\",\"path\":\"" + jsonEscape(relativePath) + "\""
+                    + (expectedSize == null ? "" : ",\"expectedSize\":" + expectedSize) + "}";
+            connection = open(new URL(baseUrl(target) + "/data-discovery/copy-from"), "POST");
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(bytes.length);
+            try (DataOutputStream output = new DataOutputStream(connection.getOutputStream())) {
+                output.write(bytes);
+            }
+            int status = connection.getResponseCode();
+            String response = readResponse(connection, status);
+            if (status < 200 || status >= 300) {
+                throw uploadFailure("node-to-node copy failed with HTTP " + status + detail(response));
+            }
+        } catch (RegistrationException ex) {
+            throw ex;
+        } catch (IOException ex) {
+            throw uploadFailure("failed to copy dataset from " + source.getNodeName()
+                    + " to " + target.getNodeName() + ": " + ex.getMessage());
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     public void deleteQuietly(NodeManagement node, String absolutePath) {
         if (node == null || node.getInternalIp() == null || absolutePath == null) return;
         HttpURLConnection connection = null;
@@ -133,6 +173,29 @@ public class DatasetUploadClient {
         } finally {
             if (connection != null) connection.disconnect();
         }
+    }
+
+    private String relativeDataPath(String absolutePath) {
+        Path root = Paths.get(dataDirectory).toAbsolutePath().normalize();
+        Path path = Paths.get(absolutePath).toAbsolutePath().normalize();
+        if (!path.startsWith(root)) {
+            throw RegistrationException.invalid("dataset path is outside data directory");
+        }
+        return root.relativize(path).toString().replace('\\', '/');
+    }
+
+    private String encodeAbsolutePath(String absolutePath) throws IOException {
+        StringBuilder encodedPath = new StringBuilder();
+        for (String segment : absolutePath.split("/")) {
+            if (segment.isEmpty()) continue;
+            if (encodedPath.length() > 0) encodedPath.append('/');
+            encodedPath.append(URLEncoder.encode(segment, "UTF-8").replace("+", "%20"));
+        }
+        return encodedPath.toString();
+    }
+
+    private String jsonEscape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private HttpURLConnection open(URL url, String method) throws IOException {
