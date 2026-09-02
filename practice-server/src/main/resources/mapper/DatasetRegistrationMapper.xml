@@ -129,12 +129,12 @@
         INSERT INTO registered_dataset (
             legacy_data_id, dataset_code, name, dataset_version, description, data_type, category, data_format,
             labels_json, required_cpu, required_memory_gi, required_gpu, status,
-            default_runtime_image_id
+            default_runtime_image_id, data_heat, heat_updated_at
         ) VALUES (
             #{legacyDataId}, #{datasetCode}, #{name}, #{datasetVersion}, #{description}, #{dataType},
             #{category}, #{dataFormat},
             #{labelsJson}, #{requiredCpu}, #{requiredMemoryGi}, #{requiredGpu}, #{status},
-            #{defaultRuntimeImageId}
+            #{defaultRuntimeImageId}, COALESCE(#{dataHeat}, 10), UTC_TIMESTAMP(3)
         )
     </insert>
 

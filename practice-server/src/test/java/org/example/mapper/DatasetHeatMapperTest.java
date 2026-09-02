@@ -25,5 +25,9 @@ class DatasetHeatMapperTest {
             assertFalse(sql.contains("data_name"));
             if (name.equals("recordHeatAccess")) assertTrue(sql.contains("dataset_id = ?"));
         }
+        String insert = config.getMappedStatement("org.example.mapper.DatasetRegistrationMapper.insertDataset")
+                .getBoundSql(new org.example.entity.RegisteredDataset()).getSql();
+        assertTrue(insert.contains("heat_updated_at"));
+        assertTrue(insert.contains("UTC_TIMESTAMP(3)"));
     }
 }

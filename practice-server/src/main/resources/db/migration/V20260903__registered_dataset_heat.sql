@@ -11,7 +11,10 @@ SET @sql = (SELECT IF(EXISTS(SELECT 1 FROM information_schema.columns
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 UPDATE registered_dataset r LEFT JOIN data_management d ON d.data_id = r.legacy_data_id
 SET r.data_heat = COALESCE(d.data_heat, 10),
-    r.heat_updated_at = COALESCE(d.heat_updated_at, UTC_TIMESTAMP(3)), r.updated_at = r.updated_at
+    -- Legacy heat uses CURRENT_TIMESTAMP (database local time); the logical catalog uses UTC.
+    r.heat_updated_at = COALESCE(TIMESTAMPADD(SECOND,
+        TIMESTAMPDIFF(SECOND, CURRENT_TIMESTAMP(3), UTC_TIMESTAMP(3)), d.heat_updated_at), UTC_TIMESTAMP(3)),
+    r.updated_at = r.updated_at
 WHERE r.data_heat IS NULL;
 UPDATE registered_dataset SET heat_updated_at = UTC_TIMESTAMP(3), updated_at = updated_at
 WHERE heat_updated_at IS NULL;
