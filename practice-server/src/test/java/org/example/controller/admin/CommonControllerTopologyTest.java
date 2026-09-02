@@ -10,6 +10,8 @@ import org.example.mapper.TaskManagementMapper;
 import org.example.service.K8sTaskOrchestratorService;
 import org.example.service.NodeAvailabilityService;
 import org.example.service.NetworkTopologyService;
+import org.example.service.PublicIpLocationService;
+import org.example.dto.PublicIpLocation;
 import org.example.vo.ApiResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 class CommonControllerTopologyTest {
     @Test
@@ -32,6 +35,9 @@ class CommonControllerTopologyTest {
     void topologyKeepsDisabledNodesForManagementAndFiltersRuntimeView() {
         NodeManagementMapper nodes = mock(NodeManagementMapper.class);
         EdgeManagementMapper edges = mock(EdgeManagementMapper.class);
+        PublicIpLocationService locations = mock(PublicIpLocationService.class);
+        PublicIpLocation location = new PublicIpLocation("8.8.8.8", "United States", "RESOLVED", "ip2region");
+        when(locations.lookup("8.8.8.8")).thenReturn(location);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         NodeManagement active = NodeManagement.builder().nodeId(1).nodeName("active")
                 .internalIp("10.0.0.1").externalIp("8.8.8.8")
@@ -47,7 +53,7 @@ class CommonControllerTopologyTest {
                 mock(TaskManagementMapper.class), mock(MigrationTaskMapper.class),
                 new NetworkTopologyService(edges, nodes, new NodeAvailabilityService(300), 1800),
                 mock(K8sTaskOrchestratorService.class), mock(RestTemplate.class),
-                new NodeAvailabilityService(300));
+                new NodeAvailabilityService(300), locations);
 
         ResponseEntity<ApiResponse<Map<String, Object>>> management = controller.networkTopology(false);
         Map<String, Object> managementData = management.getBody().getData();
@@ -56,6 +62,8 @@ class CommonControllerTopologyTest {
         assertEquals(1, firstNode.get("nodeId"));
         assertEquals("10.0.0.1", firstNode.get("internalIp"));
         assertEquals("8.8.8.8", firstNode.get("externalIp"));
+        assertEquals(location, firstNode.get("publicIpLocation"));
+        verify(locations).lookup("8.8.8.8");
         org.junit.jupiter.api.Assertions.assertNull(firstNode.get("cpu"));
         org.junit.jupiter.api.Assertions.assertNull(firstNode.get("memory"));
         Map<String, Object> edge = (Map<String, Object>) ((List<?>) managementData.get("edges")).get(0);

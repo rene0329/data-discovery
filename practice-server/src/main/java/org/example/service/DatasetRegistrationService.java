@@ -402,9 +402,14 @@ public class DatasetRegistrationService {
     @Transactional
     public void unregister(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
-        int taskReferences = mapper.countLegacyTaskReferences(dataset.getName());
+        int taskReferences = mapper.countTaskReferences(datasetId, dataset.getName());
         if (taskReferences > 0) {
-            throw RegistrationException.conflict("dataset is referenced by " + taskReferences + " tasks");
+            throw RegistrationException.conflict("DATASET_IN_USE",
+                    "数据集被 " + taskReferences + " 个任务引用，无法删除");
+        }
+        if (mapper.countActiveMigrationReferences(datasetId, dataset.getLegacyDataId()) > 0
+                || mapper.countActiveSchedulingReferences(datasetId) > 0) {
+            throw RegistrationException.conflict("DATASET_IN_USE", "数据集存在进行中的迁移或调度，无法删除");
         }
         mapper.softDeleteDataset(datasetId);
         audit("DATASET", String.valueOf(datasetId), "UNREGISTER", requestId, null);

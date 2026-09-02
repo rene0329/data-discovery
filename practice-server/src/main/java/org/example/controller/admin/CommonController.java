@@ -11,6 +11,7 @@ import org.example.mapper.TaskManagementMapper;
 import org.example.service.K8sTaskOrchestratorService; // 引入新的后台服务
 import org.example.service.NodeAvailability;
 import org.example.service.NodeAvailabilityService;
+import org.example.service.PublicIpLocationService;
 import org.example.vo.NodeManagementVO;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +50,7 @@ public class CommonController {
     private final K8sTaskOrchestratorService k8sTaskOrchestratorService;
     private final RestTemplate restTemplate;
     private final NodeAvailabilityService nodeAvailabilityService;
+    private final PublicIpLocationService publicIpLocationService;
 
     // data-discovery DaemonSet 寻址配置
     @Value("${dispatch.data-discovery.port:8080}")
@@ -81,7 +83,8 @@ public class CommonController {
             NetworkTopologyService networkTopologyService,
             K8sTaskOrchestratorService k8sTaskOrchestratorService,
             RestTemplate restTemplate,
-            NodeAvailabilityService nodeAvailabilityService
+            NodeAvailabilityService nodeAvailabilityService,
+            PublicIpLocationService publicIpLocationService
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -91,6 +94,7 @@ public class CommonController {
         this.k8sTaskOrchestratorService = k8sTaskOrchestratorService;
         this.restTemplate = restTemplate;
         this.nodeAvailabilityService = nodeAvailabilityService;
+        this.publicIpLocationService = publicIpLocationService;
     }
 
     /**
@@ -841,6 +845,7 @@ public class CommonController {
             nodeMap.put("cluster", node.getCluster());
             nodeMap.put("internalIp", node.getInternalIp());
             nodeMap.put("externalIp", node.getExternalIp());
+            nodeMap.put("publicIpLocation", publicIpLocationService.lookup(node.getExternalIp()));
             nodeMap.put("label", node.getNodeName());
             nodeMap.put("x", (int)(cx + radius * Math.cos(angle)));
             nodeMap.put("y", (int)(cy + radius * Math.sin(angle)));

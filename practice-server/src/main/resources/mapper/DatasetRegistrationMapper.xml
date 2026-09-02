@@ -185,9 +185,28 @@
         WHERE dataset_id = #{datasetId} AND deleted_at IS NULL
     </update>
 
-    <select id="countLegacyTaskReferences" resultType="int">
+    <select id="countTaskReferences" resultType="int">
         SELECT COUNT(*) FROM task_management
-        WHERE selected_data LIKE CONCAT('%', #{datasetName}, '%')
+        WHERE CASE WHEN JSON_VALID(dataset_ids_json)
+            THEN JSON_CONTAINS(dataset_ids_json, CAST(#{datasetId} AS JSON))
+            ELSE LOCATE(#{datasetName}, selected_data) &gt; 0
+        END
+    </select>
+
+    <select id="countActiveMigrationReferences" resultType="int">
+        SELECT COUNT(*) FROM migration_task
+        WHERE (registered_dataset_id = #{datasetId}
+            <if test="legacyDataId != null">
+                OR (registered_dataset_id IS NULL AND data_id = #{legacyDataId})
+            </if>
+        ) AND status NOT IN ('COMPLETED', 'FAILED')
+    </select>
+
+    <select id="countActiveSchedulingReferences" resultType="int">
+        SELECT COUNT(*) FROM scheduling_assignment a
+        JOIN scheduling_plan p ON p.plan_id = a.plan_id
+        WHERE a.dataset_id = #{datasetId}
+            AND p.status IN ('ACCEPTED', 'RUNNING')
     </select>
 
     <insert id="insertReplica" parameterType="org.example.entity.DatasetReplica"

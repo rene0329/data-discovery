@@ -38,7 +38,11 @@ public interface DatasetRegistrationMapper {
     int bindRuntimeImage(@Param("datasetId") Long datasetId,
                          @Param("runtimeImageId") Long runtimeImageId);
     int softDeleteDataset(Long datasetId);
-    int countLegacyTaskReferences(@Param("datasetName") String datasetName);
+    int countTaskReferences(@Param("datasetId") Long datasetId,
+                            @Param("datasetName") String datasetName);
+    int countActiveMigrationReferences(@Param("datasetId") Long datasetId,
+                                       @Param("legacyDataId") Integer legacyDataId);
+    int countActiveSchedulingReferences(@Param("datasetId") Long datasetId);
 
     int insertReplica(DatasetReplica replica);
     DatasetReplica findReplicaById(Long replicaId);

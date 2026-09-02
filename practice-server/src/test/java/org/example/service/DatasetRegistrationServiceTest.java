@@ -66,6 +66,67 @@ class DatasetRegistrationServiceTest {
     }
 
     @Test
+    void unregisterSoftDeletesWithoutRemovingSourceFilesOrReplicaHistory() {
+        when(mapper.findDatasetById(42L)).thenReturn(RegisteredDataset.builder()
+                .datasetId(42L).name("renamed-dataset").status("DRAFT").build());
+
+        service.unregister(42L, "delete-request");
+
+        verify(mapper).countTaskReferences(42L, "renamed-dataset");
+        verify(mapper).countActiveMigrationReferences(42L, null);
+        verify(mapper).countActiveSchedulingReferences(42L);
+        verify(mapper).softDeleteDataset(42L);
+        org.mockito.Mockito.verifyNoInteractions(uploadClient);
+    }
+
+    @Test
+    void unregisterRejectsTaskReferencesUsingTheStableDatasetId() {
+        when(mapper.findDatasetById(42L)).thenReturn(RegisteredDataset.builder()
+                .datasetId(42L).name("renamed-dataset").build());
+        when(mapper.countTaskReferences(42L, "renamed-dataset")).thenReturn(1);
+
+        RegistrationException error = assertThrows(RegistrationException.class,
+                () -> service.unregister(42L, "delete-request"));
+
+        assertEquals("DATASET_IN_USE", error.getErrorCode());
+        verify(mapper, never()).softDeleteDataset(any());
+    }
+
+    @Test
+    void unregisterRejectsActiveMigrationIncludingLegacyDataReferences() {
+        when(mapper.findDatasetById(42L)).thenReturn(RegisteredDataset.builder()
+                .datasetId(42L).legacyDataId(7).name("data").build());
+        when(mapper.countActiveMigrationReferences(42L, 7)).thenReturn(1);
+
+        RegistrationException error = assertThrows(RegistrationException.class,
+                () -> service.unregister(42L, "delete-request"));
+
+        assertEquals("DATASET_IN_USE", error.getErrorCode());
+        verify(mapper, never()).softDeleteDataset(any());
+    }
+
+    @Test
+    void unregisterRejectsAcceptedOrRunningSchedulingPlans() {
+        when(mapper.findDatasetById(42L)).thenReturn(RegisteredDataset.builder()
+                .datasetId(42L).name("data").build());
+        when(mapper.countActiveSchedulingReferences(42L)).thenReturn(1);
+
+        RegistrationException error = assertThrows(RegistrationException.class,
+                () -> service.unregister(42L, "delete-request"));
+
+        assertEquals("DATASET_IN_USE", error.getErrorCode());
+        verify(mapper, never()).softDeleteDataset(any());
+    }
+
+    @Test
+    void unregisterReturnsNotFoundForMissingOrDeletedDataset() {
+        RegistrationException error = assertThrows(RegistrationException.class,
+                () -> service.unregister(42L, "delete-request"));
+        assertEquals("RESOURCE_NOT_FOUND", error.getErrorCode());
+        verify(mapper, never()).softDeleteDataset(any());
+    }
+
+    @Test
     void discoveryUsesVerifiedStorageNodesEvenWhenSchedulingIsDisabled() {
         NodeManagement storage = NodeManagement.builder().nodeId(1).nodeName("storage-1")
                 .internalIp("10.0.0.1").type("storage").registrationStatus("REGISTERED")
