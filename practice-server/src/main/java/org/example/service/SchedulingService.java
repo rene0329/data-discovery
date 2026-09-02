@@ -46,6 +46,7 @@ public class SchedulingService {
             new TypeReference<Map<String, String>>() { };
     private static final Set<String> ACTIONS = new HashSet<>(Arrays.asList(
             "USE_IN_PLACE", "COPY_AND_USE", "MOVE_AND_USE", "REMOTE_READ"));
+    private static final Set<String> DATA_ACTIONS = new HashSet<>(Arrays.asList("COPY", "MOVE"));
     private static final Set<String> PLAN_STATUSES = new HashSet<>(Arrays.asList(
             "ACCEPTED", "RUNNING", "COMPLETED", "PARTIAL_COMPLETED", "FAILED"));
 
@@ -58,6 +59,7 @@ public class SchedulingService {
     private final K8sTaskOrchestratorService orchestrator;
     private final ObjectMapper objectMapper;
     private final NetworkTopologyService networkTopologyService;
+    private final DatasetSchedulingExecutor datasetSchedulingExecutor;
 
     public SchedulingService(DatasetRegistrationMapper datasetMapper,
                              NodeManagementMapper nodeMapper,
@@ -67,7 +69,8 @@ public class SchedulingService {
                              NodeAvailabilityService nodeAvailabilityService,
                              K8sTaskOrchestratorService orchestrator,
                              ObjectMapper objectMapper,
-                             NetworkTopologyService networkTopologyService) {
+                             NetworkTopologyService networkTopologyService,
+                             DatasetSchedulingExecutor datasetSchedulingExecutor) {
         this.datasetMapper = datasetMapper;
         this.nodeMapper = nodeMapper;
         this.planMapper = planMapper;
@@ -77,6 +80,7 @@ public class SchedulingService {
         this.orchestrator = orchestrator;
         this.objectMapper = objectMapper;
         this.networkTopologyService = networkTopologyService;
+        this.datasetSchedulingExecutor = datasetSchedulingExecutor;
     }
 
     public SchedulingPageResult<SchedulableDatasetView> listDatasets(
@@ -126,9 +130,23 @@ public class SchedulingService {
 
     @Transactional
     public SchedulingPlanAccepted submit(SchedulingPlanRequest request) {
-        validatePlan(request);
-        SchedulingPlan existing = planMapper.findByExternalPlanId(request.getExternalPlanId());
-        if (existing != null) return accepted(existing);
+        return submit(request, false);
+    }
+
+    @Transactional
+    public SchedulingPlanAccepted submitDataPlan(SchedulingPlanRequest request) {
+        return submit(request, true);
+    }
+
+    private SchedulingPlanAccepted submit(SchedulingPlanRequest request, boolean dataOnly) {
+        validatePlan(request, dataOnly);
+        SchedulingPlan existing = planMapper.findByExternalPlanId(request.getExternalPlanId().trim());
+        if (existing != null) {
+            if (dataOnly != (existing.getInternalTaskId() == null)) {
+                throw RegistrationException.conflict("externalPlanId is already used by another plan type");
+            }
+            return accepted(existing);
+        }
 
         List<SchedulingAssignment> assignments = new ArrayList<>();
         List<Long> datasetIds = new ArrayList<>();
@@ -152,7 +170,11 @@ public class SchedulingService {
             if (target == null || !nodeAvailabilityService.isSchedulable(target)) {
                 throw RegistrationException.conflict("target node is not schedulable: " + item.getTargetNodeId());
             }
-            String action = item.getAction().trim().toUpperCase();
+            if (dataOnly && (!DatasetSchedulingExecutor.isStorageNode(target)
+                    || item.getSourceNodeId().equals(item.getTargetNodeId()))) {
+                throw RegistrationException.invalid("data transfer requires a different STORAGE or COMPUTE_STORAGE target node");
+            }
+            String action = item.getAction().trim().toUpperCase(Locale.ROOT);
             if ("USE_IN_PLACE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId())) {
                 throw RegistrationException.invalid("USE_IN_PLACE requires sourceNodeId = targetNodeId");
             }
@@ -169,11 +191,12 @@ public class SchedulingService {
             datasetNames.add(dataset.getName());
         }
 
-        TaskManagement task = resolveOrCreateTask(request.getTaskId(), datasetIds, datasetNames);
+        TaskManagement task = dataOnly ? null : resolveOrCreateTask(request.getTaskId(), datasetIds, datasetNames);
         SchedulingPlan plan = SchedulingPlan.builder()
                 .externalPlanId(request.getExternalPlanId().trim())
-                .taskId(request.getTaskId().trim())
-                .internalTaskId(task.getTaskId())
+                // Retain the required correlation field without creating a compute task.
+                .taskId(dataOnly ? request.getExternalPlanId().trim() : request.getTaskId().trim())
+                .internalTaskId(task == null ? null : task.getTaskId())
                 .algorithmName(request.getAlgorithm() == null ? null : request.getAlgorithm().getName())
                 .algorithmVersion(request.getAlgorithm() == null ? null : request.getAlgorithm().getVersion())
                 .status("ACCEPTED")
@@ -183,20 +206,23 @@ public class SchedulingService {
             assignment.setPlanId(plan.getPlanId());
             planMapper.insertAssignment(assignment);
         }
-        dispatchAfterCommit(plan.getPlanId(), task.getTaskId(), assignments);
+        dispatchAfterCommit(plan.getPlanId(), plan.getInternalTaskId(), assignments);
         return accepted(plan);
     }
 
     private void dispatchAfterCommit(Long planId, Integer taskId,
                                      List<SchedulingAssignment> assignments) {
+        Runnable dispatch = taskId == null
+                ? () -> datasetSchedulingExecutor.execute(planId, assignments)
+                : () -> orchestrator.executeExternalPlan(planId, taskId, assignments);
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            orchestrator.executeExternalPlan(planId, taskId, assignments);
+            dispatch.run();
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                orchestrator.executeExternalPlan(planId, taskId, assignments);
+                dispatch.run();
             }
         });
     }
@@ -290,9 +316,9 @@ public class SchedulingService {
         return task;
     }
 
-    private void validatePlan(SchedulingPlanRequest request) {
-        if (request == null || blank(request.getExternalPlanId()) || blank(request.getTaskId())) {
-            throw RegistrationException.invalid("externalPlanId and taskId are required");
+    private void validatePlan(SchedulingPlanRequest request, boolean dataOnly) {
+        if (request == null || blank(request.getExternalPlanId()) || (!dataOnly && blank(request.getTaskId()))) {
+            throw RegistrationException.invalid(dataOnly ? "externalPlanId is required" : "externalPlanId and taskId are required");
         }
         if (request.getAssignments() == null || request.getAssignments().isEmpty()) {
             throw RegistrationException.invalid("assignments must not be empty");
@@ -300,7 +326,8 @@ public class SchedulingService {
         for (SchedulingPlanRequest.Assignment item : request.getAssignments()) {
             if (item == null || item.getDatasetId() == null || item.getReplicaId() == null
                     || item.getSourceNodeId() == null || item.getTargetNodeId() == null
-                    || blank(item.getAction()) || !ACTIONS.contains(item.getAction().trim().toUpperCase())) {
+                    || blank(item.getAction())
+                    || !(dataOnly ? DATA_ACTIONS : ACTIONS).contains(item.getAction().trim().toUpperCase(Locale.ROOT))) {
                 throw RegistrationException.invalid("invalid scheduling assignment");
             }
         }

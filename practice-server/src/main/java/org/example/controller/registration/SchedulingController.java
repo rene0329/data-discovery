@@ -61,6 +61,13 @@ public class SchedulingController {
                 .body(success(service.submit(request)));
     }
 
+    @PostMapping("/data-plans")
+    public ResponseEntity<ApiV1Response<SchedulingPlanAccepted>> submitDataPlan(
+            @RequestBody SchedulingPlanRequest request) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(success(service.submitDataPlan(request)));
+    }
+
     private <T> ApiV1Response<T> success(T data) {
         ApiV1Response<T> response = ApiV1Response.ok(data);
         response.setMsg("success");

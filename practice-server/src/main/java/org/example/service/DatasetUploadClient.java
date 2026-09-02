@@ -151,6 +151,25 @@ public class DatasetUploadClient {
         }
     }
 
+    public void delete(NodeManagement node, String absolutePath) {
+        requireAddress(node);
+        relativeDataPath(absolutePath);
+        HttpURLConnection connection = null;
+        try {
+            connection = open(new URL(baseUrl(node) + "/data-discovery/delete/"
+                    + encodeAbsolutePath(absolutePath)), "DELETE");
+            int status = connection.getResponseCode();
+            String response = readResponse(connection, status);
+            if (status < 200 || status >= 300) {
+                throw uploadFailure("source dataset deletion failed with HTTP " + status + detail(response));
+            }
+        } catch (IOException ex) {
+            throw uploadFailure("failed to delete source dataset: " + ex.getMessage());
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
     public void deleteQuietly(NodeManagement node, String absolutePath) {
         if (node == null || node.getInternalIp() == null || absolutePath == null) return;
         HttpURLConnection connection = null;

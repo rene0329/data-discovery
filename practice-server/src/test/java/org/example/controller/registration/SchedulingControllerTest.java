@@ -2,6 +2,7 @@ package org.example.controller.registration;
 
 import org.example.dto.scheduling.SchedulingPageResult;
 import org.example.dto.scheduling.SchedulingPlanDetail;
+import org.example.dto.scheduling.SchedulingPlanAccepted;
 import org.example.entity.SchedulingAssignment;
 import org.example.entity.SchedulingPlan;
 import org.example.exception.RegistrationException;
@@ -19,6 +20,10 @@ import java.util.Collections;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.any;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -34,6 +39,17 @@ class SchedulingControllerTest {
                 .setControllerAdvice(new RegistrationExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(new JacksonObjectMapper()))
                 .build();
+    }
+
+    @Test
+    void acceptsDataOnlyPlanWithoutATaskOrImage() throws Exception {
+        when(service.submitDataPlan(any())).thenReturn(new SchedulingPlanAccepted(40L, "manual-1", "manual-1", "ACCEPTED"));
+        mvc.perform(post("/api/v1/scheduling/data-plans").contentType("application/json")
+                        .content("{\"externalPlanId\":\"manual-1\",\"assignments\":[{\"datasetId\":10,\"replicaId\":20,\"sourceNodeId\":3,\"targetNodeId\":4,\"action\":\"COPY\"}]}"))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.code").value(0))
+                .andExpect(jsonPath("$.data.planId").value(40));
+        verify(service).submitDataPlan(any());
+        verify(service, never()).submit(any());
     }
 
     @Test

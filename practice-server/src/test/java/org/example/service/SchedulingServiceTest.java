@@ -19,11 +19,15 @@ import org.example.mapper.SchedulingPlanMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,6 +47,7 @@ class SchedulingServiceTest {
     private K8sTaskOrchestratorService orchestrator;
     private SchedulingService service;
     private NetworkTopologyService topology;
+    private DatasetSchedulingExecutor dataExecutor;
 
     @BeforeEach
     void setUp() {
@@ -54,8 +59,9 @@ class SchedulingServiceTest {
         nodeAvailabilityService = mock(NodeAvailabilityService.class);
         orchestrator = mock(K8sTaskOrchestratorService.class);
         topology = mock(NetworkTopologyService.class);
+        dataExecutor = mock(DatasetSchedulingExecutor.class);
         service = new SchedulingService(datasetMapper, nodeMapper, planMapper, taskMapper,
-                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), topology);
+                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), topology, dataExecutor);
     }
 
     @Test
@@ -200,5 +206,77 @@ class SchedulingServiceTest {
         assertNotNull(accepted.getTaskId());
         verify(topology).requirePath(3, 3);
         verify(orchestrator).executeExternalPlan(any(), any(), any());
+        verifyNoInteractions(dataExecutor);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"COPY", "MOVE"})
+    void dataPlansDoNotRequireAnImageOrCreateComputeTasks(String action) {
+        SchedulingPlanRequest request = dataPlan(action);
+        SchedulingPlanAccepted accepted = service.submitDataPlan(request);
+
+        assertEquals(40L, accepted.getPlanId());
+        ArgumentCaptor<SchedulingPlan> saved = ArgumentCaptor.forClass(SchedulingPlan.class);
+        verify(planMapper).insertPlan(saved.capture());
+        assertNull(saved.getValue().getInternalTaskId());
+        verify(dataExecutor).execute(any(), any());
+        verifyNoInteractions(taskMapper, orchestrator);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"USE_IN_PLACE", "REMOTE_READ", "COPY_AND_USE", "MOVE_AND_USE"})
+    void dataEndpointRejectsComputeActions(String action) {
+        SchedulingPlanRequest request = dataPlan(action);
+        assertThrows(RegistrationException.class, () -> service.submitDataPlan(request));
+        verifyNoInteractions(planMapper, dataExecutor, taskMapper, orchestrator);
+    }
+
+    @Test
+    void legacyEndpointRejectsDataOnlyActions() {
+        SchedulingPlanRequest request = dataPlan("COPY");
+        request.setTaskId("compute-1");
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verifyNoInteractions(planMapper, dataExecutor, taskMapper, orchestrator);
+    }
+
+    @Test
+    void dataTransferRequiresADifferentStorageNode() {
+        SchedulingPlanRequest request = dataPlan("MOVE");
+        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).type("compute").build());
+        assertThrows(RegistrationException.class, () -> service.submitDataPlan(request));
+        request.getAssignments().get(0).setTargetNodeId(3);
+        when(nodeMapper.getNodeById(3)).thenReturn(NodeManagement.builder().nodeId(3).type("storage").build());
+        assertThrows(RegistrationException.class, () -> service.submitDataPlan(request));
+        verifyNoInteractions(dataExecutor, taskMapper, orchestrator);
+    }
+
+    @Test
+    void retriedDataPlanIsNotDispatchedAgain() {
+        SchedulingPlanRequest request = dataPlan("COPY");
+        when(planMapper.findByExternalPlanId("manual-1")).thenReturn(SchedulingPlan.builder()
+                .planId(40L).externalPlanId("manual-1").status("COMPLETED").build());
+        assertEquals("COMPLETED", service.submitDataPlan(request).getStatus());
+        verifyNoInteractions(dataExecutor, taskMapper, orchestrator);
+    }
+
+    private SchedulingPlanRequest dataPlan(String action) {
+        RegisteredDataset dataset = RegisteredDataset.builder().datasetId(10L).status("ACTIVE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(20L).datasetId(10L).nodeId(3).build();
+        when(datasetMapper.findDatasetById(10L)).thenReturn(dataset);
+        when(datasetMapper.findReplicaById(20L)).thenReturn(replica);
+        when(replicaAvailabilityService.evaluate(replica)).thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).type("storage").build());
+        when(nodeAvailabilityService.isSchedulable(any())).thenReturn(true);
+        doAnswer(invocation -> {
+            ((SchedulingPlan) invocation.getArgument(0)).setPlanId(40L);
+            return 1;
+        }).when(planMapper).insertPlan(any());
+        SchedulingPlanRequest request = new SchedulingPlanRequest();
+        request.setExternalPlanId("manual-1");
+        SchedulingPlanRequest.Assignment item = new SchedulingPlanRequest.Assignment();
+        item.setDatasetId(10L); item.setReplicaId(20L);
+        item.setSourceNodeId(3); item.setTargetNodeId(4); item.setAction(action);
+        request.setAssignments(Collections.singletonList(item));
+        return request;
     }
 }

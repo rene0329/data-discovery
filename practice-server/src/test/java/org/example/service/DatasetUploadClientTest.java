@@ -14,6 +14,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import org.example.exception.RegistrationException;
 
 class DatasetUploadClientTest {
     private HttpServer server;
@@ -78,6 +81,22 @@ class DatasetUploadClientTest {
         assertTrue(requestBody.get().contains("/data-discovery/download/dataset/mnist/mnist-1.0.npz"));
         assertTrue(requestBody.get().contains("\"path\":\"mnist/mnist-1.0.npz\""));
         assertTrue(requestBody.get().contains("\"expectedSize\":123"));
+    }
+
+    @Test
+    void strictDeleteSurfacesAgentFailures() throws Exception {
+        AtomicReference<String> method = new AtomicReference<>();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/data-discovery/delete/dataset/test.npz", exchange -> {
+            method.set(exchange.getRequestMethod());
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+        server.start();
+        DatasetUploadClient client = new DatasetUploadClient(server.getAddress().getPort(), 1000, 5000, "/dataset");
+        NodeManagement node = NodeManagement.builder().nodeName("source").internalIp("127.0.0.1").build();
+        assertThrows(RegistrationException.class, () -> client.delete(node, "/dataset/test.npz"));
+        assertEquals("DELETE", method.get());
     }
 
     private byte[] readAll(InputStream input) throws IOException {
