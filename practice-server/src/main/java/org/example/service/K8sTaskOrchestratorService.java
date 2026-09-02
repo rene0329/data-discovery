@@ -581,8 +581,11 @@ public class K8sTaskOrchestratorService {
                 migrationTask.setStatus("VERIFYING");
                 migrationTaskMapper.updateLifecycle(migrationTask);
 
-                if (waitForProcessingCompletion) {
+                // Explicit compute plans must report the processing result, not just data readiness.
+                if (waitForProcessingCompletion || "external".equals(type)) {
                     waitForJobCompletion(client, jobName, waitTimeoutMinutes);
+                    // Retain the completed Job for log inspection until its configured TTL expires.
+                    if ("external".equals(type)) cleanupOnExit = false;
                 } else {
                     // Job 仍可能在执行训练，不能在 finally 中立即删除；由 Job TTL 自动清理。
                     cleanupOnExit = false;
