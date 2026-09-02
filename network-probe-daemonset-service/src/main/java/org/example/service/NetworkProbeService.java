@@ -1,6 +1,8 @@
 // src/main/java/org/example/service/NetworkProbeService.java
 package org.example.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.api.model.NodeAddress;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -16,6 +18,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -30,6 +33,7 @@ import java.util.stream.Collectors;
 public class NetworkProbeService {
 
     private static final Logger log = LoggerFactory.getLogger(NetworkProbeService.class);
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     @Autowired
     private KubernetesClient k8sClient;
@@ -88,6 +92,10 @@ public class NetworkProbeService {
 
             double latencyMs = probeLatency(targetIP);
             long bandwidthBps = probeBandwidth(targetIP);
+            if (latencyMs < 0 || bandwidthBps <= 0) {
+                log.warn("网络探测不完整 {} -> {}: latencyMs={}, bandwidthBps={}",
+                        localNodeName, targetNodeName, latencyMs, bandwidthBps);
+            }
 
             // Report failures too so fixed logical links become unavailable without disappearing.
             NetworkMetricDto dto = new NetworkMetricDto();
@@ -147,35 +155,49 @@ public class NetworkProbeService {
     /**
      * 使用 ping 探测延迟（返回平均延迟，单位：ms）
      */
-    private double probeLatency(String targetIP) {
+    double probeLatency(String targetIP) {
         try {
-            Process process = Runtime.getRuntime().exec(new String[]{"ping", "-c", "4", targetIP});
+            ProcessBuilder command = new ProcessBuilder("ping", "-n", "-c", "4", targetIP);
+            command.environment().put("LC_ALL", "C");
+            Process process = command.start();
             if (!process.waitFor(15, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
                 return -1;
             }
-
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (line.contains("rtt min/avg/max/mdev")) {
-                    String[] parts = line.split("/");
-                    if (parts.length >= 5) {
-                        return Double.parseDouble(parts[3]); // avg
-                    }
-                }
+            if (process.exitValue() != 0) return -1;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                return parseLatency(reader.lines().collect(Collectors.joining("\n")));
             }
-            return -1;
         } catch (Exception e) {
             log.debug("Ping 探测失败 {}: {}", targetIP, e.getMessage());
             return -1;
         }
     }
 
+    static double parseLatency(String output) {
+        for (String line : output.split("\\r?\\n")) {
+            if (!line.contains("min/avg/max")) continue;
+            int separator = line.indexOf('=');
+            if (separator < 0) continue;
+            // Only split the numeric right-hand side; the header also contains slashes.
+            String[] values = line.substring(separator + 1).trim().split("/");
+            if (values.length < 3) continue;
+            try {
+                double average = Double.parseDouble(values[1].trim());
+                return Double.isFinite(average) && average >= 0 ? average : -1;
+            } catch (NumberFormatException ignored) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
     /**
      * 使用 iperf3 探测带宽（返回 bps）
      * 需目标节点运行 iperf3 -s
      */
-    private long probeBandwidth(String targetIP) {
+    long probeBandwidth(String targetIP) {
         try {
             long forward = runIperf(targetIP, false);
             long reverse = runIperf(targetIP, true);
@@ -198,31 +220,26 @@ public class NetworkProbeService {
                 process.destroyForcibly();
                 return -1;
             }
-
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            StringBuilder output = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                output.append(line);
+            if (process.exitValue() != 0) return -1;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                return parseBandwidth(reader.lines().collect(Collectors.joining("\n")));
             }
-
-            // 简单解析 JSON 输出（iperf3 -J）
-            String json = output.toString();
-            if (json.contains("\"receiver\"") && json.contains("\"bits_per_second\"")) {
-                // 提取 receiver 的 bps
-                int start = json.lastIndexOf("\"bits_per_second\"");
-                if (start != -1) {
-                    String sub = json.substring(start + 18);
-                    int end = sub.indexOf(",");
-                    if (end != -1) {
-                        String bpsStr = sub.substring(0, end).trim().replaceAll("[^0-9.]", "");
-                        return (long) Double.parseDouble(bpsStr);
-                    }
-                }
-            }
-            return -1;
         } catch (Exception e) {
             log.debug("iperf3 {}探测失败 {}: {}", reverse ? "反向" : "正向", targetIP, e.getMessage());
+            return -1;
+        }
+    }
+
+    static long parseBandwidth(String output) {
+        try {
+            JsonNode result = JSON.readTree(output);
+            if (result == null || result.hasNonNull("error")) return -1;
+            JsonNode rate = result.path("end").path("sum_received").path("bits_per_second");
+            if (!rate.isNumber()) return -1;
+            double bps = rate.doubleValue();
+            return Double.isFinite(bps) && bps >= 1 && bps < Long.MAX_VALUE ? (long) bps : -1;
+        } catch (java.io.IOException e) {
             return -1;
         }
     }
