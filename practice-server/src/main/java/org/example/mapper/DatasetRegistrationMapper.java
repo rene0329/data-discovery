@@ -25,6 +25,10 @@ public interface DatasetRegistrationMapper {
                                   @Param("availability") String availability);
 
     int insertDataset(RegisteredDataset dataset);
+    int refreshHeat(@Param("halfLifeHours") double halfLifeHours, @Param("threshold") double threshold);
+    int recordHeatAccess(@Param("datasetId") Long datasetId,
+                         @Param("halfLifeHours") double halfLifeHours, @Param("threshold") double threshold,
+                         @Param("accessAlpha") double accessAlpha, @Param("maxHeat") double maxHeat);
     RegisteredDataset findDatasetById(Long datasetId);
     RegisteredDataset findDatasetByCodeAndVersion(@Param("datasetCode") String datasetCode,
                                                    @Param("datasetVersion") String datasetVersion);

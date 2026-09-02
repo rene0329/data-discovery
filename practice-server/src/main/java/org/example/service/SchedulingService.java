@@ -60,6 +60,7 @@ public class SchedulingService {
     private final ObjectMapper objectMapper;
     private final NetworkTopologyService networkTopologyService;
     private final DatasetSchedulingExecutor datasetSchedulingExecutor;
+    private final DatasetHeatService heat;
 
     public SchedulingService(DatasetRegistrationMapper datasetMapper,
                              NodeManagementMapper nodeMapper,
@@ -70,7 +71,8 @@ public class SchedulingService {
                              K8sTaskOrchestratorService orchestrator,
                              ObjectMapper objectMapper,
                              NetworkTopologyService networkTopologyService,
-                             DatasetSchedulingExecutor datasetSchedulingExecutor) {
+                             DatasetSchedulingExecutor datasetSchedulingExecutor,
+                             DatasetHeatService heat) {
         this.datasetMapper = datasetMapper;
         this.nodeMapper = nodeMapper;
         this.planMapper = planMapper;
@@ -81,6 +83,7 @@ public class SchedulingService {
         this.objectMapper = objectMapper;
         this.networkTopologyService = networkTopologyService;
         this.datasetSchedulingExecutor = datasetSchedulingExecutor;
+        this.heat = heat;
     }
 
     public SchedulingPageResult<SchedulableDatasetView> listDatasets(
@@ -206,6 +209,8 @@ public class SchedulingService {
             assignment.setPlanId(plan.getPlanId());
             planMapper.insertAssignment(assignment);
         }
+        // Moving or copying data is not a business access and must not inflate its heat.
+        if (!dataOnly) new HashSet<>(datasetIds).forEach(heat::recordAccess);
         dispatchAfterCommit(plan.getPlanId(), plan.getInternalTaskId(), assignments);
         return accepted(plan);
     }

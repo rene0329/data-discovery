@@ -40,6 +40,7 @@ public class TaskV1Service {
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     private final NodeAvailabilityService nodeAvailabilityService;
     private final String centralNodeName;
+    private final DatasetHeatService heat;
 
     public TaskV1Service(DatasetRegistrationMapper datasetMapper,
                          RuntimeImageMapper imageMapper,
@@ -50,7 +51,8 @@ public class TaskV1Service {
                          NodeManagementMapper nodeMapper,
                          DatasetReplicaAvailabilityService replicaAvailabilityService,
                          NodeAvailabilityService nodeAvailabilityService,
-                         @Value("${dispatch.central-node.name:}") String centralNodeName) {
+                         @Value("${dispatch.central-node.name:}") String centralNodeName,
+                         DatasetHeatService heat) {
         this.datasetMapper = datasetMapper;
         this.imageMapper = imageMapper;
         this.taskMapper = taskMapper;
@@ -61,6 +63,7 @@ public class TaskV1Service {
         this.replicaAvailabilityService = replicaAvailabilityService;
         this.nodeAvailabilityService = nodeAvailabilityService;
         this.centralNodeName = centralNodeName == null ? "" : centralNodeName.trim();
+        this.heat = heat;
     }
 
     public TaskCreated create(CreateTaskRequest request, String requestId) {
@@ -96,6 +99,7 @@ public class TaskV1Service {
         taskMapper.submitData(task);
         auditMapper.insert("TASK", String.valueOf(task.getTaskId()), "CREATE", "system", requestId,
                 writeJson(request));
+        request.getDatasetIds().forEach(heat::recordAccess);
         orchestrator.executeRegisteredTask(task.getTaskId(), request.getDatasetIds(),
                 request.getRuntimeImageId(), request.getResourceOverrides());
         return new TaskCreated(task.getTaskId(), "ACCEPTED");

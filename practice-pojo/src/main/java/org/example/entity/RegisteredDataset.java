@@ -27,6 +27,8 @@ public class RegisteredDataset {
     private Double requiredMemoryGi;
     private Double requiredGpu;
     private String status;
+    private Double dataHeat;
+    private LocalDateTime heatUpdatedAt;
     private Long defaultRuntimeImageId;
     private LocalDateTime verifiedAt;
     private String verificationMessage;

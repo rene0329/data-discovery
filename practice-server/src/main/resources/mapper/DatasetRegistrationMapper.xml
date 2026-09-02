@@ -34,6 +34,8 @@
         <result property="requiredMemoryGi" column="required_memory_gi"/>
         <result property="requiredGpu" column="required_gpu"/>
         <result property="status" column="status"/>
+        <result property="dataHeat" column="data_heat"/>
+        <result property="heatUpdatedAt" column="heat_updated_at"/>
         <result property="defaultRuntimeImageId" column="default_runtime_image_id"/>
         <result property="verifiedAt" column="verified_at"/>
         <result property="verificationMessage" column="verification_message"/>
@@ -135,6 +137,26 @@
             #{defaultRuntimeImageId}
         )
     </insert>
+
+    <sql id="decayedHeat">
+        (#{threshold} + (GREATEST(#{threshold}, COALESCE(data_heat, #{threshold})) - #{threshold})
+          * EXP(-0.6931471805599453 * GREATEST(TIMESTAMPDIFF(MICROSECOND,
+              COALESCE(heat_updated_at, UTC_TIMESTAMP(3)), UTC_TIMESTAMP(3)), 0)
+              / (3600000000.0 * #{halfLifeHours})))
+    </sql>
+    <update id="refreshHeat">
+        UPDATE registered_dataset
+        SET data_heat = ROUND(<include refid="decayedHeat"/>, 2), heat_updated_at = UTC_TIMESTAMP(3),
+            updated_at = updated_at
+        WHERE deleted_at IS NULL
+    </update>
+    <update id="recordHeatAccess">
+        UPDATE registered_dataset
+        SET data_heat = ROUND(GREATEST(<include refid="decayedHeat"/>,
+            #{accessAlpha} * <include refid="decayedHeat"/> + (1 - #{accessAlpha}) * #{maxHeat}), 2),
+            heat_updated_at = UTC_TIMESTAMP(3), updated_at = updated_at
+        WHERE dataset_id = #{datasetId} AND deleted_at IS NULL AND status = 'ACTIVE'
+    </update>
 
     <select id="findDatasetById" resultMap="RegisteredDatasetMap">
         SELECT * FROM registered_dataset WHERE dataset_id = #{datasetId} AND deleted_at IS NULL

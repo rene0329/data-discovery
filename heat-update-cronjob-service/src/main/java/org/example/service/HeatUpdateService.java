@@ -23,6 +23,8 @@ public class HeatUpdateService {
 
     @Autowired
     private DataManagementMapper dataManagementMapper;
+    @Autowired
+    private org.example.mapper.DatasetRegistrationMapper datasetRegistrationMapper;
 
     /**
      * 执行一次完整的热度更新计算。
@@ -32,6 +34,7 @@ public class HeatUpdateService {
     public void performHeatUpdate() {
         log.info("开始执行热度更新任务...");
         int updatedRows = dataManagementMapper.decayAllDataHeat(halfLifeHours, threshold);
+        datasetRegistrationMapper.refreshHeat(halfLifeHours, threshold);
         log.info("热度衰减任务执行完毕，共更新 {} 条数据，halfLifeHours={}",
                 updatedRows, halfLifeHours);
     }

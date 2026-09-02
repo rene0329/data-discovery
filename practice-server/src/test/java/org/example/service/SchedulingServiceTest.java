@@ -61,7 +61,8 @@ class SchedulingServiceTest {
         topology = mock(NetworkTopologyService.class);
         dataExecutor = mock(DatasetSchedulingExecutor.class);
         service = new SchedulingService(datasetMapper, nodeMapper, planMapper, taskMapper,
-                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), topology, dataExecutor);
+                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), topology, dataExecutor,
+                mock(DatasetHeatService.class));
     }
 
     @Test

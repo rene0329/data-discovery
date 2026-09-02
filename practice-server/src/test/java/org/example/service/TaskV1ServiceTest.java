@@ -49,7 +49,7 @@ class TaskV1ServiceTest {
         nodeMapper = mock(NodeManagementMapper.class);
         service = new TaskV1Service(datasetMapper, imageMapper, taskMapper,
                 mock(RegistrationAuditMapper.class), orchestrator, new ObjectMapper(), nodeMapper,
-                replicaAvailabilityService, nodeAvailabilityService, "compute");
+                replicaAvailabilityService, nodeAvailabilityService, "compute", mock(DatasetHeatService.class));
     }
 
     @Test

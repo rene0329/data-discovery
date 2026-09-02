@@ -16,6 +16,9 @@ public class RegisteredDatasetView {
     private String category;
     private String format;
     private String status;
+    private Double dataHeat;
+    @com.fasterxml.jackson.annotation.JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
+    private java.time.LocalDateTime heatUpdatedAt;
     private Map<String, String> labels;
     private ResourceRequirements requiredResources;
     private Long defaultRuntimeImageId;
@@ -38,6 +41,8 @@ public class RegisteredDatasetView {
         view.category = entity.getCategory();
         view.format = entity.getDataFormat();
         view.status = entity.getStatus();
+        view.dataHeat = entity.getDataHeat();
+        view.heatUpdatedAt = entity.getHeatUpdatedAt();
         view.labels = labels;
         ResourceRequirements resources = new ResourceRequirements();
         resources.setCpu(entity.getRequiredCpu());
@@ -59,6 +64,8 @@ public class RegisteredDatasetView {
     public String getCategory() { return category; }
     public String getFormat() { return format; }
     public String getStatus() { return status; }
+    public Double getDataHeat() { return dataHeat; }
+    public java.time.LocalDateTime getHeatUpdatedAt() { return heatUpdatedAt; }
     public Map<String, String> getLabels() { return labels; }
     public ResourceRequirements getRequiredResources() { return requiredResources; }
     public Long getDefaultRuntimeImageId() { return defaultRuntimeImageId; }

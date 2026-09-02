@@ -18,11 +18,14 @@ class HeatUpdateServiceTest {
 
         HeatUpdateService service = new HeatUpdateService();
         ReflectionTestUtils.setField(service, "dataManagementMapper", mapper);
+        org.example.mapper.DatasetRegistrationMapper datasets = mock(org.example.mapper.DatasetRegistrationMapper.class);
+        ReflectionTestUtils.setField(service, "datasetRegistrationMapper", datasets);
         ReflectionTestUtils.setField(service, "halfLifeHours", 24.0);
         ReflectionTestUtils.setField(service, "threshold", 10.0);
 
         service.performHeatUpdate();
 
         verify(mapper).decayAllDataHeat(eq(24.0), eq(10.0));
+        verify(datasets).refreshHeat(24.0, 10.0);
     }
 }
