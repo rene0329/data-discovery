@@ -8,11 +8,10 @@ import io.fabric8.kubernetes.client.DefaultKubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import lombok.extern.slf4j.Slf4j;
-import org.example.entity.EdgeManagement;
 import org.example.entity.NodeManagement;
 import org.example.entity.RuntimeImage;
 import org.example.entity.TrainingProfile;
-import org.example.mapper.EdgeManagementMapper;
+import org.example.service.NetworkTopologyService;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TrainingProfileMapper;
 import org.example.service.NodeAvailabilityService;
@@ -44,7 +43,7 @@ public class K8sJobFactory {
     private final String kubeconfigPath;
     private final NodeManagementMapper nodeManagementMapper;
     private final TrainingProfileMapper trainingProfileMapper;
-    private final EdgeManagementMapper edgeManagementMapper;
+    private final NetworkTopologyService networkTopologyService;
     private final String clusterDomain;
     private final String initContainerImage;
     private final String mainContainerImage;
@@ -172,13 +171,13 @@ public class K8sJobFactory {
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
             @Value("${dispatch.job.curl.limit-rate.default:}") String wgetLimitRate,
             @Value("${dispatch.training.n-epochs:15}") int nEpochs,
-            EdgeManagementMapper edgeManagementMapper,
+            NetworkTopologyService networkTopologyService,
             NodeAvailabilityService nodeAvailabilityService
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
         this.trainingProfileMapper = trainingProfileMapper;
-        this.edgeManagementMapper = edgeManagementMapper;
+        this.networkTopologyService = networkTopologyService;
         this.clusterDomain = clusterDomain;
         this.initContainerImage = initContainerImage;
         this.mainContainerImage = mainContainerImage;
@@ -315,6 +314,7 @@ public class K8sJobFactory {
             if (!nodeAvailabilityService.isSchedulable(targetNodeInfo)) {
                 throw new IllegalStateException("目标节点当前不可用于调度: " + overrideTargetNode);
             }
+            networkTopologyService.requirePath(sourceNodeInfo.getNodeId(), targetNodeInfo.getNodeId());
             overrideTargetClusterId = targetNodeInfo.getCluster();
         }
 
@@ -604,33 +604,9 @@ public class K8sJobFactory {
         List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
         String singleClusterKey = clusterClients.size() == 1 ? clusterClients.keySet().iterator().next() : null;
 
-        // 构建「数据源节点 → 各候选节点」的延迟图和带宽图（nodeId → ms / Mbps）
-        Map<Integer, Double> latencyToNode = new HashMap<>();
-        Map<Integer, Double> bandwidthToNode = new HashMap<>();
-        try {
-            NodeManagement srcInfo = nodeManagementMapper.getNodeByName(sourceNodeName);
-            if (srcInfo != null && srcInfo.getNodeId() != null) {
-                int srcId = srcInfo.getNodeId();
-                for (EdgeManagement e : edgeManagementMapper.selectAllEdges()) {
-                    boolean measured = "active".equalsIgnoreCase(e.getStatus())
-                            || "UP".equalsIgnoreCase(e.getStatus());
-                    if (!measured || e.getLatency() == null || e.getLatency() <= 0
-                            || e.getBandwidth() == null || e.getBandwidth() <= 0) continue;
-                    int peerId = -1;
-                    if (e.getSourceId() != null && e.getSourceId() == srcId && e.getTargetId() != null) {
-                        peerId = e.getTargetId();
-                    } else if (e.getTargetId() != null && e.getTargetId() == srcId && e.getSourceId() != null) {
-                        peerId = e.getSourceId();
-                    }
-                    if (peerId > 0) {
-                        latencyToNode.put(peerId, e.getLatency());
-                        if (e.getBandwidth() != null) bandwidthToNode.put(peerId, e.getBandwidth().doubleValue());
-                    }
-                }
-            }
-        } catch (Exception ex) {
-            log.warn("构建网络延迟图时出错，将忽略网络延迟因子: {}", ex.getMessage());
-        }
+        NodeManagement source = nodeManagementMapper.getNodeByName(sourceNodeName);
+        Map<Integer, NetworkTopologyService.NetworkPath> paths = source == null
+                ? Collections.emptyMap() : networkTopologyService.pathsFrom(source.getNodeId());
 
         for (NodeManagement nm : computeNodes) {
             if (!nodeAvailabilityService.isSchedulable(nm)) {
@@ -664,17 +640,15 @@ public class K8sJobFactory {
             boolean memOk = memFreeGi >= memoryRequestGi * (1.0 + memHeadroom);
             if (cpuOk && memOk) {
                 boolean localData = sourceNodeName != null && sourceNodeName.equals(nm.getNodeName());
-                boolean measuredNetwork = nm.getNodeId() != null
-                        && latencyToNode.containsKey(nm.getNodeId())
-                        && bandwidthToNode.containsKey(nm.getNodeId());
-                if (sourceNodeName != null && !localData && !measuredNetwork) {
-                    log.info("候选节点 '{}' 跳过：数据源 '{}' 到该节点的链路尚未测量或不可用",
+                NetworkTopologyService.NetworkPath path = paths.get(nm.getNodeId());
+                if (path == null) {
+                    log.info("候选节点 '{}' 跳过：数据源 '{}' 到该节点没有可用逻辑路径",
                             nm.getNodeName(), sourceNodeName);
                     continue;
                 }
                 int datasetCount = nm.getNumDataset() != null ? nm.getNumDataset() : 0;
-                double latencyMs = nm.getNodeId() != null ? latencyToNode.getOrDefault(nm.getNodeId(), 0.0) : 0.0;
-                double bandwidthMbps = nm.getNodeId() != null ? bandwidthToNode.getOrDefault(nm.getNodeId(), 0.0) : 0.0;
+                double latencyMs = localData ? 0.0 : path.getLatencyMs();
+                double bandwidthMbps = localData ? 0.0 : path.getBandwidthMbps();
                 log.info("候选节点 '{}' (nodeId={}): latency={}ms, bandwidth={}, cpuFree={}/{}, memFree={}/{}",
                         nm.getNodeName(), nm.getNodeId(), latencyMs, bandwidthMbps,
                         String.format("%.1f", cpuFree), String.format("%.0f", maxCpu),

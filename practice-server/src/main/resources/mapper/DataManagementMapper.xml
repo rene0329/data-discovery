@@ -64,7 +64,9 @@
           AND nm.enabled = 1
           AND nm.deleted_at IS NULL
         ORDER BY
-        (SELECT COUNT(*) FROM edge_management em WHERE em.source_id = nm.node_id) DESC
+        (SELECT COUNT(*) FROM logical_topology_edge em
+         WHERE em.source_node_name = nm.node_name OR em.target_node_name = nm.node_name) DESC,
+        nm.node_id ASC
     </select>
 
     <select id="getAllDataByHeat" resultType="org.example.entity.DataManagement">

@@ -3,12 +3,15 @@ package org.example.controller.registration;
 import org.example.dto.scheduling.SchedulableDatasetView;
 import org.example.dto.scheduling.SchedulingPageResult;
 import org.example.dto.scheduling.SchedulingPlanAccepted;
+import org.example.dto.scheduling.SchedulingPlanDetail;
 import org.example.dto.scheduling.SchedulingPlanRequest;
+import org.example.entity.SchedulingPlan;
 import org.example.service.SchedulingService;
 import org.example.vo.ApiV1Response;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -35,6 +38,20 @@ public class SchedulingController {
             @RequestParam(defaultValue = "20") int pageSize) {
         return success(service.listDatasets(
                 datasetIds, category, format, nodeId, label, page, pageSize));
+    }
+
+    @GetMapping("/plans")
+    public ApiV1Response<SchedulingPageResult<SchedulingPlan>> plans(
+            @RequestParam(required = false) String query,
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        return success(service.listPlans(query, status, page, pageSize));
+    }
+
+    @GetMapping("/plans/{planId}")
+    public ApiV1Response<SchedulingPlanDetail> plan(@PathVariable Long planId) {
+        return success(service.getPlan(planId));
     }
 
     @PostMapping("/plans")

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.dto.scheduling.SchedulableDatasetView;
 import org.example.dto.scheduling.SchedulingPageResult;
 import org.example.dto.scheduling.SchedulingPlanAccepted;
+import org.example.dto.scheduling.SchedulingPlanDetail;
 import org.example.dto.scheduling.SchedulingPlanRequest;
 import org.example.dto.scheduling.SchedulingReplicaView;
 import org.example.entity.DatasetMetadata;
@@ -32,6 +33,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -44,6 +46,8 @@ public class SchedulingService {
             new TypeReference<Map<String, String>>() { };
     private static final Set<String> ACTIONS = new HashSet<>(Arrays.asList(
             "USE_IN_PLACE", "COPY_AND_USE", "MOVE_AND_USE", "REMOTE_READ"));
+    private static final Set<String> PLAN_STATUSES = new HashSet<>(Arrays.asList(
+            "ACCEPTED", "RUNNING", "COMPLETED", "PARTIAL_COMPLETED", "FAILED"));
 
     private final DatasetRegistrationMapper datasetMapper;
     private final NodeManagementMapper nodeMapper;
@@ -53,6 +57,7 @@ public class SchedulingService {
     private final NodeAvailabilityService nodeAvailabilityService;
     private final K8sTaskOrchestratorService orchestrator;
     private final ObjectMapper objectMapper;
+    private final NetworkTopologyService networkTopologyService;
 
     public SchedulingService(DatasetRegistrationMapper datasetMapper,
                              NodeManagementMapper nodeMapper,
@@ -61,7 +66,8 @@ public class SchedulingService {
                              DatasetReplicaAvailabilityService replicaAvailabilityService,
                              NodeAvailabilityService nodeAvailabilityService,
                              K8sTaskOrchestratorService orchestrator,
-                             ObjectMapper objectMapper) {
+                             ObjectMapper objectMapper,
+                             NetworkTopologyService networkTopologyService) {
         this.datasetMapper = datasetMapper;
         this.nodeMapper = nodeMapper;
         this.planMapper = planMapper;
@@ -70,6 +76,7 @@ public class SchedulingService {
         this.nodeAvailabilityService = nodeAvailabilityService;
         this.orchestrator = orchestrator;
         this.objectMapper = objectMapper;
+        this.networkTopologyService = networkTopologyService;
     }
 
     public SchedulingPageResult<SchedulableDatasetView> listDatasets(
@@ -93,6 +100,28 @@ public class SchedulingService {
         int from = (int) Math.min((long) (page - 1) * pageSize, all.size());
         int to = Math.min(from + pageSize, all.size());
         return new SchedulingPageResult<>(new ArrayList<>(all.subList(from, to)), all.size(), page, pageSize);
+    }
+
+    public SchedulingPageResult<SchedulingPlan> listPlans(String query, String status, int page, int pageSize) {
+        if (page < 1 || pageSize < 1 || pageSize > 100) {
+            throw RegistrationException.invalid("page must be >= 1; pageSize must be between 1 and 100");
+        }
+        String search = blank(query) ? null : query.trim();
+        String filter = blank(status) ? null : status.trim().toUpperCase(Locale.ROOT);
+        if (filter != null && !PLAN_STATUSES.contains(filter)) {
+            throw RegistrationException.invalid("unsupported scheduling plan status: " + filter);
+        }
+        long total = planMapper.countPlans(search, filter);
+        long offset = (long) (page - 1) * pageSize;
+        List<SchedulingPlan> plans = offset >= total ? Collections.emptyList()
+                : planMapper.listPlans(search, filter, offset, pageSize);
+        return new SchedulingPageResult<>(plans, total, page, pageSize);
+    }
+
+    public SchedulingPlanDetail getPlan(Long planId) {
+        SchedulingPlan plan = planMapper.findById(planId);
+        if (plan == null) throw RegistrationException.notFound("scheduling plan not found: " + planId);
+        return new SchedulingPlanDetail(plan, planMapper.listAssignments(planId));
     }
 
     @Transactional
@@ -127,6 +156,7 @@ public class SchedulingService {
             if ("USE_IN_PLACE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId())) {
                 throw RegistrationException.invalid("USE_IN_PLACE requires sourceNodeId = targetNodeId");
             }
+            networkTopologyService.requirePath(item.getSourceNodeId(), item.getTargetNodeId());
             assignments.add(SchedulingAssignment.builder()
                     .datasetId(item.getDatasetId())
                     .replicaId(item.getReplicaId())

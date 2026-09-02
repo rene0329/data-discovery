@@ -13,6 +13,11 @@ public interface SchedulingPlanMapper {
     int insertAssignment(SchedulingAssignment assignment);
     SchedulingPlan findByExternalPlanId(String externalPlanId);
     SchedulingPlan findById(Long planId);
+    List<SchedulingPlan> listPlans(@Param("query") String query,
+                                   @Param("status") String status,
+                                   @Param("offset") long offset,
+                                   @Param("limit") int limit);
+    long countPlans(@Param("query") String query, @Param("status") String status);
     List<SchedulingAssignment> listAssignments(Long planId);
     int updatePlanStatus(@Param("planId") Long planId,
                          @Param("status") String status,

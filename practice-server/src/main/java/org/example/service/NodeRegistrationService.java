@@ -13,7 +13,6 @@ import org.example.dto.registration.RegisteredNodeView;
 import org.example.dto.registration.UpdateNodeRequest;
 import org.example.entity.NodeDiscoveryCandidate;
 import org.example.entity.NodeManagement;
-import org.example.entity.EdgeManagement;
 import org.example.exception.RegistrationException;
 import org.example.factory.K8sJobFactory;
 import org.example.mapper.K8sNodeMapper;
@@ -337,30 +336,9 @@ public class NodeRegistrationService {
             throw RegistrationException.conflict("node must pass verification before it can be enabled");
         }
         nodeMapper.updateRegistrationState(nodeId, "ACTIVE", true, false);
-        ensureUnknownLinks(nodeId);
+        // Logical links are configured separately; enabling a node never creates new edges.
         audit("NODE", String.valueOf(nodeId), "ENABLE", requestId, null);
         return getNode(nodeId);
-    }
-
-    /**
-     * Make an enabled node visible in topology immediately. The probe DaemonSet
-     * later replaces UNKNOWN with measured latency/bandwidth; UNKNOWN links are
-     * deliberately not eligible for cross-node scheduling.
-     */
-    private void ensureUnknownLinks(Integer nodeId) {
-        for (NodeManagement peer : nodeMapper.selectAllNodes()) {
-            if (peer.getNodeId() == null || peer.getNodeId().equals(nodeId)
-                    || !Boolean.TRUE.equals(peer.getEnabled())) {
-                continue;
-            }
-            if (edgeMapper.findBySourceAndTargetNode(nodeId, peer.getNodeId()) == null) {
-                edgeMapper.insertEdge(EdgeManagement.builder()
-                        .sourceId(Math.min(nodeId, peer.getNodeId()))
-                        .targetId(Math.max(nodeId, peer.getNodeId()))
-                        .status("UNKNOWN")
-                        .build());
-            }
-        }
     }
 
     @Transactional

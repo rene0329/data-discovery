@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.entity.*;
 import org.example.dto.registration.LegacyHeatUpdate;
 import org.example.mapper.DataManagementMapper;
-import org.example.mapper.EdgeManagementMapper;
+import org.example.service.NetworkTopologyService;
 import org.example.mapper.MigrationTaskMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TaskManagementMapper;
@@ -45,7 +45,7 @@ public class CommonController {
     private final NodeManagementMapper nodeManagementMapper;
     private final TaskManagementMapper taskManagementMapper;
     private final MigrationTaskMapper migrationTaskMapper;
-    private final EdgeManagementMapper edgeManagementMapper;
+    private final NetworkTopologyService networkTopologyService;
     private final K8sTaskOrchestratorService k8sTaskOrchestratorService;
     private final RestTemplate restTemplate;
     private final NodeAvailabilityService nodeAvailabilityService;
@@ -78,7 +78,7 @@ public class CommonController {
             NodeManagementMapper nodeManagementMapper,
             TaskManagementMapper taskManagementMapper,
             MigrationTaskMapper migrationTaskMapper,
-            EdgeManagementMapper edgeManagementMapper,
+            NetworkTopologyService networkTopologyService,
             K8sTaskOrchestratorService k8sTaskOrchestratorService,
             RestTemplate restTemplate,
             NodeAvailabilityService nodeAvailabilityService
@@ -87,7 +87,7 @@ public class CommonController {
         this.nodeManagementMapper = nodeManagementMapper;
         this.taskManagementMapper = taskManagementMapper;
         this.migrationTaskMapper = migrationTaskMapper;
-        this.edgeManagementMapper = edgeManagementMapper;
+        this.networkTopologyService = networkTopologyService;
         this.k8sTaskOrchestratorService = k8sTaskOrchestratorService;
         this.restTemplate = restTemplate;
         this.nodeAvailabilityService = nodeAvailabilityService;
@@ -334,7 +334,7 @@ public class CommonController {
             if ("compute".equals(t) || "compute-storage".equals(t)) totalComputeNodes++;
         }
         Map<Integer, Set<Integer>> adjacency = new HashMap<>();
-        for (EdgeManagement e : edgeManagementMapper.selectAllEdges()) {
+        for (EdgeManagement e : networkTopologyService.links()) {
             adjacency.computeIfAbsent(e.getSourceId(), k -> new HashSet<>()).add(e.getTargetId());
             adjacency.computeIfAbsent(e.getTargetId(), k -> new HashSet<>()).add(e.getSourceId());
         }
@@ -376,7 +376,11 @@ public class CommonController {
             NodeManagement best      = null;
             double         bestScore = Double.NEGATIVE_INFINITY;
 
+            NodeManagement currentSource = nodeManagementMapper.getNodeByName(oldServerMap.get(data.getDataName()));
+            Map<Integer, NetworkTopologyService.NetworkPath> reachable = currentSource == null
+                    ? Collections.emptyMap() : networkTopologyService.pathsFrom(currentSource.getNodeId());
             for (NodeManagement sn : storageNodes) {
+                if (!reachable.containsKey(sn.getNodeId())) continue;
                 int cap  = sn.getNumDataset() != null ? sn.getNumDataset() : 0;
                 int used = assignedCount.get(sn.getNodeId());
                 if (used >= cap) continue;
@@ -462,8 +466,11 @@ public class CommonController {
             NodeManagement backupBest  = null;
             double         backupScore = Double.NEGATIVE_INFINITY;
 
+            NodeManagement primary = nodeManagementMapper.getNodeByName(primaryNode);
+            Map<Integer, NetworkTopologyService.NetworkPath> backupPaths = primary == null
+                    ? Collections.emptyMap() : networkTopologyService.pathsFrom(primary.getNodeId());
             for (NodeManagement sn : storageNodes) {
-                if (sn.getNodeName().equals(primaryNode)) continue;
+                if (sn.getNodeName().equals(primaryNode) || !backupPaths.containsKey(sn.getNodeId())) continue;
                 int cap  = sn.getNumDataset() != null ? sn.getNumDataset() : 0;
                 int used = assignedCount.get(sn.getNodeId());
 
@@ -731,7 +738,7 @@ public class CommonController {
     public ResponseEntity<ApiResponse<List<EdgeManagement>>> links() {
 
 //        log.info("开始networkConstruction...");
-        List<EdgeManagement> edgeManagements = edgeManagementMapper.links();
+        List<EdgeManagement> edgeManagements = networkTopologyService.links();
 
         return ResponseEntity.ok(ApiResponse.ok(edgeManagements));
     }
@@ -856,7 +863,7 @@ public class CommonController {
         }
 
         // 将 sourceId/targetId 转换为节点名，供前端渲染
-        List<EdgeManagement> edgeList = edgeManagementMapper.links();
+        List<EdgeManagement> edgeList = networkTopologyService.links();
         List<Map<String, Object>> edgePayload = new ArrayList<>();
         for (int i = 0; i < edgeList.size(); i++) {
             EdgeManagement edge = edgeList.get(i);
@@ -864,7 +871,7 @@ public class CommonController {
             String targetName = nodeIdToName.get(edge.getTargetId());
             if (sourceName == null || targetName == null) continue;
             Map<String, Object> edgeMap = new HashMap<>();
-            edgeMap.put("id", "e-" + i);
+            edgeMap.put("id", "e-" + edge.getEdgeId());
             edgeMap.put("source", sourceName);
             edgeMap.put("target", targetName);
             edgeMap.put("latency", edge.getLatency() != null ? edge.getLatency() : 0);

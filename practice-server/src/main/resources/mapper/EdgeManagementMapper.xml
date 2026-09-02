@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
-        "http://mybatis.org/dtd/mybatis-3-mapper.dtd" >
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="org.example.mapper.EdgeManagementMapper">
-
-    <!-- 定义 resultMap，确保包含了 EdgeManagement 实体中的所有字段，包括新增的 -->
     <resultMap id="EdgeManagementResultMap" type="org.example.entity.EdgeManagement">
         <id property="edgeId" column="edge_id"/>
         <result property="sourceId" column="source_id"/>
@@ -11,20 +8,25 @@
         <result property="bandwidth" column="bandwidth"/>
         <result property="latency" column="latency"/>
         <result property="status" column="status"/>
+        <result property="measurementTime" column="measurement_time"/>
     </resultMap>
-
-    <!-- 现有 links 方法的SQL实现，确保使用了新的resultMap -->
+    <sql id="logicalEdges">
+        SELECT e.edge_id, LEAST(s.node_id, t.node_id) AS source_id,
+               GREATEST(s.node_id, t.node_id) AS target_id,
+               e.bandwidth, e.latency, e.status, e.measurement_time
+        FROM logical_topology_edge e
+        JOIN node_management s ON s.node_name = e.source_node_name AND s.deleted_at IS NULL
+        JOIN node_management t ON t.node_name = e.target_node_name AND t.deleted_at IS NULL
+    </sql>
     <select id="links" resultMap="EdgeManagementResultMap">
-        SELECT * FROM edge_management
+        <include refid="logicalEdges"/> ORDER BY e.edge_id
     </select>
-
-    <!--
-        以下方法现在已通过接口上的注解实现，因此在XML中无需重复定义。
-        如果您有其他需要复杂SQL或动态SQL的方法，可以在这里添加。
-        例如：
-        <insert id="insertEdge" useGeneratedKeys="true" keyProperty="edgeId">
-            INSERT INTO edge_management (source_id, target_id, bandwidth, latency, status, measurement_time)
-            VALUES (#{sourceId}, #{targetId}, #{bandwidth}, #{latency}, #{status}, #{measurementTime})
-        </insert>
-    -->
+    <select id="selectAllEdges" resultMap="EdgeManagementResultMap">
+        <include refid="logicalEdges"/> ORDER BY e.edge_id
+    </select>
+    <select id="findBySourceAndTargetNode" resultMap="EdgeManagementResultMap">
+        <include refid="logicalEdges"/>
+        WHERE (s.node_id = #{sourceId} AND t.node_id = #{targetId})
+           OR (s.node_id = #{targetId} AND t.node_id = #{sourceId})
+    </select>
 </mapper>

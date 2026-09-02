@@ -71,6 +71,8 @@ public class K8sTaskOrchestratorService {
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     private final SchedulingPlanMapper schedulingPlanMapper;
     private final DatasetUploadClient datasetUploadClient;
+
+    private final NetworkTopologyService networkTopologyService;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
     /** 当亲和性调度的目标节点就是数据所在源节点时，跳过实际 Job 直接返回此基础时间(ms)，当文件大小为0时兜底使用。*/
@@ -119,7 +121,8 @@ public class K8sTaskOrchestratorService {
             @Qualifier("dataProcessingExecutor") Executor dataProcessingExecutor,
             DatasetReplicaAvailabilityService replicaAvailabilityService,
             SchedulingPlanMapper schedulingPlanMapper,
-            DatasetUploadClient datasetUploadClient
+            DatasetUploadClient datasetUploadClient,
+            NetworkTopologyService networkTopologyService
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -135,6 +138,7 @@ public class K8sTaskOrchestratorService {
         this.replicaAvailabilityService = replicaAvailabilityService;
         this.schedulingPlanMapper = schedulingPlanMapper;
         this.datasetUploadClient = datasetUploadClient;
+        this.networkTopologyService = networkTopologyService;
     }
 
 
@@ -261,6 +265,8 @@ public class K8sTaskOrchestratorService {
         NodeManagement sourceNode = nodeManagementMapper.getNodeById(assignment.getSourceNodeId());
         NodeManagement targetNode = nodeManagementMapper.getNodeById(assignment.getTargetNodeId());
         if (sourceNode == null || targetNode == null) throw new IllegalStateException("源节点或目标节点不存在");
+        // Recheck after queuing and before copying: a previously accepted path may have failed.
+        networkTopologyService.requirePath(sourceNode.getNodeId(), targetNode.getNodeId());
         NodeManagement executionSource = sourceNode;
         if (("COPY_AND_USE".equals(assignment.getAction())
                 || "MOVE_AND_USE".equals(assignment.getAction()))

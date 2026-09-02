@@ -9,6 +9,7 @@ import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.example.service.K8sTaskOrchestratorService;
 import org.example.service.NodeAvailabilityService;
+import org.example.service.NetworkTopologyService;
 import org.example.vo.ApiResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
@@ -42,7 +43,8 @@ class CommonControllerTopologyTest {
         when(edges.links()).thenReturn(Arrays.asList(
                 EdgeManagement.builder().edgeId(1).sourceId(1).targetId(2).latency(5.0).bandwidth(10L).build()));
         CommonController controller = new CommonController(mock(DataManagementMapper.class), nodes,
-                mock(TaskManagementMapper.class), mock(MigrationTaskMapper.class), edges,
+                mock(TaskManagementMapper.class), mock(MigrationTaskMapper.class),
+                new NetworkTopologyService(edges, nodes, new NodeAvailabilityService(300), 1800),
                 mock(K8sTaskOrchestratorService.class), mock(RestTemplate.class),
                 new NodeAvailabilityService(300));
 

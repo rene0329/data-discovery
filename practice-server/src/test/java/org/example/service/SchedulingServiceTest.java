@@ -4,11 +4,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.dto.scheduling.SchedulableDatasetView;
 import org.example.dto.scheduling.SchedulingPageResult;
 import org.example.dto.scheduling.SchedulingPlanAccepted;
+import org.example.dto.scheduling.SchedulingPlanDetail;
 import org.example.dto.scheduling.SchedulingPlanRequest;
 import org.example.entity.DatasetMetadata;
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
+import org.example.entity.SchedulingAssignment;
+import org.example.entity.SchedulingPlan;
+import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.SchedulingPlanMapper;
@@ -20,10 +24,13 @@ import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class SchedulingServiceTest {
@@ -35,6 +42,7 @@ class SchedulingServiceTest {
     private NodeAvailabilityService nodeAvailabilityService;
     private K8sTaskOrchestratorService orchestrator;
     private SchedulingService service;
+    private NetworkTopologyService topology;
 
     @BeforeEach
     void setUp() {
@@ -45,8 +53,9 @@ class SchedulingServiceTest {
         replicaAvailabilityService = mock(DatasetReplicaAvailabilityService.class);
         nodeAvailabilityService = mock(NodeAvailabilityService.class);
         orchestrator = mock(K8sTaskOrchestratorService.class);
+        topology = mock(NetworkTopologyService.class);
         service = new SchedulingService(datasetMapper, nodeMapper, planMapper, taskMapper,
-                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper());
+                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), topology);
     }
 
     @Test
@@ -76,6 +85,73 @@ class SchedulingServiceTest {
         assertEquals(10L, result.getList().get(0).getSampleCount());
         assertEquals(1, result.getList().get(0).getReplicas().size());
         assertEquals(1, result.getList().get(0).getSchemaSummary().get("tensorCount"));
+    }
+
+    @Test
+    void listsExternalPlanExecutionRecordsWithFiltersAndPagination() {
+        SchedulingPlan plan = SchedulingPlan.builder().planId(40L)
+                .externalPlanId("plan-1").status("FAILED").errorMessage("copy failed").build();
+        when(planMapper.countPlans("plan", "FAILED")).thenReturn(11L);
+        when(planMapper.listPlans("plan", "FAILED", 10L, 10)).thenReturn(Collections.singletonList(plan));
+
+        SchedulingPageResult<SchedulingPlan> result = service.listPlans(" plan ", " failed ", 2, 10);
+
+        assertEquals(11L, result.getTotal());
+        assertEquals(2, result.getPage());
+        assertEquals("copy failed", result.getList().get(0).getErrorMessage());
+        verifyNoInteractions(taskMapper, orchestrator);
+    }
+
+    @Test
+    void validatesPlanFiltersAndHandlesPagesBeyondTheEnd() {
+        assertThrows(RegistrationException.class, () -> service.listPlans(null, null, 0, 20));
+        assertThrows(RegistrationException.class, () -> service.listPlans(null, null, 1, 101));
+        assertThrows(RegistrationException.class, () -> service.listPlans(null, "UNKNOWN", 1, 20));
+        verifyNoInteractions(planMapper);
+        when(planMapper.countPlans(null, null)).thenReturn(1L);
+        assertTrue(service.listPlans(null, null, Integer.MAX_VALUE, 100).getList().isEmpty());
+    }
+
+    @Test
+    void returnsPlanAndItsIndividualExecutionResults() {
+        SchedulingPlan plan = SchedulingPlan.builder().planId(40L).status("PARTIAL_COMPLETED").build();
+        SchedulingAssignment assignment = SchedulingAssignment.builder().assignmentId(50L).planId(40L)
+                .datasetId(10L).replicaId(20L).sourceNodeId(3).targetNodeId(4)
+                .action("COPY_AND_USE").status("FAILED").errorMessage("copy failed").build();
+        when(planMapper.findById(40L)).thenReturn(plan);
+        when(planMapper.listAssignments(40L)).thenReturn(Collections.singletonList(assignment));
+
+        SchedulingPlanDetail result = service.getPlan(40L);
+
+        assertEquals("PARTIAL_COMPLETED", result.getPlan().getStatus());
+        assertEquals("copy failed", result.getAssignments().get(0).getErrorMessage());
+        assertEquals(4, result.getAssignments().get(0).getTargetNodeId());
+        verifyNoInteractions(taskMapper, orchestrator);
+        RegistrationException missing = assertThrows(RegistrationException.class, () -> service.getPlan(99L));
+        assertEquals(404, missing.getStatus().value());
+    }
+
+    @Test
+    void rejectsExternalAssignmentWithoutLogicalPathBeforeWritingPlan() {
+        RegisteredDataset dataset = RegisteredDataset.builder().datasetId(10L).status("ACTIVE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(20L).datasetId(10L).nodeId(3).build();
+        when(datasetMapper.findDatasetById(10L)).thenReturn(dataset);
+        when(datasetMapper.findReplicaById(20L)).thenReturn(replica);
+        when(replicaAvailabilityService.evaluate(replica)).thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).build());
+        when(nodeAvailabilityService.isSchedulable(any(NodeManagement.class))).thenReturn(true);
+        when(topology.requirePath(3, 4)).thenThrow(RegistrationException.conflict("No available logical topology path"));
+        SchedulingPlanRequest request = new SchedulingPlanRequest();
+        request.setExternalPlanId("plan-no-route");
+        request.setTaskId("task-no-route");
+        SchedulingPlanRequest.Assignment item = new SchedulingPlanRequest.Assignment();
+        item.setDatasetId(10L); item.setReplicaId(20L);
+        item.setSourceNodeId(3); item.setTargetNodeId(4); item.setAction("COPY_AND_USE");
+        request.setAssignments(Collections.singletonList(item));
+
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+        verifyNoInteractions(taskMapper, orchestrator);
     }
 
     @Test
@@ -122,6 +198,7 @@ class SchedulingServiceTest {
         assertEquals(40L, accepted.getPlanId());
         assertEquals("ACCEPTED", accepted.getStatus());
         assertNotNull(accepted.getTaskId());
+        verify(topology).requirePath(3, 3);
         verify(orchestrator).executeExternalPlan(any(), any(), any());
     }
 }

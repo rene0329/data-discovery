@@ -25,6 +25,8 @@
         <result property="action" column="action"/>
         <result property="status" column="status"/>
         <result property="errorMessage" column="error_message"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
     </resultMap>
 
     <insert id="insertPlan" parameterType="org.example.entity.SchedulingPlan"
@@ -55,6 +57,40 @@
 
     <select id="listAssignments" resultMap="AssignmentMap">
         SELECT * FROM scheduling_assignment WHERE plan_id = #{planId} ORDER BY assignment_id
+    </select>
+
+    <sql id="PlanFilters">
+        <where>
+            <if test="query != null and query != ''">
+                (LOCATE(#{query}, external_plan_id) &gt; 0
+                OR LOCATE(#{query}, task_id) &gt; 0
+                OR LOCATE(#{query}, algorithm_name) &gt; 0
+                OR CAST(plan_id AS CHAR) = #{query}
+                OR CAST(internal_task_id AS CHAR) = #{query})
+            </if>
+            <if test="status != null and status != ''">
+                <choose>
+                    <when test="status == 'FAILED'">
+                        AND status IN ('FAILED', 'PARTIAL_COMPLETED')
+                    </when>
+                    <otherwise>
+                        AND status = #{status}
+                    </otherwise>
+                </choose>
+            </if>
+        </where>
+    </sql>
+
+    <select id="listPlans" resultMap="PlanMap">
+        SELECT * FROM scheduling_plan
+        <include refid="PlanFilters"/>
+        ORDER BY created_at DESC, plan_id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countPlans" resultType="long">
+        SELECT COUNT(*) FROM scheduling_plan
+        <include refid="PlanFilters"/>
     </select>
 
     <update id="updatePlanStatus">

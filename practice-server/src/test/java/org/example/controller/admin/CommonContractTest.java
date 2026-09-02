@@ -4,6 +4,7 @@ import org.example.handler.CommonExceptionHandler;
 import org.example.mapper.*;
 import org.example.service.K8sTaskOrchestratorService;
 import org.example.service.NodeAvailabilityService;
+import org.example.service.NetworkTopologyService;
 import org.example.entity.DataManagement;
 import org.example.vo.PageResult;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,7 +32,7 @@ class CommonContractTest {
         when(datasets.adminList(anyString())).thenReturn(Collections.emptyList());
         mvc = MockMvcBuilders.standaloneSetup(new CommonController(datasets, nodes,
                 mock(TaskManagementMapper.class), mock(MigrationTaskMapper.class),
-                mock(EdgeManagementMapper.class), mock(K8sTaskOrchestratorService.class),
+                mock(NetworkTopologyService.class), mock(K8sTaskOrchestratorService.class),
                 mock(RestTemplate.class), new NodeAvailabilityService(300)))
                 .setControllerAdvice(new CommonExceptionHandler()).build();
     }

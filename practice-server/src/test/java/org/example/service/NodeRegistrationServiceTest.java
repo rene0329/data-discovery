@@ -63,6 +63,21 @@ class NodeRegistrationServiceTest {
         verify(registration).clearCandidateRegistration("cluster-a", "uid-4");
     }
 
+    @Test
+    void enablingNodeDoesNotCreateFullMeshLinks() {
+        NodeManagementMapper nodes = mock(NodeManagementMapper.class);
+        EdgeManagementMapper edges = mock(EdgeManagementMapper.class);
+        NodeRegistrationService service = serviceWith(nodes, mock(NodeRegistrationMapper.class),
+                edges, mock(RegistrationAuditMapper.class));
+        when(nodes.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4)
+                .nodeName("alihz").registrationStatus("DISABLED").enabled(false)
+                .verifiedAt(java.time.LocalDateTime.now()).build());
+        org.mockito.Mockito.doReturn(null).when(service).getNode(4);
+        service.enable(4, "enable-fixed-topology");
+        verify(nodes).updateRegistrationState(4, "ACTIVE", true, false);
+        org.mockito.Mockito.verifyNoInteractions(edges);
+    }
+
     private NodeRegistrationService serviceWith(NodeManagementMapper nodes,
                                                 NodeRegistrationMapper registration,
                                                 EdgeManagementMapper edges,

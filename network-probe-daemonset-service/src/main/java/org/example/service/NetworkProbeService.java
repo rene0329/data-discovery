@@ -89,16 +89,14 @@ public class NetworkProbeService {
             double latencyMs = probeLatency(targetIP);
             long bandwidthBps = probeBandwidth(targetIP);
 
-            // 只要有一个指标成功就算有效
-            if (latencyMs >= 0 || bandwidthBps >= 0) {
-                NetworkMetricDto dto = new NetworkMetricDto();
-                dto.setSourceNode(localNodeName);
-                dto.setTargetNode(targetNodeName);
-                dto.setLatencyMs(latencyMs >= 0 ? latencyMs : null);
-                dto.setBandwidthBps(bandwidthBps >= 0 ? bandwidthBps : null);
-                dto.setMeasurementTime(System.currentTimeMillis());
-                metricsList.add(dto);
-            }
+            // Report failures too so fixed logical links become unavailable without disappearing.
+            NetworkMetricDto dto = new NetworkMetricDto();
+            dto.setSourceNode(localNodeName);
+            dto.setTargetNode(targetNodeName);
+            dto.setLatencyMs(latencyMs >= 0 ? latencyMs : null);
+            dto.setBandwidthBps(bandwidthBps >= 0 ? bandwidthBps : null);
+            dto.setMeasurementTime(System.currentTimeMillis());
+            metricsList.add(dto);
         }
 
         if (!metricsList.isEmpty()) {
