@@ -82,10 +82,11 @@ dispatch:
       speed-limit-bytes: 1024
       speed-time-seconds: 30
       limit-rate:
-        default: 2048k          # 全局兜底限速（按比例下调后约 2m）
-        n89-to-88: 3277k        # master-89 → master-88（旧 master-141 → master-40）
-        n89-to-90: 2048k        # master-89 → master-90（旧 master-141 → master-215）
-        n88-to-90: 4096k        # master-88 → master-90（旧 master-40 → master-215）
+        # 留空表示使用实际链路吞吐量。仍可通过部署环境的同名 Spring 属性为压测单独启用限速。
+        default: ""
+        n89-to-88: ""
+        n89-to-90: ""
+        n88-to-90: ""
     active-deadline-seconds: 1800
     ttl-seconds-after-finished: 300
   central-node:

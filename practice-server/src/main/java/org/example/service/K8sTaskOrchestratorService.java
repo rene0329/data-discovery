@@ -39,9 +39,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
 import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -385,9 +387,14 @@ public class K8sTaskOrchestratorService {
         if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
             throw new IllegalStateException("数据集不存在或不再处于 ACTIVE: " + datasetId);
         }
-        DatasetReplica replica = datasetRegistrationMapper.listReplicas(datasetId).stream()
+        List<DatasetReplica> usableReplicas = datasetRegistrationMapper.listReplicas(datasetId).stream()
                 .filter(item -> replicaAvailabilityService.evaluate(item).isUsable())
-                .findFirst()
+                .collect(Collectors.toList());
+        List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
+        Set<Integer> computeNodeIds = computeNodes == null ? Collections.emptySet() : computeNodes.stream()
+                .map(NodeManagement::getNodeId)
+                .collect(Collectors.toSet());
+        DatasetReplica replica = selectPreferredSourceReplica(usableReplicas, computeNodeIds)
                 .orElseThrow(() -> new IllegalStateException("数据集没有位于活动节点上的可用副本: " + datasetId));
         NodeManagement sourceNode = nodeManagementMapper.getNodeById(replica.getNodeId());
         Long imageId = explicitRuntimeImageId != null
@@ -435,6 +442,25 @@ public class K8sTaskOrchestratorService {
         result.setScheduleT2(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
                 + " -> " + centralNodeOut.get());
         return result;
+    }
+
+    /**
+     * 数据集存在多个可用副本时，优先从具备计算能力的节点读取。这样亲和性调度可以直接在
+     * 数据所在节点运行，避免仅因 replica_id 较小而从纯存储节点重复搬运已有数据。
+     * 同一优先级内保留数据库返回顺序，保证选择稳定。
+     */
+    static Optional<DatasetReplica> selectPreferredSourceReplica(List<DatasetReplica> usableReplicas,
+                                                                  Set<Integer> computeNodeIds) {
+        if (usableReplicas == null || usableReplicas.isEmpty()) {
+            return Optional.empty();
+        }
+        Set<Integer> preferredNodes = computeNodeIds == null ? Collections.emptySet() : computeNodeIds;
+        return usableReplicas.stream()
+                .filter(replica -> replica != null)
+                .sorted((left, right) -> Boolean.compare(
+                        !preferredNodes.contains(left.getNodeId()),
+                        !preferredNodes.contains(right.getNodeId())))
+                .findFirst();
     }
 
     private List<String> readStringList(String json) {
