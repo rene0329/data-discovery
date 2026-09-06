@@ -56,10 +56,11 @@ class DatasetStorageServiceTest {
     }
 
     @Test
-    void taskConditionsApplyToBothPreviewAndSubmission() {
+    void unfinishedTaskConditionsApplyToBothPreviewAndSubmission() {
         assertThrows(RegistrationException.class, () -> service.preview("aggregation"));
-        when(tasks.countTasks()).thenReturn(1);
+        when(tasks.countUnfinishedTasks()).thenReturn(1);
         assertEquals(false, service.policy().get("heatEnabled"));
+        assertEquals(1, service.policy().get("unfinishedTaskCount"));
         assertThrows(RegistrationException.class, () -> service.preview("heat"));
         assertFalse(service.preview("aggregation").getAssignments().isEmpty());
         assertThrows(RegistrationException.class, () -> service.preview("invalid"));

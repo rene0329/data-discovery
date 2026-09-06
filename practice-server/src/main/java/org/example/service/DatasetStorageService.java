@@ -40,13 +40,14 @@ public class DatasetStorageService {
     }
 
     public Map<String, Object> policy() {
-        int count = tasks.countTasks();
+        int count = tasks.countUnfinishedTasks();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("taskCount", count);
+        result.put("unfinishedTaskCount", count);
         result.put("heatEnabled", count == 0);
         result.put("aggregationEnabled", count > 0);
-        result.put("heatReason", count > 0 ? "已有任务，请使用原位汇聚" : null);
-        result.put("aggregationReason", count == 0 ? "暂无任务，请使用热敏存储" : null);
+        result.put("heatReason", count > 0 ? "有未完成任务，请使用原位汇聚" : null);
+        result.put("aggregationReason", count == 0 ? "暂无未完成任务，请使用热敏存储" : null);
         return result;
     }
 

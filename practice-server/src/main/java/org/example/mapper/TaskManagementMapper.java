@@ -57,8 +57,10 @@ public interface TaskManagementMapper {
     // 性能分析：返回有 T1/T2/rating 数据的任务
     List<TaskManagement> listWithAnalysis(String query);
 
-    // 查询任务总数（用于热敏存储/原位汇聚互斥判断）
-    @org.apache.ibatis.annotations.Select("SELECT COUNT(*) FROM task_management")
-    int countTasks();
+    // 仅统计未结束任务；已完成、失败和部分完成的历史记录不影响存储策略切换。
+    @org.apache.ibatis.annotations.Select("SELECT COUNT(*) FROM task_management " +
+            "WHERE status IS NULL OR status NOT IN " +
+            "('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED')")
+    int countUnfinishedTasks();
 
 }
