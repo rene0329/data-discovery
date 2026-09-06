@@ -82,11 +82,11 @@ dispatch:
       speed-limit-bytes: 1024
       speed-time-seconds: 30
       limit-rate:
-        # 留空表示使用实际链路吞吐量。仍可通过部署环境的同名 Spring 属性为压测单独启用限速。
-        default: ""
-        n89-to-88: ""
-        n89-to-90: ""
-        n88-to-90: ""
+        # 拓扑实验按路径模拟有效吞吐量，使结果能与历史性能分析直接比较。
+        default: 2048k
+        n89-to-88: 3277k
+        n89-to-90: 2048k
+        n88-to-90: 4096k
     active-deadline-seconds: 1800
     ttl-seconds-after-finished: 300
   central-node:
