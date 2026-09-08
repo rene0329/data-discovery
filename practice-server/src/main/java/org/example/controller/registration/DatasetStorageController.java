@@ -36,8 +36,10 @@ public class DatasetStorageController {
     }
 
     @PostMapping("/scheduling/storage-plans/preview")
-    public ApiV1Response<DatasetStoragePlan> preview(@RequestParam String mode) {
-        return ApiV1Response.ok(storage.preview(mode));
+    public ApiV1Response<DatasetStoragePlan> preview(@RequestParam String mode,
+            @RequestParam(required = false) java.util.List<Long> datasetIds,
+            @RequestParam(required = false) Integer targetNodeId) {
+        return ApiV1Response.ok(storage.preview(mode, datasetIds, targetNodeId));
     }
 
     @PostMapping("/scheduling/storage-plans")

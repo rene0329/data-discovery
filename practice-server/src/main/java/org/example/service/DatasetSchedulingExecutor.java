@@ -87,7 +87,11 @@ public class DatasetSchedulingExecutor {
             throw RegistrationException.conflict("target path belongs to another dataset");
         }
 
-        transfer.copyFrom(source, target, replica.getFilePath(), replica.getSizeBytes());
+        requireUnoccupied(dataset, assignment.getPlanId());
+        // Reuse an existing usable target without overwriting files that may already be read.
+        if (targetReplica == null || "MISSING".equals(targetReplica.getAvailability()) || !replicaAvailability.evaluate(targetReplica).isUsable()) {
+            transfer.copyFrom(source, target, replica.getFilePath(), replica.getSizeBytes());
+        }
         transfer.scan(target);
         if (targetReplica == null) {
             datasetMapper.insertReplica(DatasetReplica.builder()
@@ -102,8 +106,17 @@ public class DatasetSchedulingExecutor {
         if ("MOVE".equals(assignment.getAction())) {
             // Do not remove the source or mark it missing until the target is persisted.
             // Deletion errors must fail the plan rather than silently report a successful move.
+            requireUnoccupied(dataset, assignment.getPlanId());
             transfer.delete(source, replica.getFilePath());
             datasetMapper.updateReplicaAvailability(replica.getReplicaId(), "MISSING", false);
+        }
+    }
+
+    private void requireUnoccupied(RegisteredDataset dataset, Long planId) {
+        if (datasetMapper.countOtherSchedulingReferences(dataset.getDatasetId(), planId) > 0
+                || datasetMapper.countActiveTaskReferences(dataset.getDatasetId(), dataset.getName()) > 0
+                || datasetMapper.countActiveMigrationReferences(dataset.getDatasetId(), dataset.getLegacyDataId()) > 0) {
+            throw RegistrationException.conflict("数据集出现新的任务占用，保留源副本并停止搬迁");
         }
     }
 

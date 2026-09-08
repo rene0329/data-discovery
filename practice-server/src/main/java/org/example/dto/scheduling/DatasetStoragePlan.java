@@ -7,6 +7,8 @@ import java.util.List;
 @Data
 public class DatasetStoragePlan {
     private String mode;
+    private List<Long> datasetIds;
+    private Integer targetNodeId;
     private int datasetCount;
     private List<SchedulingPlanRequest.Assignment> assignments = new ArrayList<>();
     private List<Placement> placements = new ArrayList<>();
@@ -25,6 +27,8 @@ public class DatasetStoragePlan {
     @Data
     public static class Submit {
         private String mode;
+        private List<Long> datasetIds;
+        private Integer targetNodeId;
         private String externalPlanId;
         private List<SchedulingPlanRequest.Assignment> assignments;
     }

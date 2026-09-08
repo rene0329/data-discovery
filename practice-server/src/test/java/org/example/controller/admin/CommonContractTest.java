@@ -39,6 +39,14 @@ class CommonContractTest {
     }
 
     @Test
+    void legacyStorageCannotBypassReviewedPlans() throws Exception {
+        mvc.perform(post("/common/saveAll").param("mode", "heat")).andExpect(status().isConflict());
+        mvc.perform(post("/common/saveAll").param("mode", "aggregation")).andExpect(status().isConflict());
+        mvc.perform(put("/common/save")).andExpect(status().isConflict());
+        verifyNoInteractions(datasets, nodes);
+    }
+
+    @Test
     void invalidPagesAreClientErrorsNot500() throws Exception {
         for (String query : new String[]{"pageSize=10000", "page=0", "pageSize=abc"}) {
             mvc.perform(get("/common/dataManagement?" + query))

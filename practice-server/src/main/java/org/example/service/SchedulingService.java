@@ -136,12 +136,12 @@ public class SchedulingService {
         return new SchedulingPlanDetail(plan, planMapper.listAssignments(planId));
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public SchedulingPlanAccepted submit(SchedulingPlanRequest request) {
         return submit(request, false);
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public SchedulingPlanAccepted submitDataPlan(SchedulingPlanRequest request) {
         return submit(request, true);
     }
@@ -163,6 +163,12 @@ public class SchedulingService {
             }
         }
 
+        DatasetOperationGuard.lock(datasetMapper, request.getAssignments().stream()
+                .map(SchedulingPlanRequest.Assignment::getDatasetId).collect(Collectors.toList()));
+        if (dataOnly) new java.util.TreeSet<>(request.getAssignments().stream()
+                .map(SchedulingPlanRequest.Assignment::getTargetNodeId).collect(Collectors.toList()))
+                .forEach(datasetMapper::lockStorageNode);
+        Map<Integer, Integer> reserved = new LinkedHashMap<>();
         List<SchedulingAssignment> assignments = new ArrayList<>();
         List<Long> datasetIds = new ArrayList<>();
         List<String> datasetNames = new ArrayList<>();
@@ -171,6 +177,7 @@ public class SchedulingService {
             if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
                 throw RegistrationException.conflict("dataset is not ACTIVE: " + item.getDatasetId());
             }
+            DatasetOperationGuard.requireIdle(datasetMapper, dataset);
             DatasetReplica replica = datasetMapper.findReplicaById(item.getReplicaId());
             if (replica == null || !item.getDatasetId().equals(replica.getDatasetId())) {
                 throw RegistrationException.invalid("replica does not belong to dataset: " + item.getReplicaId());
@@ -191,6 +198,20 @@ public class SchedulingService {
             }
             if (!dataOnly && !isComputeNode(target)) {
                 throw RegistrationException.invalid("compute scheduling requires a COMPUTE or COMPUTE_STORAGE target node");
+            }
+            if (dataOnly) {
+                DatasetReplica atTarget = datasetMapper.findReplicaByNodePath(target.getNodeId(), replica.getFilePath());
+                if (atTarget != null && !dataset.getDatasetId().equals(atTarget.getDatasetId())) {
+                    throw RegistrationException.conflict("target path belongs to another dataset");
+                }
+                if (atTarget == null || "MISSING".equals(atTarget.getAvailability())) {
+                    int used = reserved.computeIfAbsent(target.getNodeId(), id -> datasetMapper.countStorageSlots(id)
+                            + datasetMapper.countReservedStorageSlots(id));
+                    if (target.getNumDataset() == null || used >= target.getNumDataset()) {
+                        throw RegistrationException.conflict("目标存储节点容量不足，请重新预览");
+                    }
+                    reserved.put(target.getNodeId(), used + 1);
+                }
             }
             String action = item.getAction().trim().toUpperCase(Locale.ROOT);
             if ("USE_IN_PLACE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId())) {

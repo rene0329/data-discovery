@@ -55,7 +55,7 @@ class DatasetSchedulingExecutorTest {
 
     private void execute(String action) {
         executor.execute(40L, Collections.singletonList(SchedulingAssignment.builder()
-                .assignmentId(50L).datasetId(10L).replicaId(20L).sourceNodeId(3).targetNodeId(4).action(action).build()));
+                .planId(40L).assignmentId(50L).datasetId(10L).replicaId(20L).sourceNodeId(3).targetNodeId(4).action(action).build()));
     }
 
     @Test
@@ -130,6 +130,24 @@ class DatasetSchedulingExecutorTest {
         execute("COPY");
         verify(datasets).updateReplicaAvailability(21L, "AVAILABLE", true);
         verify(datasets, never()).insertReplica(any());
+    }
+
+    @Test
+    void occupancyAppearingDuringCopyPreventsSourceDeletion() {
+        when(datasets.countActiveTaskReferences(10L, null)).thenReturn(0, 1);
+        execute("MOVE");
+        verify(transfer).copyFrom(source, target, "/dataset/test.npz", 123L);
+        verify(transfer, never()).delete(any(), any());
+        verify(datasets, never()).updateReplicaAvailability(20L, "MISSING", false);
+        verify(plans).updatePlanStatus(eq(40L), eq("FAILED"), anyString());
+    }
+
+    @Test
+    void overlappingPlanStopsTransferButOwnPlanDoesNotBlockItself() {
+        when(datasets.countOtherSchedulingReferences(10L, 40L)).thenReturn(1);
+        execute("COPY");
+        verifyNoInteractions(transfer);
+        verify(plans).updatePlanStatus(eq(40L), eq("FAILED"), anyString());
     }
 
     @Test

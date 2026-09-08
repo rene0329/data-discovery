@@ -231,6 +231,45 @@
             AND p.status IN ('ACCEPTED', 'RUNNING')
     </select>
 
+    <select id="lockDataset" resultType="long">
+        SELECT dataset_id FROM registered_dataset WHERE dataset_id = #{datasetId} FOR UPDATE
+    </select>
+    <select id="lockStorageNode" resultType="int">
+        SELECT node_id FROM node_management WHERE node_id = #{nodeId} FOR UPDATE
+    </select>
+    <select id="countActiveTaskReferences" resultType="int">
+        SELECT COUNT(*) FROM task_management
+        WHERE (status IS NULL OR status NOT IN
+            ('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED'))
+        AND CASE WHEN JSON_VALID(dataset_ids_json)
+            THEN JSON_CONTAINS(dataset_ids_json, CAST(#{datasetId} AS JSON))
+            ELSE (LOCATE(#{datasetName}, selected_data) &gt; 0 OR EXISTS (
+                SELECT 1 FROM registered_dataset rd JOIN data_management d ON d.data_id = rd.legacy_data_id
+                WHERE rd.dataset_id = #{datasetId} AND LOCATE(d.data_name, selected_data) &gt; 0))
+        END
+    </select>
+    <select id="countOtherSchedulingReferences" resultType="int">
+        SELECT COUNT(*) FROM scheduling_assignment a
+        JOIN scheduling_plan p ON p.plan_id = a.plan_id
+        WHERE a.dataset_id = #{datasetId} AND p.plan_id != #{planId}
+            AND p.status IN ('ACCEPTED', 'RUNNING')
+    </select>
+    <select id="countStorageSlots" resultType="int">
+        SELECT COUNT(*) FROM dataset_replica WHERE node_id = #{nodeId} AND availability != 'MISSING'
+    </select>
+    <select id="countReservedStorageSlots" resultType="int">
+        SELECT COUNT(*) FROM (
+            SELECT DISTINCT a.dataset_id, r.file_path FROM scheduling_assignment a
+            JOIN scheduling_plan p ON p.plan_id = a.plan_id
+            JOIN dataset_replica r ON r.replica_id = a.replica_id
+            WHERE a.target_node_id = #{nodeId} AND p.status IN ('ACCEPTED', 'RUNNING')
+                AND a.status IN ('PENDING', 'RUNNING')
+                AND a.action IN ('COPY', 'MOVE', 'COPY_AND_USE', 'MOVE_AND_USE')
+                AND NOT EXISTS (SELECT 1 FROM dataset_replica t
+                    WHERE t.node_id = a.target_node_id AND t.file_path = r.file_path AND t.availability != 'MISSING')
+        ) reservations
+    </select>
+
     <insert id="insertReplica" parameterType="org.example.entity.DatasetReplica"
             useGeneratedKeys="true" keyProperty="replicaId">
         INSERT INTO dataset_replica (

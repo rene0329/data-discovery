@@ -25,7 +25,7 @@ class DatasetStorageControllerTest {
         MockMvc mvc = mvc(storage, heat, mock(ApiIdempotencyMapper.class));
         when(storage.policy()).thenReturn(Collections.singletonMap("heatEnabled", true));
         when(heat.refresh()).thenReturn(8);
-        when(storage.preview("heat")).thenReturn(new DatasetStoragePlan());
+        when(storage.preview("heat", null, null)).thenReturn(new DatasetStoragePlan());
         mvc.perform(get("/api/v1/datasets/storage-policy")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.heatEnabled").value(true));
         mvc.perform(post("/api/v1/datasets/heat-refresh")).andExpect(status().isOk())
@@ -33,6 +33,17 @@ class DatasetStorageControllerTest {
         mvc.perform(post("/api/v1/scheduling/storage-plans/preview").param("mode", "heat"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.assignments").isEmpty());
         verify(storage, never()).submit(any());
+    }
+
+    @Test
+    void forwardsAggregationSelectionAndTarget() throws Exception {
+        DatasetStorageService storage = mock(DatasetStorageService.class);
+        when(storage.preview("aggregation", java.util.Arrays.asList(9L, 10L), 2)).thenReturn(new DatasetStoragePlan());
+        mvc(storage, mock(DatasetHeatService.class), mock(ApiIdempotencyMapper.class))
+                .perform(post("/api/v1/scheduling/storage-plans/preview").param("mode", "aggregation")
+                        .param("datasetIds", "9,10").param("targetNodeId", "2"))
+                .andExpect(status().isOk());
+        verify(storage).preview("aggregation", java.util.Arrays.asList(9L, 10L), 2);
     }
 
     @Test

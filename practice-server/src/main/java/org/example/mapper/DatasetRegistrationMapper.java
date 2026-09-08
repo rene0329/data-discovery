@@ -48,6 +48,13 @@ public interface DatasetRegistrationMapper {
                                        @Param("legacyDataId") Integer legacyDataId);
     int countActiveSchedulingReferences(@Param("datasetId") Long datasetId);
 
+    Long lockDataset(Long datasetId);
+    Integer lockStorageNode(Integer nodeId);
+    int countActiveTaskReferences(@Param("datasetId") Long datasetId, @Param("datasetName") String datasetName);
+    int countOtherSchedulingReferences(@Param("datasetId") Long datasetId, @Param("planId") Long planId);
+    int countStorageSlots(Integer nodeId);
+    int countReservedStorageSlots(Integer nodeId);
+
     int insertReplica(DatasetReplica replica);
     DatasetReplica findReplicaById(Long replicaId);
     DatasetReplica findReplicaByDatasetNodePath(@Param("datasetId") Long datasetId,

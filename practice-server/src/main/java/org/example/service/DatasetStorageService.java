@@ -44,19 +44,22 @@ public class DatasetStorageService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("taskCount", count);
         result.put("unfinishedTaskCount", count);
-        result.put("heatEnabled", count == 0);
-        result.put("aggregationEnabled", count > 0);
-        result.put("heatReason", count > 0 ? "有未完成任务，请使用原位汇聚" : null);
-        result.put("aggregationReason", count == 0 ? "暂无未完成任务，请使用热敏存储" : null);
+        result.put("heatEnabled", true);
+        result.put("aggregationEnabled", true);
+        result.put("heatReason", null);
+        result.put("aggregationReason", null);
         return result;
     }
 
     public DatasetStoragePlan preview(String mode) {
+        return preview(mode, null, null);
+    }
+
+    public DatasetStoragePlan preview(String mode, List<Long> datasetIds, Integer targetNodeId) {
         validateMode(mode);
-        Map<String, Object> policy = policy();
-        if (!Boolean.TRUE.equals(policy.get("heat".equals(mode) ? "heatEnabled" : "aggregationEnabled"))) {
-            throw RegistrationException.conflict(String.valueOf(policy.get(
-                    "heat".equals(mode) ? "heatReason" : "aggregationReason")));
+        if ("aggregation".equals(mode)) return previewAggregation(datasetIds, targetNodeId);
+        if (targetNodeId != null || (datasetIds != null && !datasetIds.isEmpty())) {
+            throw RegistrationException.invalid("热敏存储作用于全部空闲数据，不接受汇聚目标参数");
         }
         List<NodeManagement> availableNodes = nodes.selectAllNodes().stream()
                 .filter(nodeAvailability::isSchedulable).sorted(Comparator.comparing(NodeManagement::getNodeId))
@@ -80,6 +83,8 @@ public class DatasetStorageService {
                 heatLoad.merge(copy.getNodeId(), heat(dataset), Double::sum);
             }
         }
+        storage.forEach(node -> used.merge(node.getNodeId(),
+                datasets.countReservedStorageSlots(node.getNodeId()), Integer::sum));
         List<RegisteredDataset> active = all.stream().filter(d -> "ACTIVE".equals(d.getStatus()))
                 .sorted(Comparator.comparingDouble(DatasetStorageService::heat).reversed()
                         .thenComparing(RegisteredDataset::getDatasetId)).collect(Collectors.toList());
@@ -90,8 +95,7 @@ public class DatasetStorageService {
         result.setDatasetCount(active.size());
         for (int index = 0; index < active.size(); index++) {
             RegisteredDataset dataset = active.get(index);
-            if (datasets.countActiveSchedulingReferences(dataset.getDatasetId()) > 0
-                    || datasets.countActiveMigrationReferences(dataset.getDatasetId(), dataset.getLegacyDataId()) > 0) {
+            if (DatasetOperationGuard.busy(datasets, dataset)) {
                 result.getNotices().add(dataset.getName() + "：有未完成的调度，跳过");
                 continue;
             }
@@ -134,7 +138,7 @@ public class DatasetStorageService {
         if (request == null || request.getExternalPlanId() == null || request.getExternalPlanId().trim().isEmpty()) {
             throw RegistrationException.invalid("externalPlanId is required");
         }
-        DatasetStoragePlan current = preview(request.getMode());
+        DatasetStoragePlan current = preview(request.getMode(), request.getDatasetIds(), request.getTargetNodeId());
         if (current.getAssignments().isEmpty()) throw RegistrationException.conflict("当前布局无需迁移或复制");
         if (!current.getAssignments().equals(request.getAssignments())) {
             throw RegistrationException.conflict("数据、节点或布局已变化，请重新预览后确认");
@@ -144,9 +148,81 @@ public class DatasetStorageService {
         plan.setAssignments(current.getAssignments());
         SchedulingPlanRequest.Algorithm algorithm = new SchedulingPlanRequest.Algorithm();
         algorithm.setName("heat".equals(request.getMode()) ? "热敏存储" : "原位汇聚");
-        algorithm.setVersion("2.0");
+        algorithm.setVersion("3.0");
         plan.setAlgorithm(algorithm);
         return scheduling.submitDataPlan(plan);
+    }
+
+    /** Prepare only requested data near a chosen compute node. Never delete a source. */
+    private DatasetStoragePlan previewAggregation(List<Long> datasetIds, Integer targetNodeId) {
+        if (datasetIds == null || datasetIds.isEmpty() || datasetIds.contains(null)
+                || new HashSet<>(datasetIds).size() != datasetIds.size() || targetNodeId == null) {
+            throw RegistrationException.invalid("原位汇聚需要选择不重复的数据集和目标计算节点");
+        }
+        List<NodeManagement> available = nodes.selectAllNodes().stream()
+                .filter(nodeAvailability::isSchedulable).collect(Collectors.toList());
+        Map<Integer, NodeManagement> byId = available.stream()
+                .collect(Collectors.toMap(NodeManagement::getNodeId, n -> n));
+        NodeManagement compute = byId.get(targetNodeId);
+        if (compute == null || !("compute".equalsIgnoreCase(compute.getType())
+                || "compute-storage".equalsIgnoreCase(compute.getType()))) {
+            throw RegistrationException.conflict("请选择可用的计算或计算存储节点");
+        }
+        Map<Integer, NetworkTopologyService.NetworkPath> toCompute = topology.pathsFrom(targetNodeId);
+        List<NodeManagement> targets = available.stream().filter(DatasetSchedulingExecutor::isStorageNode)
+                .filter(n -> toCompute.containsKey(n.getNodeId()))
+                .sorted(Comparator.comparingInt((NodeManagement n) -> n.getNodeId().equals(targetNodeId) ? 0 : 1)
+                        .thenComparingDouble(n -> toCompute.get(n.getNodeId()).getLatencyMs())
+                        .thenComparing(NodeManagement::getNodeId)).collect(Collectors.toList());
+        Map<Integer, Map<Integer, NetworkTopologyService.NetworkPath>> sourcePaths = new HashMap<>();
+        Map<Integer, Integer> used = new HashMap<>();
+        targets.forEach(n -> used.put(n.getNodeId(), datasets.countStorageSlots(n.getNodeId())
+                + datasets.countReservedStorageSlots(n.getNodeId())));
+        DatasetStoragePlan result = new DatasetStoragePlan();
+        result.setMode("aggregation");
+        result.setDatasetIds(new ArrayList<>(datasetIds));
+        result.setTargetNodeId(targetNodeId);
+        result.setDatasetCount(datasetIds.size());
+        for (Long id : new TreeSet<>(datasetIds)) {
+            RegisteredDataset dataset = datasets.findDatasetById(id);
+            if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
+                throw RegistrationException.conflict("数据集未激活或不存在：" + id);
+            }
+            List<DatasetReplica> usable = datasets.listReplicas(id).stream()
+                    .filter(r -> byId.containsKey(r.getNodeId()) && replicaAvailability.evaluate(r).isUsable())
+                    .sorted(Comparator.comparing(DatasetReplica::getReplicaId)).collect(Collectors.toList());
+            if (DatasetOperationGuard.busy(datasets, dataset)) {
+                result.getNotices().add(dataset.getName() + "：有未完成的任务或调度，保留源副本并跳过");
+                continue;
+            }
+            if (usable.stream().anyMatch(r -> targetNodeId.equals(r.getNodeId()))) {
+                result.getNotices().add(dataset.getName() + "：目标计算节点已有可用副本，直接复用");
+                continue;
+            }
+            boolean placed = false;
+            for (NodeManagement target : targets) {
+                if (usable.stream().anyMatch(r -> target.getNodeId().equals(r.getNodeId()))) {
+                    result.getNotices().add(dataset.getName() + "：复用邻近存储节点 " + target.getNodeName() + " 的副本");
+                    placed = true;
+                    break;
+                }
+                if (target.getNumDataset() == null || used.get(target.getNodeId()) >= target.getNumDataset()) continue;
+                DatasetReplica source = usable.stream().filter(r -> {
+                    DatasetReplica existing = datasets.findReplicaByNodePath(target.getNodeId(), r.getFilePath());
+                    return (existing == null || existing.getDatasetId().equals(id))
+                            && sourcePaths.computeIfAbsent(r.getNodeId(), topology::pathsFrom).containsKey(target.getNodeId());
+                }).min(Comparator.comparingDouble((DatasetReplica r) ->
+                        sourcePaths.get(r.getNodeId()).get(target.getNodeId()).getLatencyMs())
+                        .thenComparing(DatasetReplica::getReplicaId)).orElse(null);
+                if (source == null) continue;
+                add(result, dataset, source, byId.get(source.getNodeId()), target, "COPY");
+                used.merge(target.getNodeId(), 1, Integer::sum);
+                placed = true;
+                break;
+            }
+            if (!placed) result.getNotices().add(dataset.getName() + "：无可用源副本、路径或邻近存储容量，跳过");
+        }
+        return result;
     }
 
     private NodeManagement choose(List<NodeManagement> storage, DatasetReplica source, Set<Integer> occupied,

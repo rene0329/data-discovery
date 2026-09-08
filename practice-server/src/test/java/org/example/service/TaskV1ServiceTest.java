@@ -74,11 +74,28 @@ class TaskV1ServiceTest {
         }).when(taskMapper).submitData(any(TaskManagement.class));
 
         CreateTaskRequest request = request();
-        TaskCreated created = service.create(request, "request-3");
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        TaskCreated created;
+        try {
+            created = service.create(request, "request-3");
+            org.mockito.Mockito.verifyNoInteractions(orchestrator);
+            org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
 
         assertEquals(42, created.getTaskId());
         assertEquals("ACCEPTED", created.getStatus());
         verify(orchestrator).executeRegisteredTask(eq(42), eq(Collections.singletonList(11L)), eq(3L), eq(null));
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(datasetMapper, taskMapper);
+        order.verify(datasetMapper).lockDataset(11L);
+        order.verify(datasetMapper).countActiveSchedulingReferences(11L);
+        order.verify(taskMapper).submitData(any());
+        org.mockito.Mockito.clearInvocations(taskMapper, orchestrator);
+        when(datasetMapper.countActiveSchedulingReferences(11L)).thenReturn(1);
+        assertThrows(RegistrationException.class, () -> service.create(request, "request-busy"));
+        org.mockito.Mockito.verifyNoInteractions(taskMapper, orchestrator);
     }
 
     @Test

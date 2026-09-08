@@ -42,6 +42,9 @@ import org.example.vo.PageResult;
 @Slf4j
 public class CommonController {
 
+    @Autowired
+    private org.example.mapper.DatasetRegistrationMapper datasetRegistrationMapper;
+
     private final DataManagementMapper dataManagementMapper;
     private final NodeManagementMapper nodeManagementMapper;
     private final TaskManagementMapper taskManagementMapper;
@@ -188,6 +191,7 @@ public class CommonController {
      * 用户提交数据 (已重构为异步委派模式)
      * 此方法现在非常快速，它会立即返回响应，并将长时间运行的任务交给后台服务处理。
      */
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     @PostMapping("/submitData/{currentTaskId}")
     public ResponseEntity<ApiResponse<Integer>> submitData(@PathVariable Integer currentTaskId, @RequestBody List<String> selectedDatas) {
         log.info("接收到调度任务请求，任务ID: {}", currentTaskId);
@@ -196,6 +200,16 @@ public class CommonController {
             log.warn("提交的数据列表为空，任务 {} 中止。", currentTaskId);
             return ResponseEntity.ok(ApiResponse.ok(0)); // 0 表示没有处理任何数据
         }
+
+        Set<Integer> legacyIds = dataManagementMapper.getAllData().stream()
+                .filter(d -> selectedDatas.contains(d.getDataName())).map(DataManagement::getDataId)
+                .collect(Collectors.toSet());
+        List<RegisteredDataset> registered = datasetRegistrationMapper.listDatasets(null, null).stream()
+                .filter(d -> selectedDatas.contains(d.getName()) || legacyIds.contains(d.getLegacyDataId()))
+                .collect(Collectors.toList());
+        org.example.service.DatasetOperationGuard.lock(datasetRegistrationMapper,
+                registered.stream().map(RegisteredDataset::getDatasetId).collect(Collectors.toList()));
+        registered.forEach(d -> org.example.service.DatasetOperationGuard.requireIdle(datasetRegistrationMapper, d));
 
         // 1. (快速) 创建总任务记录，初始状态为 "执行中"
         TaskManagement taskManagement = TaskManagement.builder()
@@ -218,7 +232,8 @@ public class CommonController {
 
         // 3. (核心) 将包含所有复杂逻辑的任务异步委派给后台服务
         //    这个调用会立即返回，不会阻塞当前请求线程。
-        k8sTaskOrchestratorService.executeTask(taskId, selectedDatas);
+        org.example.service.DatasetOperationGuard.afterCommit(() ->
+                k8sTaskOrchestratorService.executeTask(taskId, selectedDatas));
         log.info("任务 {} 已成功提交至后台异步执行。立即返回HTTP响应。", taskId);
 
         // 4. 立即返回成功响应，告知客户端任务已接收
@@ -278,251 +293,12 @@ public class CommonController {
     }
 
 
-    /**
-     * 管理员的数据管理的存储操作
-
-     */
-    /**
-     * 多因子热敏制导存储分配（热敏存储 & 原位汇聚共用）。
-     * <p>
-     * 评分公式:
-     *   score = W_CAP  * freeCapRatio     -- 剩余容量比，防止塞满
-     *         - W_HEAT * heatLoadRatio    -- 已分配热度占比，防止热数据扎堆
-     *         + W_PROX * computeProxScore -- 与计算节点直接相邻度，提升就近访问效率
-     *         + W_ROLE                   -- 节点角色加成：compute-storage 双角色节点可本地训练零网络开销
-     * <p>
-     * 物理迁移：对每条数据，若新分配节点 ≠ 旧节点，则先通过
-     *   GET  {oldNode}/data-discovery/download/{dataName}  下载文件
-     *   POST {newNode}/data-discovery/upload               上传到目标节点
-     * 物理迁移成功后才更新 DB；失败则保留旧 data_server，本轮跳过。
-     */
+    /** Legacy bulk writes are replaced by the reviewed v1 storage plan flow. */
     @PostMapping("/saveAll")
     public ResponseEntity<ApiResponse<List<DataManagement>>> saveAll(
             @RequestParam(defaultValue = "heat") String mode) {
-        int unfinishedTaskCount = taskManagementMapper.countUnfinishedTasks();
-        if ("heat".equals(mode) && unfinishedTaskCount > 0) {
-            return ResponseEntity.badRequest().body(ApiResponse.error(400, "存在未完成任务时不可使用热敏存储，请等待任务结束或使用原位汇聚"));
-        }
-        if ("aggregation".equals(mode) && unfinishedTaskCount == 0) {
-            return ResponseEntity.badRequest().body(ApiResponse.error(400, "没有未完成任务时不可使用原位汇聚，请使用热敏存储"));
-        }
-        log.info("开始多因子热敏制导存储分配（含物理迁移），mode={}...", mode);
-
-        // ── 1. 可存储节点（存储节点 + 计算存储双角色节点）
-        List<NodeManagement> storageNodes = dataManagementMapper.getCentralityNodes();
-        if (storageNodes.isEmpty()) {
-            log.warn("未找到存储节点，分配终止");
-            return ResponseEntity.ok(ApiResponse.ok(dataManagementMapper.getAllData()));
-        }
-
-        // ── 2. 数据列表（热度降序），同时记录旧 data_server
-        List<DataManagement> dataList = dataManagementMapper.getAllDataByHeat();
-        if (dataList.isEmpty()) {
-            return ResponseEntity.ok(ApiResponse.ok(dataManagementMapper.getAllData()));
-        }
-        Map<String, String> oldServerMap = new HashMap<>();
-        Map<String, String> oldBackupMap = new HashMap<>();
-        for (DataManagement d : dataList) {
-            oldServerMap.put(d.getDataName(), d.getDataServer());
-            oldBackupMap.put(d.getDataName(), d.getBackupServer());
-        }
-
-        // ── 3. 预计算 computeProxScore：与直连计算节点数 / 全部计算节点数，值域 [0,1]
-        List<NodeManagement> allNodes = nodeManagementMapper.selectAllNodes();
-        Map<Integer, String> nodeTypeMap = new HashMap<>();
-        for (NodeManagement n : allNodes) {
-            nodeTypeMap.put(n.getNodeId(), n.getType());
-        }
-        long totalComputeNodes = 0;
-        for (String t : nodeTypeMap.values()) {
-            if ("compute".equals(t) || "compute-storage".equals(t)) totalComputeNodes++;
-        }
-        Map<Integer, Set<Integer>> adjacency = new HashMap<>();
-        for (EdgeManagement e : networkTopologyService.links()) {
-            adjacency.computeIfAbsent(e.getSourceId(), k -> new HashSet<>()).add(e.getTargetId());
-            adjacency.computeIfAbsent(e.getTargetId(), k -> new HashSet<>()).add(e.getSourceId());
-        }
-        Map<Integer, Double> proxScoreMap = new HashMap<>();
-        for (NodeManagement sn : storageNodes) {
-            if (totalComputeNodes == 0) { proxScoreMap.put(sn.getNodeId(), 0.0); continue; }
-            Set<Integer> neighbors = adjacency.getOrDefault(sn.getNodeId(), Collections.emptySet());
-            long cn = 0;
-            for (Integer nb : neighbors) {
-                String t = nodeTypeMap.get(nb);
-                if ("compute".equals(t) || "compute-storage".equals(t)) cn++;
-            }
-            proxScoreMap.put(sn.getNodeId(), (double) cn / totalComputeNodes);
-        }
-
-        // ── 4. 动态状态初始化
-        Map<Integer, Integer> assignedCount = new HashMap<>();
-        Map<Integer, Double>  heatAccum     = new HashMap<>();
-        Map<String, NodeManagement> storageNodeByName = new HashMap<>();
-        for (NodeManagement sn : storageNodes) {
-            assignedCount.put(sn.getNodeId(), 0);
-            heatAccum.put(sn.getNodeId(), 0.0);
-            storageNodeByName.put(sn.getNodeName(), sn);
-        }
-        double totalHeat = 0.0;
-        for (DataManagement d : dataList) {
-            if (d.getDataHeat() != null) totalHeat += d.getDataHeat();
-        }
-
-        final double W_CAP  = 0.4;
-        final double W_HEAT = 0.4;
-        final double W_PROX = 0.2;
-        final double W_ROLE = 0.3;  // compute-storage 双角色加成，优先将数据存储在可本地训练的节点
-        int migratedCount = 0, skippedCount = 0;
-
-        // ── 5. 逐条打分 → 物理迁移（若有必要）→ 更新 DB
-        for (DataManagement data : dataList) {
-            double heat = data.getDataHeat() != null ? data.getDataHeat() : 0.0;
-            NodeManagement best      = null;
-            double         bestScore = Double.NEGATIVE_INFINITY;
-
-            NodeManagement currentSource = nodeManagementMapper.getNodeByName(oldServerMap.get(data.getDataName()));
-            Map<Integer, NetworkTopologyService.NetworkPath> reachable = currentSource == null
-                    ? Collections.emptyMap() : networkTopologyService.pathsFrom(currentSource.getNodeId());
-            for (NodeManagement sn : storageNodes) {
-                if (!reachable.containsKey(sn.getNodeId())) continue;
-                int cap  = sn.getNumDataset() != null ? sn.getNumDataset() : 0;
-                int used = assignedCount.get(sn.getNodeId());
-                if (used >= cap) continue;
-
-                double freeCapRatio  = cap > 0 ? (double)(cap - used) / cap : 0.0;
-                double heatLoadRatio = totalHeat > 0 ? heatAccum.get(sn.getNodeId()) / totalHeat : 0.0;
-                double prox          = proxScoreMap.getOrDefault(sn.getNodeId(), 0.0);
-                double roleBonus     = "compute-storage".equals(sn.getType()) ? W_ROLE : 0.0;
-                double score         = W_CAP * freeCapRatio - W_HEAT * heatLoadRatio + W_PROX * prox + roleBonus;
-
-                if (score > bestScore) { bestScore = score; best = sn; }
-            }
-
-            if (best == null) {
-                log.warn("所有存储节点容量已满，数据项 '{}' 无法分配", data.getDataName());
-                continue;
-            }
-
-            String oldServer = oldServerMap.get(data.getDataName());
-            String newServer = best.getNodeName();
-            boolean needsMove = oldServer != null && !oldServer.isEmpty() && !oldServer.equals(newServer);
-
-            if (needsMove) {
-                boolean ok = copyFile(data.getDataName(), data.getFilePath(), data.getDataSize(), oldServer, newServer);
-                if (!ok) {
-                    log.warn("物理迁移失败，'{}' 保留在原节点 {}，跳过 DB 更新", data.getDataName(), oldServer);
-                    skippedCount++;
-                    // 迁移失败后必须按真实旧布局计数，不能把容量虚记到新节点。
-                    NodeManagement oldNode = storageNodeByName.get(oldServer);
-                    if (oldNode != null) {
-                        assignedCount.merge(oldNode.getNodeId(), 1, Integer::sum);
-                        heatAccum.merge(oldNode.getNodeId(), heat, Double::sum);
-                    }
-                    continue;
-                }
-            }
-
-            // 文件已就位（原地 or 复制成功），先原子切换 DB，再删除旧文件。
-            String previousServer = data.getDataServer();
-            Integer previousNodeId = data.getDataNodeId();
-            data.setDataServer(newServer);
-            data.setDataNodeId(best.getNodeId());
-            int updated;
-            try {
-                updated = dataManagementMapper.updateDataServer(data);
-            } catch (Exception dbError) {
-                updated = 0;
-                log.error("切换数据位置失败，'{}' 保留旧位置 {}: {}",
-                        data.getDataName(), previousServer, dbError.getMessage());
-            }
-            if (updated != 1) {
-                data.setDataServer(previousServer);
-                data.setDataNodeId(previousNodeId);
-                skippedCount++;
-                NodeManagement oldNode = storageNodeByName.get(previousServer);
-                if (oldNode != null) {
-                    assignedCount.merge(oldNode.getNodeId(), 1, Integer::sum);
-                    heatAccum.merge(oldNode.getNodeId(), heat, Double::sum);
-                }
-                // DB 未切换成功，删除刚复制到目标节点的暂存副本，避免产生无主文件。
-                if (needsMove) {
-                    deleteFileOnNode(data.getFilePath(), newServer);
-                }
-                continue;
-            }
-
-            if (needsMove) {
-                migratedCount++;
-                // DB 已指向新节点后再删源；删除失败只会留下安全的冗余文件。
-                deleteFileOnNode(data.getFilePath(), oldServer);
-            }
-            assignedCount.merge(best.getNodeId(), 1, Integer::sum);
-            heatAccum.merge(best.getNodeId(), heat, Double::sum);
-            log.debug("分配 '{}' → {} (moved={})", data.getDataName(), newServer, needsMove);
-        }
-
-        // ── 6. 冗余备份：只备份热度排名前 1/2 的数据（N / 2 向下取整），
-        // 例如 N=5 时备份 2 条、N=6 时备份 3 条；N=1 时不创建冗余备份。
-        int backupCount = dataList.size() / 2;
-        for (int i = 0; i < backupCount; i++) {
-            DataManagement data        = dataList.get(i);
-            String         primaryNode = data.getDataServer();
-            NodeManagement backupBest  = null;
-            double         backupScore = Double.NEGATIVE_INFINITY;
-
-            NodeManagement primary = nodeManagementMapper.getNodeByName(primaryNode);
-            Map<Integer, NetworkTopologyService.NetworkPath> backupPaths = primary == null
-                    ? Collections.emptyMap() : networkTopologyService.pathsFrom(primary.getNodeId());
-            for (NodeManagement sn : storageNodes) {
-                if (sn.getNodeName().equals(primaryNode) || !backupPaths.containsKey(sn.getNodeId())) continue;
-                int cap  = sn.getNumDataset() != null ? sn.getNumDataset() : 0;
-                int used = assignedCount.get(sn.getNodeId());
-
-                // backup_server is currently a logical placement marker only; no physical
-                // backup file is created here.  Reusing the primary-data capacity gate would
-                // make floor(N / 2) impossible whenever primary replicas nearly fill the
-                // cluster (for example, 5 primaries in two nodes with capacity 3 each).
-                double freeCapRatio  = cap > 0 ? (double)(cap - used) / cap : 0.0;
-                double heatLoadRatio = totalHeat > 0 ? heatAccum.get(sn.getNodeId()) / totalHeat : 0.0;
-                double prox          = proxScoreMap.getOrDefault(sn.getNodeId(), 0.0);
-                double roleBonus     = "compute-storage".equals(sn.getType()) ? W_ROLE : 0.0;
-                double score         = W_CAP * freeCapRatio - W_HEAT * heatLoadRatio + W_PROX * prox + roleBonus;
-
-                if (score > backupScore) { backupScore = score; backupBest = sn; }
-            }
-
-            if (backupBest == null) {
-                log.warn("数据项 '{}' 找不到可用备份节点，跳过", data.getDataName());
-                if (data.getBackupServer() != null) {
-                    data.setBackupServer(null);
-                    dataManagementMapper.updateBackupServer(data);
-                }
-                continue;
-            }
-
-            String oldBackup = oldBackupMap.get(data.getDataName());
-            String newBackup = backupBest.getNodeName();
-
-            // 备份只落库，不做物理文件传输（避免与 DaemonSet 扫描冲突产生重复记录）
-            data.setBackupServer(newBackup);
-            dataManagementMapper.updateBackupServer(data);
-            log.info("备份（仅落库）'{}' → {}{}", data.getDataName(), newBackup,
-                    newBackup.equals(oldBackup) ? "（未变更）" : "（已变更）");
-        }
-
-        // 清理上一轮以及数据库恢复时遗留的备份位置：
-        // 只有当前热度排名前 1/2 的 backupCount 条保留备份标记。
-        for (int i = backupCount; i < dataList.size(); i++) {
-            DataManagement data = dataList.get(i);
-            if (data.getBackupServer() != null) {
-                data.setBackupServer(null);
-                dataManagementMapper.updateBackupServer(data);
-            }
-        }
-
-        log.info("分配完成：共 {} 条数据，物理迁移 {} 个，失败保留 {} 个，存储节点 {} 个",
-                dataList.size(), migratedCount, skippedCount, storageNodes.size());
-        return ResponseEntity.ok(ApiResponse.ok(dataManagementMapper.getAllData()));
+        return ResponseEntity.status(409).body(ApiResponse.error(409,
+                "请使用数据集页面的存储预览并确认执行：/api/v1/scheduling/storage-plans/preview"));
     }
 
     @GetMapping("/updateAll")

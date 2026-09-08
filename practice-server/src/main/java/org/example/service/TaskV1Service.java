@@ -66,12 +66,14 @@ public class TaskV1Service {
         this.heat = heat;
     }
 
+    @org.springframework.transaction.annotation.Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public TaskCreated create(CreateTaskRequest request, String requestId) {
         String existingResourceId = auditMapper.findResourceIdByRequest("TASK", "CREATE", requestId);
         if (existingResourceId != null) {
             return new TaskCreated(Integer.valueOf(existingResourceId), "ACCEPTED");
         }
         validate(request);
+        DatasetOperationGuard.lock(datasetMapper, request.getDatasetIds());
         TaskPreflightResult preflight = preflightValidated(request);
         if (!preflight.isValid()) {
             TaskPreflightCheck failed = preflight.getChecks().stream()
@@ -85,6 +87,7 @@ public class TaskV1Service {
         List<RegisteredDataset> datasets = request.getDatasetIds().stream()
                 .map(this::requireActiveDataset)
                 .collect(Collectors.toList());
+        datasets.forEach(dataset -> DatasetOperationGuard.requireIdle(datasetMapper, dataset));
         validateImages(datasets, request.getRuntimeImageId());
 
         TaskManagement task = TaskManagement.builder()
@@ -100,8 +103,8 @@ public class TaskV1Service {
         auditMapper.insert("TASK", String.valueOf(task.getTaskId()), "CREATE", "system", requestId,
                 writeJson(request));
         request.getDatasetIds().forEach(heat::recordAccess);
-        orchestrator.executeRegisteredTask(task.getTaskId(), request.getDatasetIds(),
-                request.getRuntimeImageId(), request.getResourceOverrides());
+        DatasetOperationGuard.afterCommit(() -> orchestrator.executeRegisteredTask(task.getTaskId(), request.getDatasetIds(),
+                request.getRuntimeImageId(), request.getResourceOverrides()));
         return new TaskCreated(task.getTaskId(), "ACCEPTED");
     }
 

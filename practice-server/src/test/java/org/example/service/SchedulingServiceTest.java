@@ -319,6 +319,32 @@ class SchedulingServiceTest {
         verifyNoInteractions(orchestrator);
     }
 
+    @Test
+    void conflictingPlansAndTasksAreRejectedAfterDatasetLockBeforeAnyWrite() {
+        SchedulingPlanRequest request = dataPlan("MOVE");
+        when(datasetMapper.countActiveSchedulingReferences(10L)).thenReturn(1);
+        assertThrows(RegistrationException.class, () -> service.submitDataPlan(request));
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(datasetMapper);
+        order.verify(datasetMapper).lockDataset(10L);
+        order.verify(datasetMapper).countActiveSchedulingReferences(10L);
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+        when(datasetMapper.countActiveSchedulingReferences(10L)).thenReturn(0);
+        when(datasetMapper.countActiveTaskReferences(10L, null)).thenReturn(1);
+        assertThrows(RegistrationException.class, () -> service.submitDataPlan(request));
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+        verifyNoInteractions(dataExecutor);
+    }
+
+    @Test
+    void pendingTargetsReserveCapacityAcrossPlans() {
+        SchedulingPlanRequest request = dataPlan("COPY");
+        when(datasetMapper.countStorageSlots(4)).thenReturn(9);
+        when(datasetMapper.countReservedStorageSlots(4)).thenReturn(1);
+        assertThrows(RegistrationException.class, () -> service.submitDataPlan(request));
+        verify(datasetMapper).lockStorageNode(4);
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+    }
+
     private SchedulingPlanRequest computePlan(String action) {
         SchedulingPlanRequest request = dataPlan(action);
         request.setTaskId("manual-compute");
@@ -341,7 +367,7 @@ class SchedulingServiceTest {
         when(datasetMapper.findDatasetById(10L)).thenReturn(dataset);
         when(datasetMapper.findReplicaById(20L)).thenReturn(replica);
         when(replicaAvailabilityService.evaluate(replica)).thenReturn(new ReplicaAvailability("USABLE", true, null));
-        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).type("storage").build());
+        when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).type("storage").numDataset(10).build());
         when(nodeAvailabilityService.isSchedulable(any())).thenReturn(true);
         doAnswer(invocation -> {
             ((SchedulingPlan) invocation.getArgument(0)).setPlanId(40L);

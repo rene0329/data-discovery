@@ -33,13 +33,14 @@ class DatasetStorageServiceTest {
         catalog = Arrays.asList(dataset(9, 80), dataset(10, 10));
         when(datasets.listDatasets(null, null)).thenReturn(catalog);
         for (RegisteredDataset dataset : catalog) {
+            when(datasets.findDatasetById(dataset.getDatasetId())).thenReturn(dataset);
             when(datasets.listReplicas(dataset.getDatasetId())).thenReturn(Collections.singletonList(
                     DatasetReplica.builder().replicaId(dataset.getDatasetId() + 100).datasetId(dataset.getDatasetId())
                             .nodeId(1).filePath("/dataset/" + dataset.getDatasetId() + ".npz").availability("AVAILABLE").build()));
         }
         Map<Integer, NetworkTopologyService.NetworkPath> paths = new HashMap<>();
         pool.forEach(n -> paths.put(n.getNodeId(), new NetworkTopologyService.NetworkPath(Arrays.asList(1, n.getNodeId()), 1, 100)));
-        when(topology.pathsFrom(1)).thenReturn(paths);
+        pool.forEach(n -> when(topology.pathsFrom(n.getNodeId())).thenReturn(paths));
     }
 
     @Test
@@ -56,14 +57,80 @@ class DatasetStorageServiceTest {
     }
 
     @Test
-    void unfinishedTaskConditionsApplyToBothPreviewAndSubmission() {
-        assertThrows(RegistrationException.class, () -> service.preview("aggregation"));
-        when(tasks.countUnfinishedTasks()).thenReturn(1);
-        assertEquals(false, service.policy().get("heatEnabled"));
-        assertEquals(1, service.policy().get("unfinishedTaskCount"));
-        assertThrows(RegistrationException.class, () -> service.preview("heat"));
-        assertFalse(service.preview("aggregation").getAssignments().isEmpty());
+    void bothModesRemainAvailableWithAndWithoutUnfinishedTasks() {
+        for (int count : new int[]{0, 1, 5}) {
+            when(tasks.countUnfinishedTasks()).thenReturn(count);
+            assertEquals(true, service.policy().get("heatEnabled"));
+            assertEquals(true, service.policy().get("aggregationEnabled"));
+            assertEquals(count, service.policy().get("unfinishedTaskCount"));
+            assertFalse(service.preview("heat").getAssignments().isEmpty());
+            assertFalse(service.preview("aggregation", Collections.singletonList(10L), 2).getAssignments().isEmpty());
+        }
         assertThrows(RegistrationException.class, () -> service.preview("invalid"));
+        assertThrows(RegistrationException.class, () -> service.preview("aggregation"));
+    }
+
+    @Test
+    void aggregationCopiesOnlyRequestedDataToComputeTargetAndRetainsSource() {
+        DatasetStoragePlan plan = service.preview("aggregation", Collections.singletonList(10L), 2);
+        assertEquals(1, plan.getDatasetCount());
+        assertEquals(1, plan.getAssignments().size());
+        assertEquals(10L, plan.getAssignments().get(0).getDatasetId());
+        assertEquals(2, plan.getAssignments().get(0).getTargetNodeId());
+        assertEquals("COPY", plan.getAssignments().get(0).getAction());
+        DatasetStoragePlan.Submit request = new DatasetStoragePlan.Submit();
+        request.setMode("aggregation"); request.setDatasetIds(Collections.singletonList(10L));
+        request.setTargetNodeId(2); request.setExternalPlanId("aggregation-selected");
+        request.setAssignments(plan.getAssignments());
+        service.submit(request);
+        verify(scheduling).submitDataPlan(any());
+    }
+
+    @Test
+    void aggregationReusesTargetAndSkipsBusyDatasetsWhileHeatProcessesOthers() {
+        when(datasets.countActiveTaskReferences(9L, "same-name")).thenReturn(1);
+        DatasetStoragePlan heat = service.preview("heat");
+        assertTrue(heat.getAssignments().stream().allMatch(a -> a.getDatasetId().equals(10L)));
+        assertFalse(heat.getAssignments().isEmpty());
+        DatasetStoragePlan aggregation = service.preview("aggregation", Arrays.asList(9L, 10L), 2);
+        assertEquals(1, aggregation.getAssignments().size());
+        assertTrue(aggregation.getNotices().get(0).contains("占用") || aggregation.getNotices().get(0).contains("未完成"));
+        when(datasets.listReplicas(10L)).thenReturn(Collections.singletonList(DatasetReplica.builder()
+                .replicaId(200L).datasetId(10L).nodeId(2).availability("AVAILABLE").build()));
+        DatasetStoragePlan reuse = service.preview("aggregation", Collections.singletonList(10L), 2);
+        assertTrue(reuse.getAssignments().isEmpty());
+        assertTrue(reuse.getNotices().get(0).contains("直接复用"));
+    }
+
+    @Test
+    void computeOnlyTargetUsesNearestStorageAndAccountsForPendingCapacity() {
+        NodeManagement compute = node(4, "compute");
+        List<NodeManagement> pool = new ArrayList<>(nodes.selectAllNodes()); pool.add(compute);
+        when(nodes.selectAllNodes()).thenReturn(pool);
+        Map<Integer, NetworkTopologyService.NetworkPath> paths = new HashMap<>();
+        paths.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(4, 2), 2, 100));
+        paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(4, 3), 10, 100));
+        when(topology.pathsFrom(4)).thenReturn(paths);
+        assertEquals(2, service.preview("aggregation", Collections.singletonList(10L), 4)
+                .getAssignments().get(0).getTargetNodeId());
+        when(datasets.countReservedStorageSlots(2)).thenReturn(10);
+        assertEquals(3, service.preview("aggregation", Collections.singletonList(10L), 4)
+                .getAssignments().get(0).getTargetNodeId());
+        when(datasets.countStorageSlots(3)).thenReturn(10);
+        assertTrue(service.preview("aggregation", Collections.singletonList(10L), 4).getAssignments().isEmpty());
+    }
+
+    @Test
+    void rejectsInvalidTargetsSelectionsAndNewOccupancyAfterPreview() {
+        assertThrows(RegistrationException.class, () -> service.preview("aggregation", Arrays.asList(10L, 10L), 2));
+        assertThrows(RegistrationException.class, () -> service.preview("aggregation", Collections.singletonList(10L), 1));
+        assertThrows(RegistrationException.class, () -> service.preview("aggregation", Collections.singletonList(999L), 2));
+        DatasetStoragePlan.Submit request = new DatasetStoragePlan.Submit();
+        request.setMode("heat"); request.setExternalPlanId("changed-occupancy");
+        request.setAssignments(service.preview("heat").getAssignments());
+        when(datasets.countActiveTaskReferences(9L, "same-name")).thenReturn(1);
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verifyNoInteractions(scheduling);
     }
 
     @Test
