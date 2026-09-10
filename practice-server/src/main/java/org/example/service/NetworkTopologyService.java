@@ -27,7 +27,7 @@ public class NetworkTopologyService {
 
     public NetworkTopologyService(EdgeManagementMapper edges, NodeManagementMapper nodes,
                                   NodeAvailabilityService availability,
-                                  @Value("${app.network-topology.stale-after-seconds:1800}") long staleAfterSeconds) {
+                                  @Value("${app.network-topology.stale-after-seconds:93600}") long staleAfterSeconds) {
         this.edges = edges;
         this.nodes = nodes;
         this.availability = availability;

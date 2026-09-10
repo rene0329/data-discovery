@@ -135,8 +135,9 @@ alioss:
 # 任务编排执行控制参数
 app:
   network-topology:
-    # Three missed 10-minute probe cycles make a link unavailable without deleting it.
-    stale-after-seconds: 1800
+    # Daily bounded bandwidth probes: allow two hours for scheduling, retries and reporting.
+    # Failed probes still mark links inactive immediately; node health is checked separately.
+    stale-after-seconds: 93600
   runtime-image:
     verify-namespace: ${APP_RUNTIME_IMAGE_VERIFY_NAMESPACE:topic4-1}
     verify-timeout-seconds: 3600

@@ -75,6 +75,27 @@ class NetworkTopologyServiceTest {
     }
 
     @Test
+    void dailyProbeRemainsUsableUntilReportingAllowanceExpiresButFailureIsImmediate() {
+        EdgeManagementMapper edgeMapper = mock(EdgeManagementMapper.class);
+        NodeManagementMapper nodeMapper = mock(NodeManagementMapper.class);
+        when(edgeMapper.links()).thenReturn(links);
+        when(nodeMapper.selectAllNodes()).thenReturn(nodes);
+        NetworkTopologyService daily = new NetworkTopologyService(
+                edgeMapper, nodeMapper, new NodeAvailabilityService(300), 93600);
+
+        links.get(3).setMeasurementTime(Timestamp.from(Instant.now().minusSeconds(25 * 3600)));
+        assertEquals("active", daily.links().get(3).getStatus());
+        assertEquals(Arrays.asList(4, 1, 3, 6), daily.requirePath(4, 6).getNodeIds());
+
+        links.get(3).setStatus("inactive");
+        assertThrows(RegistrationException.class, () -> daily.requirePath(4, 6));
+        links.get(3).setStatus("active");
+        links.get(3).setMeasurementTime(Timestamp.from(Instant.now().minusSeconds(93601)));
+        assertEquals("STALE", daily.links().get(3).getStatus());
+        assertThrows(RegistrationException.class, () -> daily.requirePath(4, 6));
+    }
+
+    @Test
     void unavailableTransitNodeCannotBeUsedEvenWhenItsLinksAreActive() {
         nodes.get(0).setEnabled(false);
         assertThrows(RegistrationException.class, () -> topology.requirePath(4, 6));

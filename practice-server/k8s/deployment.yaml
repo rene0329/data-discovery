@@ -45,6 +45,9 @@ spec:
               value: "-Duser.timezone=UTC"
             - name: APP_RUNTIME_IMAGE_VERIFY_NAMESPACE
               value: "topic4-1"
+            # Match the daily bounded network probe plus a two-hour reporting allowance.
+            - name: APP_NETWORK_TOPOLOGY_STALE_AFTER_SECONDS
+              value: "93600"
 
             # MySQL
             - name: SPRING_DATASOURCE_DRUID_URL
