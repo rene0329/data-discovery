@@ -5,10 +5,12 @@ ARG MP_SPDZ_VERSION=v0.4.3
 ARG MP_SPDZ_COMMIT=26a605368e40fed3a7e9cee78c9a3f4390b85eb5
 ARG MP_SPDZ_ASSET_SHA256=4b5f4f7a79f31365288fe4498ba2b70afc314c028696929c8d259ef50ab2e759
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       ca-certificates curl openssl xz-utils \
-    && rm -rf /var/lib/apt/lists/*
+# The digest-pinned Python base already carries the small fetch/TLS toolchain.
+# Assert it instead of consulting mutable Debian repositories during a release build.
+RUN command -v curl \
+    && command -v openssl \
+    && command -v xz \
+    && test -s /etc/ssl/certs/ca-certificates.crt
 
 WORKDIR /opt
 RUN curl --fail --location --retry 3 \

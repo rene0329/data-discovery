@@ -2,9 +2,10 @@ ARG PYTHON_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-python-3
 FROM ${PYTHON_BASE}
 ARG SFL_COMMIT=c383e40f665063d7f7d87e437a73e015f87c435c
 ARG SFL_LOCAL_BUILD_VERSION=1.0.0.dev0+c383e40f
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
+# Git and the CA bundle are part of the digest-pinned Python base.  Keeping the
+# build off mutable Debian indexes makes the fixed SFL source build repeatable.
+RUN command -v git \
+    && test -s /etc/ssl/certs/ca-certificates.crt
 RUN git clone https://github.com/secretflow/sfl.git /opt/sfl \
     && git -C /opt/sfl checkout --detach "${SFL_COMMIT}" \
     && test "$(git -C /opt/sfl rev-parse HEAD)" = "${SFL_COMMIT}" \
