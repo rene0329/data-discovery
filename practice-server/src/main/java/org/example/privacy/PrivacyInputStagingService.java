@@ -2,6 +2,7 @@ package org.example.privacy;
 
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
+import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
@@ -90,13 +91,36 @@ public class PrivacyInputStagingService {
         return result;
     }
 
+    /**
+     * Verifies that every participant can stage the frozen dataset version from
+     * the Agent node assigned to its logical privacy domain. This check is run
+     * during preflight and job creation, then repeated by {@link #prepare} at
+     * dispatch time so replica changes cannot cause a cross-domain fallback.
+     */
+    public void validateFixedNodeReplicas(JobSpec spec) {
+        if (spec == null || spec.getParticipants() == null) {
+            throw RegistrationException.invalid("PRIVACY_PARTICIPANTS_REQUIRED",
+                    "privacy job participants are required");
+        }
+        for (ParticipantSpec participant : spec.getParticipants()) {
+            long datasetId;
+            try {
+                datasetId = Long.parseLong(participant.getDatasetId());
+            } catch (RuntimeException ex) {
+                throw RegistrationException.invalid("PRIVACY_DATASET_ID_INVALID",
+                        "datasetId must be numeric for party " + participant.getPartyId());
+            }
+            select(datasetId, participant);
+        }
+    }
+
     private DatasetReplica select(long datasetId, ParticipantSpec participant) {
         String party = participant.getPartyId() == null
                 ? "" : participant.getPartyId().trim().toUpperCase(Locale.ROOT);
         String requiredNodeName = partyNodeNames.get(party);
         if (blank(requiredNodeName)) {
-            throw new IllegalStateException("fixed privacy input node is not configured for party "
-                    + participant.getPartyId());
+            throw RegistrationException.conflict("PRIVACY_PARTY_NODE_NOT_CONFIGURED",
+                    "fixed privacy input node is not configured for party " + participant.getPartyId());
         }
         List<DatasetReplica> replicas = datasets.listReplicas(datasetId);
         if (replicas == null) replicas = new ArrayList<>();
@@ -108,9 +132,10 @@ public class PrivacyInputStagingService {
                 .sorted(Comparator.comparing(DatasetReplica::getNodeId)
                         .thenComparing(DatasetReplica::getFilePath))
                 .findFirst()
-                .orElseThrow(() -> new IllegalStateException(
-                        "no strongly verified replica matches the frozen dataset version for party "
-                                + participant.getPartyId()));
+                .orElseThrow(() -> RegistrationException.conflict(
+                        "PRIVACY_FIXED_NODE_REPLICA_UNAVAILABLE",
+                        "party " + party + " has no usable frozen-version replica on fixed node "
+                                + requiredNodeName));
     }
 
     private boolean replicaBelongsTo(DatasetReplica replica, String requiredNodeName) {

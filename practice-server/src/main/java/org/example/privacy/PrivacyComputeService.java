@@ -105,6 +105,7 @@ public class PrivacyComputeService {
         try {
             ResolvedSpec resolved = resolver.resolve(request, template, principal);
             providers.require(template.getProvider()).validate(resolved.getSpec(), template);
+            staging.validateFixedNodeReplicas(resolved.getSpec());
             result.setSpecDigest(resolved.getSpecDigest());
             result.setValid(true);
             result.getWarnings().add(template.getLeakageDisclosure());
@@ -130,6 +131,7 @@ public class PrivacyComputeService {
         ResolvedSpec resolved = resolver.resolve(request, template, principal);
         PrivacyComputeProvider provider = providers.require(template.getProvider());
         provider.validate(resolved.getSpec(), template);
+        staging.validateFixedNodeReplicas(resolved.getSpec());
         ProviderCapability capability = provider.capability();
         if (capability.getStatus() != CapabilityStatus.AVAILABLE || blank(capability.getImageDigest())) {
             throw RegistrationException.conflict("PRIVACY_PROVIDER_UNAVAILABLE",

@@ -2,6 +2,7 @@ package org.example.privacy;
 
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
+import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
@@ -21,9 +22,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class PrivacyInputStagingServiceTest {
@@ -76,6 +79,85 @@ class PrivacyInputStagingServiceTest {
         assertEquals("sha256:" + repeat('c', 64), result.get(0).getExpectedSchemaDigest());
         assertEquals("value", result.get(0).getExpectedSchema().get(0).get("name"));
         verify(access).issueInternalOneTime(any(), any());
+    }
+
+    @Test
+    void rejectsHealthyReplicaFromAnotherDomainWhenFixedNodeHasNoUsableReplica() {
+        DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
+        NodeManagementMapper nodes = mock(NodeManagementMapper.class);
+        DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
+        DatasetAccessAuthorizationService access = mock(DatasetAccessAuthorizationService.class);
+        String digest = repeat('a', 64);
+        DatasetReplica otherDomain = replica(1L, 1, digest);
+        DatasetReplica fixedButUnavailable = replica(2L, 2, digest);
+        when(datasets.listReplicas(42L)).thenReturn(java.util.Arrays.asList(otherDomain, fixedButUnavailable));
+        when(nodes.getNodeById(1)).thenReturn(NodeManagement.builder()
+                .nodeId(1).nodeName("alish").internalIp("10.0.0.1").build());
+        when(nodes.getNodeById(2)).thenReturn(NodeManagement.builder()
+                .nodeId(2).nodeName("alibj").internalIp("10.0.0.2").build());
+        when(availability.evaluate(otherDomain)).thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(availability.evaluate(fixedButUnavailable))
+                .thenReturn(new ReplicaAvailability("NODE_UNAVAILABLE", false, "node is unavailable"));
+
+        PrivacyInputStagingService service = new PrivacyInputStagingService(
+                datasets, nodes, availability, access, 8080,
+                "alibj", "alihz", "alish");
+        JobSpec spec = spec("A", digest);
+
+        RegistrationException error = assertThrows(RegistrationException.class,
+                () -> service.validateFixedNodeReplicas(spec));
+
+        assertEquals("PRIVACY_FIXED_NODE_REPLICA_UNAVAILABLE", error.getErrorCode());
+        assertEquals("party A has no usable frozen-version replica on fixed node alibj", error.getMessage());
+        verify(access, never()).issueInternalOneTime(any(), any());
+    }
+
+    @Test
+    void validatesAllPartiesAgainstTheirOwnFixedNodes() {
+        DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
+        NodeManagementMapper nodes = mock(NodeManagementMapper.class);
+        DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
+        DatasetAccessAuthorizationService access = mock(DatasetAccessAuthorizationService.class);
+        String digest = repeat('a', 64);
+        DatasetReplica replicaA = replica(1L, 6, digest);
+        DatasetReplica replicaB = replica(2L, 4, digest);
+        DatasetReplica replicaC = replica(3L, 5, digest);
+        when(datasets.listReplicas(42L)).thenReturn(java.util.Arrays.asList(replicaA, replicaB, replicaC));
+        when(availability.evaluate(any())).thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(nodes.getNodeById(6)).thenReturn(NodeManagement.builder().nodeId(6).nodeName("alibj").build());
+        when(nodes.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).nodeName("alihz").build());
+        when(nodes.getNodeById(5)).thenReturn(NodeManagement.builder().nodeId(5).nodeName("alish").build());
+
+        PrivacyInputStagingService service = new PrivacyInputStagingService(
+                datasets, nodes, availability, access, 8080,
+                "alibj", "alihz", "alish");
+        JobSpec spec = new JobSpec();
+        spec.setParticipants(java.util.Arrays.asList(
+                participant("A", digest), participant("B", digest), participant("C", digest)));
+
+        service.validateFixedNodeReplicas(spec);
+
+        verify(access, never()).issueInternalOneTime(any(), any());
+    }
+
+    private JobSpec spec(String party, String digest) {
+        JobSpec spec = new JobSpec();
+        spec.setParticipants(Collections.singletonList(participant(party, digest)));
+        return spec;
+    }
+
+    private ParticipantSpec participant(String party, String digest) {
+        ParticipantSpec participant = new ParticipantSpec();
+        participant.setPartyId(party);
+        participant.setDatasetId("42");
+        participant.setDatasetVersion("v1");
+        participant.setDatasetSha256(digest);
+        participant.setAuthoritativeSizeBytes(123L);
+        participant.setSchemaDigest(repeat('c', 64));
+        Map<String, Object> column = new LinkedHashMap<>();
+        column.put("name", "value");
+        participant.setFrozenSchema(Collections.singletonList(column));
+        return participant;
     }
 
     private DatasetReplica replica(long id, int node, String digest) {
