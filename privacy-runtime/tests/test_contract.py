@@ -918,6 +918,25 @@ class AdapterPolicyTest(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(output.read_text().split(), ["11", "22", "0", "0", "0", "0", "0", "0"])
 
+    def test_mpspdz_statistics_parser_keeps_adjacent_lanes_separate(self):
+        adapter = ROOT / "providers/mpspdz/run-engine.py"
+        spec = importlib.util.spec_from_file_location("topic4_mpspdz_adapter", adapter)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        output = (
+            "TOPIC4_STATS[0] sum=60 count=3 mean=20 min=10 max=30 variance=66.6667\n"
+            "TOPIC4_STATS[1] sum=12 count=3 mean=4 min=2 max=6 variance=2.66667\n"
+            "TOPIC4_STATS[2] sum=0 count=3 mean=0 min=0 max=0 variance=0\n"
+        )
+        self.assertEqual(module.parse_statistics(output, 2), [
+            {"sum": "60", "count": 3, "mean": "20", "min": "10",
+             "max": "30", "variance": "66.6667"},
+            {"sum": "12", "count": 3, "mean": "4", "min": "2",
+             "max": "6", "variance": "2.66667"},
+        ])
+        missing_lane = output.replace("TOPIC4_STATS[1]", "TOPIC4_STATS[3]")
+        self.assertIsNone(module.parse_statistics(missing_lane, 2))
+
     def test_mpspdz_converter_rejects_missing_or_duplicate_bindings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

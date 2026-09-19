@@ -58,6 +58,22 @@ def protocol_message_report(output):
     return report
 
 
+def parse_statistics(output, vector_length):
+    pattern = re.compile(
+        r"TOPIC4_STATS\[(\d+)\] sum=(\S+) count=3 mean=(\S+) "
+        r"min=(\S+) max=(\S+) variance=(\S+)"
+    )
+    values = {}
+    for match in pattern.finditer(output):
+        values[int(match.group(1))] = {
+            "sum": match.group(2), "count": 3, "mean": match.group(3),
+            "min": match.group(4), "max": match.group(5), "variance": match.group(6),
+        }
+    if any(lane not in values for lane in range(vector_length)):
+        return None
+    return [values[lane] for lane in range(vector_length)]
+
+
 def private_work_directory():
     value = os.getenv("TOPIC4_JOB_WORK_DIR", "")
     path = Path(value)
@@ -227,19 +243,11 @@ def main():
                 return 70
             result.update({"threshold": 100, "reached": match.group(1) == "1"})
         else:
-            pattern = re.compile(
-                r"TOPIC4_STATS\[(\d+)\] sum=([^ ]+) count=3 mean=([^ ]+) min=([^ ]+) max=([^ ]+) variance=([^ ]+)"
-            )
-            values = {}
-            for match in pattern.finditer(output):
-                values[int(match.group(1))] = {
-                    "sum": match.group(2), "count": 3, "mean": match.group(3),
-                    "min": match.group(4), "max": match.group(5), "variance": match.group(6),
-                }
-            if len(values) < vector_length:
+            values = parse_statistics(output, vector_length)
+            if values is None:
                 print("engine output did not contain all statistic lanes", file=sys.stderr)
                 return 70
-            result["value"] = [values[i] for i in range(vector_length)]
+            result["value"] = values
             if vector_length == 1:
                 result["value"] = result["value"][0]
     else:
