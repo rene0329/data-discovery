@@ -75,8 +75,20 @@ for letter in A B C; do
     --from-file=P2.pem="$work/P2.pem" \
     --from-file="P${index}.key=$work/P${index}.key" \
     --dry-run=client -o yaml | kubectl apply -f -
-  eval "agent_url=\\$AGENT_URL_$letter"
-  eval "agent_node=\\$AGENT_NODE_$letter"
+  case "$letter" in
+    A)
+      agent_url="$AGENT_URL_A"
+      agent_node="$AGENT_NODE_A"
+      ;;
+    B)
+      agent_url="$AGENT_URL_B"
+      agent_node="$AGENT_NODE_B"
+      ;;
+    C)
+      agent_url="$AGENT_URL_C"
+      agent_node="$AGENT_NODE_C"
+      ;;
+  esac
   agent_host="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).hostname or "")' "$agent_url")"
   test -n "$agent_host"
   kubectl -n "$namespace" create configmap topic4-privacy-party-config \

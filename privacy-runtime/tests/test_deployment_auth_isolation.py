@@ -152,6 +152,10 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
         self.assertIn('"privacy-mpspdz-runner-${lower}-auth"', mpspdz)
         self.assertIn('export MPSPDZ_IMAGE MPSPDZ_IMAGE_DIGEST', mpspdz)
         self.assertIn('"MPSPDZ_IMAGE_DIGEST", "NODE_A"', mpspdz)
+        self.assertNotIn("eval ", mpspdz)
+        for letter in ("A", "B", "C"):
+            self.assertIn('agent_url="$AGENT_URL_%s"' % letter, mpspdz)
+            self.assertIn('agent_node="$AGENT_NODE_%s"' % letter, mpspdz)
 
     def test_sfl_smoke_uses_gateway_ingress_secret(self):
         script = (K8S / "run-and-approve-sfl-smoke.sh").read_text(encoding="utf-8")
