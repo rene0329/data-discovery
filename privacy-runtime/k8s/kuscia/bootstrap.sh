@@ -116,6 +116,11 @@ master_pod="$(kubectl -n kuscia-master get pods -l app=kuscia-master \
 test -n "$master_pod"
 kubectl -n kuscia-master wait --for=condition=Ready "$master_pod" --timeout="$rollout_timeout"
 
+# A stopped Master Gateway remains live to Kuscia for three minutes and blocks
+# new Lite route-token handshakes.  Keep every Gateway backed by an outer pod,
+# including the selected Ready Master, and remove only orphaned Gateway CRs.
+bash "$here/cleanup-stale-master-gateways.sh" "$master_pod" "$master_domain"
+
 for letter in a b c; do
   namespace="kuscia-${letter}"
   domain="domain-${letter}"
