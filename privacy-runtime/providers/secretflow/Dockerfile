@@ -2,11 +2,14 @@ ARG PSI_BUILDER_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-sec
 ARG SECRETFLOW_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-secretflow-lite-1.11.0b1-amd64@sha256:f0033a79e71f1f76656230d0f3cd31cbddc8d3bdcdb39fe2fd2afc8b000ec178
 
 FROM ${PSI_BUILDER_BASE} AS psi-builder
-ARG PSI_VERSION=v0.6.0.dev260105
 ARG PSI_COMMIT=72f3312fd9142ea567f3a170d0808a2118b75af8
+ARG PSI_SOURCE_SHA256=aafae2d0351ab301baa33693d68a25dd5cf45955632a476e8bd617212003fb72
 WORKDIR /build
-RUN git clone --depth 1 --branch "${PSI_VERSION}" https://github.com/secretflow/psi.git source \
-    && test "$(git -C /build/source rev-parse HEAD)" = "${PSI_COMMIT}"
+COPY providers/secretflow/psi-v0.6.0.dev260105-72f3312fd9142ea567f3a170d0808a2118b75af8.tar.gz /tmp/psi-source.tar.gz
+RUN echo "${PSI_SOURCE_SHA256}  /tmp/psi-source.tar.gz" | sha256sum --check --strict \
+    && mkdir source \
+    && tar -xzf /tmp/psi-source.tar.gz --strip-components=1 -C source \
+    && rm -f /tmp/psi-source.tar.gz
 WORKDIR /build/source
 RUN conda install -y perl=5.32.1 \
     && conda update -y sysroot_linux-64 \

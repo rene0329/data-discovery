@@ -1090,6 +1090,15 @@ class ArtifactTest(unittest.TestCase):
         self.assertNotIn("git fetch", dockerfile)
         self.assertNotIn("git clone", dockerfile)
 
+    def test_psi_image_uses_verified_cached_source_archive(self):
+        dockerfile = (ROOT / "providers/secretflow/Dockerfile").read_text(encoding="utf-8")
+        lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
+        psi = next(item for item in lock["dependencies"] if item["name"] == "SecretFlow PSI")
+        self.assertIn(psi["sourceArchive"], dockerfile)
+        self.assertIn(psi["sourceArchiveSha256"], dockerfile)
+        self.assertIn("sha256sum --check --strict", dockerfile)
+        self.assertNotIn("git clone", dockerfile)
+
     def test_generated_mpspdz_registry_is_current(self):
         before = {
             path.name: path.read_bytes()

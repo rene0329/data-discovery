@@ -71,6 +71,9 @@ endpoints through Envoy mTLS; a normal Deployment with a marker cannot satisfy
 the context digest, serving ID and controller-injected environment checks.
 APSI supports one value column, emits the required `key,value` header, rejects
 empty/duplicate keys, and returns hit/value rows to the client runner.
+The PSI build consumes a reproducible archive of commit
+`72f3312fd9142ea567f3a170d0808a2118b75af8` and verifies its SHA-256 before
+running Bazel, so the source step does not resolve a live tag or branch.
 
 SFL is pinned to `c383e40f665063d7f7d87e437a73e015f87c435c`. That
 unreleased source declares `1.0.0.dev$$DATE$$` and requires
