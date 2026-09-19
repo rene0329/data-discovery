@@ -94,9 +94,29 @@ def validate_unique_keys(source, keys):
             seen.add(value)
 
 
-def read_result(path):
+def read_result(path, trim_apsi_label_terminator=False):
     with Path(path).open(newline="", encoding="utf-8-sig") as stream:
-        reader = csv.DictReader(stream)
+        lines = stream
+        if trim_apsi_label_terminator:
+            # The pinned APSI launcher writes the decoded textual label with a
+            # trailing NUL immediately before the row delimiter.  Keep the raw
+            # protocol artifact unchanged for its digest, but remove that
+            # launcher terminator before passing rows to Python's CSV parser.
+            def normalized_lines():
+                for line in stream:
+                    ending = ""
+                    body = line
+                    if body.endswith("\r\n"):
+                        body, ending = body[:-2], "\r\n"
+                    elif body.endswith(("\n", "\r")):
+                        body, ending = body[:-1], body[-1]
+                    body = body.rstrip("\0")
+                    if "\0" in body:
+                        raise ValueError("APSI result contains an embedded NUL byte")
+                    yield body + ending
+
+            lines = normalized_lines()
+        reader = csv.DictReader(lines)
         if not reader.fieldnames:
             raise ValueError("protocol result is missing its CSV header")
         return [{key: value for key, value in row.items()} for row in reader]
@@ -341,7 +361,9 @@ def main():
     if released and not output_path.is_file():
         print("result recipient has no protocol output", file=sys.stderr)
         return 70
-    released_rows = read_result(output_path) if released else None
+    released_rows = read_result(
+        output_path, trim_apsi_label_terminator=template == "pir-keyword-2p-v1"
+    ) if released else None
     if not released:
         remove_file(output_path)
     result = {

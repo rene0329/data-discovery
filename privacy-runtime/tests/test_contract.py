@@ -972,6 +972,22 @@ class AdapterPolicyTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 module.prepare_apsi_input(duplicate, root / "bad", True, "lookup", ["payload"])
 
+    def test_apsi_result_parser_removes_only_trailing_label_terminators(self):
+        adapter = ROOT / "providers/psi/run-engine.py"
+        spec = importlib.util.spec_from_file_location("topic4_psi_result_adapter", adapter)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / "result.csv"
+            result.write_bytes(b"key,value\nsynthetic-match,synthetic-label\0\n")
+            self.assertEqual(module.read_result(
+                result, trim_apsi_label_terminator=True),
+                [{"key": "synthetic-match", "value": "synthetic-label"}],
+            )
+            result.write_bytes(b"key,value\nsynthetic\0-match,synthetic-label\n")
+            with self.assertRaisesRegex(ValueError, "embedded NUL"):
+                module.read_result(result, trim_apsi_label_terminator=True)
+
     def test_sfl_adapter_rejects_role_field_and_policy_drift(self):
         adapter = ROOT / "providers/sfl/hfl_fedavg_logreg.py"
         spec = importlib.util.spec_from_file_location("topic4_sfl_adapter", adapter)
