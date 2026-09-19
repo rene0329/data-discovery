@@ -1145,6 +1145,8 @@ class ArtifactTest(unittest.TestCase):
                 pod_spec = app["spec"]["deployTemplates"][0]["spec"]
                 self.assertNotIn("volumes", pod_spec)
                 self.assertNotIn("volumeMounts", pod_spec["containers"][0])
+                self.assertEqual(pod_spec["containers"][0]["securityContext"]["runAsUser"], 0)
+                self.assertEqual(pod_spec["containers"][0]["securityContext"]["runAsGroup"], 0)
 
     def test_provider_deploy_patches_logical_domains_through_master(self):
         script = (ROOT / "k8s/deploy-kuscia-providers.sh").read_text(encoding="utf-8")
@@ -1155,6 +1157,8 @@ class ArtifactTest(unittest.TestCase):
         self.assertIn('patch_party_storage "$provider" domain-a', function)
         self.assertIn("/state/jobs /state/models /state/smoke", function)
         self.assertIn("chmod 0700 /state/jobs /state/models /state/smoke", function)
+        self.assertIn("chown -R 0:0 /state/jobs /state/models /state/smoke", function)
+        self.assertNotIn("10001:10001", function)
         self.assertNotIn("chmod 0700 /state\"", function)
         self.assertNotIn("text=True", script)
         self.assertIn("universal_newlines=True", script)

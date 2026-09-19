@@ -157,10 +157,11 @@ patch_party_storage() {
   }
   state_path="/data/topic4-privacy/party-state/${domain}/${provider}"
   # RunK projects the hostPath through a bind-mounted volume whose mount root
-  # cannot be chmod'ed from the nested Pod. Keep the mount root owned by the
-  # runner and make every directory that can contain protocol state private.
+  # cannot be chmod'ed from the nested Pod. The fixed AppImages run as UID 0
+  # with every capability dropped, so make only their state subdirectories
+  # root-owned and private; the mount root remains traversable and read-only.
   patch="$(cat <<EOF
-{"spec":{"strategy":{"type":"Recreate"},"template":{"metadata":{"annotations":{"topic4.openai.com/party-state":"${state_path}"}},"spec":{"initContainers":[{"name":"prepare-party-state","image":"${image}","imagePullPolicy":"IfNotPresent","command":["sh","-c","mkdir -p /state/jobs /state/models /state/smoke && chmod 0700 /state/jobs /state/models /state/smoke && chown -R 10001:10001 /state/jobs /state/models /state/smoke && chown 10001:10001 /state"],"securityContext":{"runAsUser":0,"runAsGroup":0,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER"]}},"volumeMounts":[{"name":"party-state","mountPath":"/state"}]}],"containers":[{"name":"runner","volumeMounts":[{"name":"party-state","mountPath":"/var/lib/topic4-privacy"},{"name":"staged-inputs","mountPath":"/var/run/topic4-inputs"},{"name":"private-work","mountPath":"/var/run/topic4-work"}]}],"volumes":[{"name":"party-state","hostPath":{"path":"${state_path}","type":"DirectoryOrCreate"}},{"name":"staged-inputs","emptyDir":{}},{"name":"private-work","emptyDir":{}}]}}}}
+{"spec":{"strategy":{"type":"Recreate"},"template":{"metadata":{"annotations":{"topic4.openai.com/party-state":"${state_path}"}},"spec":{"initContainers":[{"name":"prepare-party-state","image":"${image}","imagePullPolicy":"IfNotPresent","command":["sh","-c","mkdir -p /state/jobs /state/models /state/smoke && chown -R 0:0 /state/jobs /state/models /state/smoke && chmod 0700 /state/jobs /state/models /state/smoke"],"securityContext":{"runAsUser":0,"runAsGroup":0,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER"]}},"volumeMounts":[{"name":"party-state","mountPath":"/state"}]}],"containers":[{"name":"runner","volumeMounts":[{"name":"party-state","mountPath":"/var/lib/topic4-privacy"},{"name":"staged-inputs","mountPath":"/var/run/topic4-inputs"},{"name":"private-work","mountPath":"/var/run/topic4-work"}]}],"volumes":[{"name":"party-state","hostPath":{"path":"${state_path}","type":"DirectoryOrCreate"}},{"name":"staged-inputs","emptyDir":{}},{"name":"private-work","emptyDir":{}}]}}}}
 EOF
 )"
   kubectl -n kuscia-master exec deploy/kuscia-master -- \

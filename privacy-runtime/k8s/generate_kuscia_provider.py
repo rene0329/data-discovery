@@ -134,6 +134,8 @@ def main():
                         },
                         "imagePullPolicy": "IfNotPresent",
                         "securityContext": {
+                            "runAsUser": 0,
+                            "runAsGroup": 0,
                             "allowPrivilegeEscalation": False,
                             "capabilities": {"drop": ["ALL"]},
                         },
