@@ -944,6 +944,8 @@ class AdapterPolicyTest(unittest.TestCase):
             server_out, client_out = root / "server.out", root / "client.out"
             module.prepare_apsi_input(server, server_out, True, "lookup", ["payload"])
             module.prepare_apsi_input(client, client_out, False, "lookup", ["payload"])
+            self.assertNotIn(b"\r", server_out.read_bytes())
+            self.assertNotIn(b"\r", client_out.read_bytes())
             self.assertEqual(server_out.read_text().splitlines()[0], "key,value")
             self.assertEqual(client_out.read_text().splitlines()[0], "key")
             duplicate = root / "duplicate.csv"

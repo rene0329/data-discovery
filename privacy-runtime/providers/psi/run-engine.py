@@ -151,7 +151,12 @@ def prepare_apsi_input(source, destination, sender, query_column, value_columns)
     if len(set(keys)) != len(keys):
         raise ValueError("APSI keys must be unique")
     with Path(destination).open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.writer(stream)
+        # APSI validates the header with std::getline and compares it byte for
+        # byte.  csv.writer defaults to CRLF even on Linux, leaving a trailing
+        # '\r' in APSI's header and causing the engine to reject an otherwise
+        # valid staged CSV.  Emit the LF-only format used by the pinned PSI
+        # examples and accepted by its strict header parser.
+        writer = csv.writer(stream, lineterminator="\n")
         if sender:
             writer.writerow(["key"] + (["value"] if value_columns else []))
             for row in rows:
