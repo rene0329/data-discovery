@@ -123,9 +123,13 @@ done
 # survive Pod recreation inside their owning domain. Raw staged inputs use an
 # emptyDirs and are deleted by the runner on every terminal/recovery path.
 patch_party_storage() {
-  local provider="$1" outer_namespace="$2" domain="$3"
+  local provider="$1" domain="$2"
   local deployment count image state_path patch
-  deployment="$(kubectl -n "$outer_namespace" exec deploy/kuscia-lite -- \
+  # Lite mode uses the outer cluster ServiceAccount for its RunK runtime, so a
+  # kubectl invocation inside the Lite Pod cannot read the logical domain
+  # namespace.  The master embedded cluster owns these Deployments and is the
+  # only supported administrative path for patching them.
+  deployment="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
     kubectl -n "$domain" get deployment \
     -l "kuscia.secretflow/kd-name=topic4-privacy-${provider}-parties" \
     -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}')"
@@ -135,7 +139,7 @@ patch_party_storage() {
     exit 1
   }
   deployment="$(printf '%s\n' "$deployment" | sed -n '1p')"
-  image="$(kubectl -n "$outer_namespace" exec deploy/kuscia-lite -- \
+  image="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
     kubectl -n "$domain" get deployment "$deployment" \
     -o 'jsonpath={.spec.template.spec.containers[?(@.name=="runner")].image}')"
   [[ "$image" =~ :v-[0-9a-f]{40}$ ]] || {
@@ -147,21 +151,21 @@ patch_party_storage() {
 {"spec":{"strategy":{"type":"Recreate"},"template":{"metadata":{"annotations":{"topic4.openai.com/party-state":"${state_path}"}},"spec":{"initContainers":[{"name":"prepare-party-state","image":"${image}","imagePullPolicy":"IfNotPresent","command":["sh","-c","mkdir -p /state && chown 10001:10001 /state && chmod 0700 /state"],"securityContext":{"runAsUser":0,"runAsGroup":0,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE"]}},"volumeMounts":[{"name":"party-state","mountPath":"/state"}]}],"containers":[{"name":"runner","volumeMounts":[{"name":"party-state","mountPath":"/var/lib/topic4-privacy"},{"name":"staged-inputs","mountPath":"/var/run/topic4-inputs"},{"name":"private-work","mountPath":"/var/run/topic4-work"}]}],"volumes":[{"name":"party-state","hostPath":{"path":"${state_path}","type":"DirectoryOrCreate"}},{"name":"staged-inputs","emptyDir":{}},{"name":"private-work","emptyDir":{}}]}}}}
 EOF
 )"
-  kubectl -n "$outer_namespace" exec deploy/kuscia-lite -- \
+  kubectl -n kuscia-master exec deploy/kuscia-master -- \
     kubectl -n "$domain" patch deployment "$deployment" --type=strategic -p "$patch"
   # Secret-backed environment credentials are captured at process start.  Restart on
   # every deployment so a newly rotated party token is active before the
   # control-plane gateway resumes dispatching requests.
-  kubectl -n "$outer_namespace" exec deploy/kuscia-lite -- \
+  kubectl -n kuscia-master exec deploy/kuscia-master -- \
     kubectl -n "$domain" rollout restart "deployment/${deployment}"
-  kubectl -n "$outer_namespace" exec deploy/kuscia-lite -- \
+  kubectl -n kuscia-master exec deploy/kuscia-master -- \
     kubectl -n "$domain" rollout status "deployment/${deployment}" --timeout="$timeout"
 }
 
 for provider in apsi secretflow sfl; do
-  patch_party_storage "$provider" kuscia-a domain-a
-  patch_party_storage "$provider" kuscia-b domain-b
-  patch_party_storage "$provider" kuscia-c domain-c
+  patch_party_storage "$provider" domain-a
+  patch_party_storage "$provider" domain-b
+  patch_party_storage "$provider" domain-c
 done
 
 # RunK projects Pods, ConfigMaps and Secrets into the outer Kubernetes

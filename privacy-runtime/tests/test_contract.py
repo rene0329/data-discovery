@@ -1146,6 +1146,14 @@ class ArtifactTest(unittest.TestCase):
                 self.assertNotIn("volumes", pod_spec)
                 self.assertNotIn("volumeMounts", pod_spec["containers"][0])
 
+    def test_provider_deploy_patches_logical_domains_through_master(self):
+        script = (ROOT / "k8s/deploy-kuscia-providers.sh").read_text(encoding="utf-8")
+        function = script.split("patch_party_storage() {", 1)[1].split(
+            "ensure_outer_runner_service() {", 1)[0]
+        self.assertIn("kubectl -n kuscia-master exec deploy/kuscia-master --", function)
+        self.assertNotIn("exec deploy/kuscia-lite", function)
+        self.assertIn('patch_party_storage "$provider" domain-a', function)
+
 
 if __name__ == "__main__":
     unittest.main()
