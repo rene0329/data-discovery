@@ -39,6 +39,7 @@ line_in_list() {
 
 outer_master_pods="$(kubectl -n "$outer_namespace" get pods \
   -l app=kuscia-master \
+  --field-selector=status.phase=Running \
   -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
 
 # Fail closed if the selected Ready pod disappeared or the outer query returned

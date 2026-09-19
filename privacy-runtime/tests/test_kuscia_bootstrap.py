@@ -131,10 +131,17 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
     def test_bootstrap_waits_for_lite_master_routes_before_cross_routes(self):
         script = BOOTSTRAP.read_text(encoding="utf-8")
         restarts = script.index('rollout status deploy/kuscia-lite')
+        gateway = script.index('get "gateway/$3"', restarts)
         master_route = script.index('route="domain-${source}-${master_domain}"', restarts)
         cross_routes = script.index('create_cluster_domain_route.sh', master_route)
+        self.assertLess(restarts, gateway)
+        self.assertLess(gateway, master_route)
         self.assertLess(restarts, master_route)
         self.assertLess(master_route, cross_routes)
+
+    def test_gateway_cleanup_only_keeps_running_outer_pods(self):
+        script = CLEANUP.read_text(encoding="utf-8")
+        self.assertIn("--field-selector=status.phase=Running", script)
 
 
 if __name__ == "__main__":

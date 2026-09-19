@@ -232,6 +232,32 @@ for letter in a b c; do
   kubectl -n "kuscia-${letter}" rollout status deploy/kuscia-lite --timeout="$rollout_timeout"
 done
 
+# The outer Deployment can become Ready just before the Lite Gateway
+# controller registers its namespaced Gateway CR. Wait for the exact current
+# Pod and a non-empty heartbeat before route-token reconciliation.
+for letter in a b c; do
+  namespace="kuscia-${letter}"
+  domain="domain-${letter}"
+  lite_pod="$(kubectl -n "$namespace" get pods -l app=kuscia-lite \
+    --field-selector=status.phase=Running \
+    -o 'jsonpath={range .items[?(@.status.containerStatuses[0].ready==true)]}{.metadata.name}{"\n"}{end}' \
+    | tail -n 1)"
+  test -n "$lite_pod"
+  timeout "$rollout_timeout" bash -c '
+    set -euo pipefail
+    while true; do
+      heartbeat="$(kubectl -n kuscia-master exec "$1" -- \
+        kubectl -n "$2" get "gateway/$3" \
+        -o "jsonpath={.status.heartbeatTime}" 2>/dev/null || true)"
+      [[ -n "$heartbeat" ]] && exit 0
+      sleep 2
+    done
+  ' _ "$master_pod" "$domain" "$lite_pod" || {
+    echo "Lite Gateway registration timed out for ${domain}/${lite_pod}" >&2
+    exit 1
+  }
+done
+
 for source in a b c; do
   route="domain-${source}-${master_domain}"
   kubectl -n kuscia-master exec "$master_pod" -- \

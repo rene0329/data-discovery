@@ -1153,6 +1153,9 @@ class ArtifactTest(unittest.TestCase):
         self.assertIn("kubectl -n kuscia-master exec deploy/kuscia-master --", function)
         self.assertNotIn("exec deploy/kuscia-lite", function)
         self.assertIn('patch_party_storage "$provider" domain-a', function)
+        self.assertIn("/state/jobs /state/models /state/smoke", function)
+        self.assertIn("chmod 0700 /state/jobs /state/models /state/smoke", function)
+        self.assertNotIn("chmod 0700 /state\"", function)
 
 
 if __name__ == "__main__":
