@@ -79,7 +79,19 @@ def private_work_directory():
 
 def model_builder():
     from tensorflow import keras
-    model = keras.Sequential([keras.Input(shape=(2,)), keras.layers.Dense(1, activation="sigmoid")])
+    # SFL's CSV loader presents feature columns as a named tensor mapping.  Keep
+    # the Keras input signature aligned with that mapping instead of declaring
+    # one anonymous two-column tensor, which Keras rejects when it receives
+    # {"x1": ..., "x2": ...} from FLModel.
+    inputs = {
+        "x1": keras.Input(shape=(1,), name="x1"),
+        "x2": keras.Input(shape=(1,), name="x2"),
+    }
+    features = keras.layers.Concatenate(name="features")(
+        [inputs["x1"], inputs["x2"]]
+    )
+    prediction = keras.layers.Dense(1, activation="sigmoid", name="prediction")(features)
+    model = keras.Model(inputs=inputs, outputs=prediction)
     model.compile(optimizer=keras.optimizers.SGD(learning_rate=0.05), loss="binary_crossentropy", metrics=["accuracy"])
     return model
 
@@ -248,16 +260,23 @@ def execute(request, work_dir, context, local_party, epochs):
 
 
 def self_test():
-    # Build verification exercises the pinned imports and model constructor only;
-    # it is deliberately not accepted as distributed availability evidence.
+    # Build verification exercises pinned imports and the named Keras input
+    # signature; it is deliberately not accepted as distributed availability
+    # evidence.
     import secretflow as sf
+    import tensorflow as tf
     import tqdm
     from secretflow.security.aggregation import SPUAggregator  # noqa: F401
     from sfl.ml.nn import FLModel  # noqa: F401
     model = model_builder()
+    prediction = model({
+        "x1": tf.constant([[0.0]], dtype=tf.float32),
+        "x2": tf.constant([[1.0]], dtype=tf.float32),
+    }, training=False)
     if (model is None or not getattr(sf, "__version__", "")
             or importlib.metadata.version("tqdm") != "4.67.1"
-            or not getattr(tqdm, "__version__", "")):
+            or not getattr(tqdm, "__version__", "")
+            or tuple(prediction.shape) != (1, 1)):
         raise SystemExit("SFL build check failed")
     print(json.dumps({"status": "build-ok", "distributed": False}, sort_keys=True))
 

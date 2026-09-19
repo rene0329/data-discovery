@@ -989,6 +989,13 @@ class AdapterPolicyTest(unittest.TestCase):
             else:
                 os.environ["TOPIC4_PARTY_ID"] = old_party
 
+    def test_sfl_model_uses_named_inputs_matching_the_csv_loader(self):
+        source = (ROOT / "providers/sfl/hfl_fedavg_logreg.py").read_text(encoding="utf-8")
+        self.assertIn('"x1": keras.Input(shape=(1,), name="x1")', source)
+        self.assertIn('"x2": keras.Input(shape=(1,), name="x2")', source)
+        self.assertIn('keras.Model(inputs=inputs, outputs=prediction)', source)
+        self.assertIn('prediction = model({', source)
+
     def test_kuscia_context_derives_fixed_psi_fed_and_spu_endpoints(self):
         entry = ROOT / "runner/kuscia-runtime-entry.py"
         spec = importlib.util.spec_from_file_location("topic4_kuscia_entry", entry)
