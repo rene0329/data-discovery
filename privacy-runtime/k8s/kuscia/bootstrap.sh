@@ -133,6 +133,31 @@ bash "$here/cleanup-stale-master-gateways.sh" "$master_pod" "$master_domain"
 # its database, AppImages and KusciaDeployments; the fixed domain namespaces
 # are recreated by the controllers after enrollment.
 if [[ "$rotate_domain_credentials" == 1 ]]; then
+  # Credential rotation is a maintenance operation.  Remove Topic4's fixed
+  # provider deployments while every Lite RunK agent is still available so
+  # it can terminate projected outer Pods before the logical namespaces go.
+  for provider in apsi secretflow sfl; do
+    kubectl -n kuscia-master exec "$master_pod" -- \
+      kubectl -n cross-domain delete kusciadeployment \
+      "topic4-privacy-${provider}-parties" --ignore-not-found=true --wait=true
+  done
+  for letter in a b c; do
+    for provider in apsi secretflow sfl; do
+      projected_pods="$(kubectl -n "kuscia-${letter}" get pods \
+        -l "kuscia.secretflow/kd-name=topic4-privacy-${provider}-parties" \
+        -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{end}')"
+      while IFS= read -r projected_pod; do
+        [[ -z "$projected_pod" ]] && continue
+        kubectl -n "kuscia-${letter}" wait --for=delete "pod/${projected_pod}" \
+          --timeout="$rollout_timeout"
+      done <<< "$projected_pods"
+    done
+  done
+  for provider in apsi secretflow sfl; do
+    kubectl -n kuscia-master exec "$master_pod" -- \
+      kubectl -n cross-domain delete appimage "topic4-privacy-${provider}-image" \
+      --ignore-not-found=true --wait=true
+  done
   # Stop every Lite agent before deleting token state.  A running Lite agent
   # immediately recreates its namespaced DomainRoute with the old Pod as the
   # revision initializer, racing the cleanup below.

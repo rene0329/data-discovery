@@ -97,6 +97,9 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
     def test_explicit_rotation_clears_old_domain_trust_before_new_tokens(self):
         script = BOOTSTRAP.read_text(encoding="utf-8")
         rotation = script.index('if [[ "$rotate_domain_credentials" == 1 ]]')
+        delete_workloads = script.index("delete kusciadeployment", rotation)
+        wait_projected_pods = script.index(
+            'wait --for=delete "pod/${projected_pod}"', delete_workloads)
         scale_down = script.index("scale deploy/kuscia-lite --replicas=0", rotation)
         wait_deleted = script.index('wait --for=delete "pod/${active_pod}"', scale_down)
         delete_routes = script.index("kubectl delete clusterdomainroutes", rotation)
@@ -106,6 +109,8 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
         delete_namespaces = script.index(
             "kubectl delete namespaces domain-a domain-b domain-c", delete_domains)
         mint_tokens = script.index("for letter in a b c; do", delete_namespaces)
+        self.assertLess(delete_workloads, wait_projected_pods)
+        self.assertLess(wait_projected_pods, scale_down)
         self.assertLess(scale_down, delete_routes)
         self.assertLess(scale_down, wait_deleted)
         self.assertLess(wait_deleted, delete_routes)
