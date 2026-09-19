@@ -7,6 +7,7 @@ set -euo pipefail
 readonly here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly master_domain="${KUSCIA_MASTER_DOMAIN_ID:-topic4-master}"
 readonly rollout_timeout="${KUSCIA_ROLLOUT_TIMEOUT:-10m}"
+readonly rotate_domain_credentials="${KUSCIA_ROTATE_DOMAIN_CREDENTIALS:-0}"
 : "${KUSCIA_MASTER_DATASTORE_ENDPOINT:?set the dedicated Master MySQL DSN}"
 : "${NODE_A:?set NODE_A to the outer Kubernetes node name for domain A}"
 : "${NODE_B:?set NODE_B to the outer Kubernetes node name for domain B}"
@@ -23,6 +24,10 @@ for node_name in "$NODE_A" "$NODE_B" "$NODE_C"; do
     exit 2
   }
 done
+case "$rotate_domain_credentials" in
+  0|1) ;;
+  *) echo "KUSCIA_ROTATE_DOMAIN_CREDENTIALS must be 0 or 1" >&2; exit 2 ;;
+esac
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/topic4-kuscia-bootstrap.XXXXXX")"
 cleanup() {
@@ -121,6 +126,29 @@ kubectl -n kuscia-master wait --for=condition=Ready "$master_pod" --timeout="$ro
 # including the selected Ready Master, and remove only orphaned Gateway CRs.
 bash "$here/cleanup-stale-master-gateways.sh" "$master_pod" "$master_domain"
 
+# A Domain deploy token can only enroll the key used for that handshake.  A
+# repeated apply does not clear the old Domain status or route credentials, so
+# an explicit credential rotation must remove those logical trust records
+# before new one-use tokens are minted.  The dedicated Topic4 Master retains
+# its database, AppImages and KusciaDeployments; the fixed domain namespaces
+# are recreated by the controllers after enrollment.
+if [[ "$rotate_domain_credentials" == 1 ]]; then
+  route_names=()
+  for source in a b c; do
+    route_names+=("domain-${source}-${master_domain}")
+    for destination in a b c; do
+      [[ "$source" == "$destination" ]] && continue
+      route_names+=("domain-${source}-domain-${destination}")
+    done
+  done
+  kubectl -n kuscia-master exec "$master_pod" -- \
+    kubectl delete clusterdomainroutes "${route_names[@]}" \
+    --ignore-not-found=true --wait=true
+  kubectl -n kuscia-master exec "$master_pod" -- \
+    kubectl delete domains domain-a domain-b domain-c \
+    --ignore-not-found=true --wait=true
+fi
+
 for letter in a b c; do
   namespace="kuscia-${letter}"
   domain="domain-${letter}"
@@ -145,6 +173,13 @@ done
 for letter in a b c; do
   kubectl -n "kuscia-${letter}" rollout restart deploy/kuscia-lite
   kubectl -n "kuscia-${letter}" rollout status deploy/kuscia-lite --timeout="$rollout_timeout"
+done
+
+for source in a b c; do
+  route="domain-${source}-${master_domain}"
+  kubectl -n kuscia-master exec "$master_pod" -- \
+    kubectl wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' \
+    "clusterdomainroute/${route}" --timeout="$rollout_timeout"
 done
 
 for source in a b c; do

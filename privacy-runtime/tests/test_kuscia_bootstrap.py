@@ -94,6 +94,28 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
         self.assertLess(cleanup, lite)
         self.assertIn('"$master_pod" "$master_domain"', script[cleanup:lite])
 
+    def test_explicit_rotation_clears_old_domain_trust_before_new_tokens(self):
+        script = BOOTSTRAP.read_text(encoding="utf-8")
+        rotation = script.index('if [[ "$rotate_domain_credentials" == 1 ]]')
+        delete_routes = script.index("kubectl delete clusterdomainroutes", rotation)
+        delete_domains = script.index("kubectl delete domains domain-a domain-b domain-c",
+                                      delete_routes)
+        mint_tokens = script.index("for letter in a b c; do", delete_domains)
+        self.assertLess(delete_routes, delete_domains)
+        self.assertLess(delete_domains, mint_tokens)
+        self.assertIn('route_names+=("domain-${source}-${master_domain}")',
+                      script[rotation:delete_routes])
+        self.assertIn("--ignore-not-found=true --wait=true",
+                      script[delete_routes:mint_tokens])
+
+    def test_bootstrap_waits_for_lite_master_routes_before_cross_routes(self):
+        script = BOOTSTRAP.read_text(encoding="utf-8")
+        restarts = script.index('rollout status deploy/kuscia-lite')
+        master_route = script.index('route="domain-${source}-${master_domain}"', restarts)
+        cross_routes = script.index('create_cluster_domain_route.sh', master_route)
+        self.assertLess(restarts, master_route)
+        self.assertLess(master_route, cross_routes)
+
 
 if __name__ == "__main__":
     unittest.main()
