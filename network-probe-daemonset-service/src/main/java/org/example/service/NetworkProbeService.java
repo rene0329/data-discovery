@@ -61,8 +61,16 @@ public class NetworkProbeService {
     @Value("${probe.all.nodes:false}")
     private boolean probeAllNodes;
 
+    // 只探测业务拓扑中实际配置的边，格式为 node-a/node-b,node-c/node-d。
+    @Value("${probe.target.edges:}")
+    private String targetEdges;
+
+    // 每个方向固定发送的字节数，避免按持续时间测速产生不可控流量。
+    @Value("${probe.transfer.bytes:5242880}")
+    private long probeTransferBytes;
+
     @Scheduled(initialDelayString = "${probe.initial-delay.ms:30000}",
-            fixedDelayString = "${probe.interval.ms:600000}")
+            fixedDelayString = "${probe.interval.ms:86400000}")
     public void probeAndPushNetworkMetrics() {
         log.info("开始网络探测，本地节点: {}", localNodeName);
 
@@ -81,6 +89,9 @@ public class NetworkProbeService {
             }
             // 每对节点只由名称较小的一端负责，避免两个方向并发覆盖同一条无向边。
             if (localNodeName.compareTo(targetNodeName) > 0) {
+                continue;
+            }
+            if (!isTargetEdge(localNodeName, targetNodeName, targetEdges)) {
                 continue;
             }
 
@@ -112,6 +123,21 @@ public class NetworkProbeService {
         } else {
             log.info("本次探测无有效数据");
         }
+    }
+
+    static boolean isTargetEdge(String firstNode, String secondNode, String configuredEdges) {
+        if (configuredEdges == null || configuredEdges.trim().isEmpty()) return false;
+        for (String configuredEdge : configuredEdges.split(",")) {
+            String[] nodes = configuredEdge.trim().split("/", -1);
+            if (nodes.length != 2) continue;
+            String first = nodes[0].trim();
+            String second = nodes[1].trim();
+            if ((firstNode.equals(first) && secondNode.equals(second))
+                    || (firstNode.equals(second) && secondNode.equals(first))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -235,7 +261,7 @@ public class NetworkProbeService {
     String runIperfCommand(String targetIP, boolean reverse) {
         try {
             List<String> command = new ArrayList<>(Arrays.asList(
-                    "iperf3", "-c", targetIP, "-t", "5", "-J"));
+                    "iperf3", "-c", targetIP, "-n", Long.toString(probeTransferBytes), "-J"));
             if (reverse) command.add("-R");
             Process process = Runtime.getRuntime().exec(command.toArray(new String[0]));
             if (!process.waitFor(20, TimeUnit.SECONDS)) {

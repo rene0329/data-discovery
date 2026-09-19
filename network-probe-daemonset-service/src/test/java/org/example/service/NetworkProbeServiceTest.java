@@ -53,6 +53,15 @@ class NetworkProbeServiceTest {
     }
 
     @Test
+    void onlyConfiguredLogicalEdgesAreProbed() {
+        String edges = "master-88/master-89, alihz/master-88";
+        assertEquals(true, NetworkProbeService.isTargetEdge("master-88", "master-89", edges));
+        assertEquals(true, NetworkProbeService.isTargetEdge("master-88", "alihz", edges));
+        assertEquals(false, NetworkProbeService.isTargetEdge("master-89", "alihz", edges));
+        assertEquals(false, NetworkProbeService.isTargetEdge("master-88", "master-90", ""));
+    }
+
+    @Test
     void readsReceivedAggregateRegardlessOfFieldOrderAndScientificNotation() {
         // sum_sent deliberately follows sum_received; the last bps field is not the receiver rate.
         String output = "{\"end\":{\"sum_received\":{\"bits_per_second\":6.023201145840092e9},"
@@ -128,6 +137,7 @@ class NetworkProbeServiceTest {
         ReflectionTestUtils.setField(probe, "restTemplate", http);
         ReflectionTestUtils.setField(probe, "localNodeName", "master-88");
         ReflectionTestUtils.setField(probe, "probeAllNodes", true);
+        ReflectionTestUtils.setField(probe, "targetEdges", "master-88/master-89");
         ReflectionTestUtils.setField(probe, "centralMetricsUrl", "http://central/metrics");
         doReturn(NetworkProbeService.parseLatency("rtt min/avg/max/mdev = 0.213/0.257/0.301/0.044 ms"))
                 .doReturn(-1.0).when(probe).probeLatency("10.212.14.89");

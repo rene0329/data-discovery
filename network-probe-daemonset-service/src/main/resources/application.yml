@@ -22,7 +22,11 @@ probe:
     interval-ms: ${PUBLIC_IP_INTERVAL_MS:600000}
   all:
     nodes: ${PROBE_ALL_NODES:false}
+  target:
+    edges: ${PROBE_TARGET_EDGES:master-88/master-89,master-88/master-90,master-89/master-90,alihz/master-88,alish/master-88,alibj/master-90}
+  transfer:
+    bytes: ${PROBE_TRANSFER_BYTES:5242880}
   interval:
-    ms: ${PROBE_INTERVAL_MS:600000}
+    ms: ${PROBE_INTERVAL_MS:86400000}
   initial-delay:
     ms: ${PROBE_INITIAL_DELAY_MS:30000}
