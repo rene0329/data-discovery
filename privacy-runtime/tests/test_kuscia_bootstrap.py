@@ -98,13 +98,17 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
         script = BOOTSTRAP.read_text(encoding="utf-8")
         rotation = script.index('if [[ "$rotate_domain_credentials" == 1 ]]')
         delete_routes = script.index("kubectl delete clusterdomainroutes", rotation)
+        delete_domain_routes = script.index("delete domainroutes --all", delete_routes)
         delete_domains = script.index("kubectl delete domains domain-a domain-b domain-c",
-                                      delete_routes)
+                                      delete_domain_routes)
         mint_tokens = script.index("for letter in a b c; do", delete_domains)
-        self.assertLess(delete_routes, delete_domains)
+        self.assertLess(delete_routes, delete_domain_routes)
+        self.assertLess(delete_domain_routes, delete_domains)
         self.assertLess(delete_domains, mint_tokens)
         self.assertIn('route_names+=("domain-${source}-${master_domain}")',
                       script[rotation:delete_routes])
+        self.assertIn('for domain_namespace in "$master_domain" domain-a domain-b domain-c',
+                      script[delete_routes:delete_domains])
         self.assertIn("--ignore-not-found=true --wait=true",
                       script[delete_routes:mint_tokens])
 

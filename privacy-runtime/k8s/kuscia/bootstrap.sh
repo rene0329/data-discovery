@@ -144,6 +144,14 @@ if [[ "$rotate_domain_credentials" == 1 ]]; then
   kubectl -n kuscia-master exec "$master_pod" -- \
     kubectl delete clusterdomainroutes "${route_names[@]}" \
     --ignore-not-found=true --wait=true
+  # ClusterDomainRoute deletion does not remove the per-domain DomainRoute
+  # token records in Kuscia 1.2.  Those records retain the previous Pod as
+  # revisionInitializer and otherwise keep every replacement token unready.
+  for domain_namespace in "$master_domain" domain-a domain-b domain-c; do
+    kubectl -n kuscia-master exec "$master_pod" -- \
+      kubectl -n "$domain_namespace" delete domainroutes --all \
+      --ignore-not-found=true --wait=true
+  done
   kubectl -n kuscia-master exec "$master_pod" -- \
     kubectl delete domains domain-a domain-b domain-c \
     --ignore-not-found=true --wait=true
