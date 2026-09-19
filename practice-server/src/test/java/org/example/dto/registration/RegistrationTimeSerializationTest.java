@@ -2,10 +2,12 @@ package org.example.dto.registration;
 
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
+import org.example.security.access.AccessAuthorizationResult;
 import org.example.service.NodeAvailability;
 import org.example.json.JacksonObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.Collections;
 
@@ -27,5 +29,15 @@ class RegistrationTimeSerializationTest {
 
         assertTrue(nodeJson.contains("2026-08-29T08:15:30Z"));
         assertTrue(replicaJson.contains("2026-08-29T08:15:30Z"));
+    }
+
+    @Test
+    void instantFieldsUseRfc3339UtcShape() throws Exception {
+        AccessAuthorizationResult result = new AccessAuthorizationResult();
+        result.setExpiresAt(Instant.parse("2026-09-19T10:46:53Z"));
+
+        String json = new JacksonObjectMapper().writeValueAsString(result);
+
+        assertTrue(json.contains("\"expiresAt\":\"2026-09-19T10:46:53Z\""));
     }
 }
