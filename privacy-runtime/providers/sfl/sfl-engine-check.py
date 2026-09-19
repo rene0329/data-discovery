@@ -9,7 +9,7 @@ from pathlib import Path
 
 from topic4_sfl_smoke import approve_record, load_and_validate_record, require_approved_record
 
-EXPECTED = {"secretflow-lite": "1.13.0b0", "ray": "2.52.0"}
+EXPECTED = {"secretflow-lite": "1.13.0b0", "ray": "2.52.0", "tqdm": "4.67.1"}
 REVISION = "c383e40f665063d7f7d87e437a73e015f87c435c"
 PARTIES = ["A", "B", "C"]
 

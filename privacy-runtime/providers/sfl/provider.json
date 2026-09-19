@@ -13,7 +13,8 @@
     "secretflow",
     "spu",
     "ray",
-    "tensorflow"
+    "tensorflow",
+    "tqdm"
   ],
   "requiredEnvironment": {
     "TOPIC4_KUSCIA_TRANSPORT": "KUSCIA_CLUSTER_MTLS_ENVOY"

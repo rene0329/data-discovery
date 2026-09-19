@@ -251,10 +251,13 @@ def self_test():
     # Build verification exercises the pinned imports and model constructor only;
     # it is deliberately not accepted as distributed availability evidence.
     import secretflow as sf
+    import tqdm
     from secretflow.security.aggregation import SPUAggregator  # noqa: F401
     from sfl.ml.nn import FLModel  # noqa: F401
     model = model_builder()
-    if model is None or not getattr(sf, "__version__", ""):
+    if (model is None or not getattr(sf, "__version__", "")
+            or importlib.metadata.version("tqdm") != "4.67.1"
+            or not getattr(tqdm, "__version__", "")):
         raise SystemExit("SFL build check failed")
     print(json.dumps({"status": "build-ok", "distributed": False}, sort_keys=True))
 

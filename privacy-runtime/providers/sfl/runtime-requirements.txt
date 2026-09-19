@@ -8,3 +8,4 @@ secretflow-rayfed==0.2.1a2
 ray[tune]==2.52.0
 tensorflow==2.12.0
 dp-accounting==0.4.4
+tqdm==4.67.1

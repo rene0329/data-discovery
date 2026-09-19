@@ -1083,6 +1083,7 @@ class ArtifactTest(unittest.TestCase):
             "ray[tune]==2.52.0",
             "tensorflow==2.12.0",
             "dp-accounting==0.4.4",
+            "tqdm==4.67.1",
         })
         self.assertFalse(any(
             requirement.startswith(("torch", "torchvision", "torchaudio", "xgboost"))
