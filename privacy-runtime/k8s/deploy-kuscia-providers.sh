@@ -238,7 +238,7 @@ for party, namespace in (("A", "kuscia-a"), ("B", "kuscia-b"), ("C", "kuscia-c")
     port = subprocess.check_output([
         "kubectl", "-n", namespace, "get", "service", "topic4-%s-runner" % provider,
         "-o", 'jsonpath={.spec.ports[?(@.name=="runner")].port}',
-    ], text=True).strip()
+    ], universal_newlines=True).strip()
     if not port.isdigit():
         raise SystemExit("runner Service port is unavailable for %s/%s" % (provider, party))
     items[party] = {
