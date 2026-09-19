@@ -11,6 +11,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
@@ -26,6 +27,8 @@ import java.util.Map;
  * A runtime is AVAILABLE only when /health supplies both an exact version and an immutable sha256 digest.
  */
 public class HttpPrivacyComputeProvider implements PrivacyComputeProvider {
+    private static final int START_ATTEMPTS = 3;
+    private static final long START_RETRY_DELAY_MILLIS = 200L;
     private final ProviderType type;
     private final String displayName;
     private final String baseUrl;
@@ -113,7 +116,27 @@ public class HttpPrivacyComputeProvider implements PrivacyComputeProvider {
 
     @Override
     public ProviderSubmission start(ProviderExecutionRequest request) {
-        return exchange("/jobs", HttpMethod.POST, request, ProviderSubmission.class);
+        RestClientException lastFailure = null;
+        for (int attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
+            try {
+                return exchange("/jobs", HttpMethod.POST, request, ProviderSubmission.class);
+            } catch (HttpClientErrorException ex) {
+                // Contract/authentication errors are deterministic and must not be replayed.
+                throw ex;
+            } catch (RestClientException ex) {
+                // POST /jobs is idempotent by jobId/attemptId.  A retry recovers the
+                // common case where the runtime accepted a job but its response was lost.
+                lastFailure = ex;
+                if (attempt == START_ATTEMPTS) break;
+                try {
+                    Thread.sleep(START_RETRY_DELAY_MILLIS);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("privacy runtime start retry was interrupted", interrupted);
+                }
+            }
+        }
+        throw lastFailure;
     }
 
     @Override

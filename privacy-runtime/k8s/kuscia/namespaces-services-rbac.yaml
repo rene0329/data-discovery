@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: List
+items:
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: kuscia-master, labels: {topic4.openai.com/privacy-domain: master}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: kuscia-a, labels: {topic4.openai.com/privacy-domain: a}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: kuscia-b, labels: {topic4.openai.com/privacy-domain: b}}
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: kuscia-c, labels: {topic4.openai.com/privacy-domain: c}}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: kuscia-master, namespace: kuscia-master}
+    spec:
+      type: ClusterIP
+      selector: {app: kuscia-master}
+      ports:
+        - {name: envoy, port: 1080, targetPort: 1080, protocol: TCP}
+        - {name: kusciaapi, port: 8082, targetPort: 8082, protocol: TCP}
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata: {name: kuscia-master, namespace: kuscia-master}
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata: {name: kuscia-var, namespace: kuscia-master}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: monitor-storage
+      resources: {requests: {storage: 20Gi}}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: kuscia-lite, namespace: kuscia-a}
+    spec:
+      type: ClusterIP
+      selector: {app: kuscia-lite}
+      ports:
+        - {name: envoy, port: 1080, targetPort: 1080, protocol: TCP}
+        - {name: envoy-internal, port: 80, targetPort: 80, protocol: TCP}
+        - {name: dns-tcp, port: 53, targetPort: 53, protocol: TCP}
+        - {name: dns-udp, port: 53, targetPort: 53, protocol: UDP}
+        - {name: kusciaapi, port: 8082, targetPort: 8082, protocol: TCP}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: kuscia-lite, namespace: kuscia-b}
+    spec:
+      type: ClusterIP
+      selector: {app: kuscia-lite}
+      ports:
+        - {name: envoy, port: 1080, targetPort: 1080, protocol: TCP}
+        - {name: envoy-internal, port: 80, targetPort: 80, protocol: TCP}
+        - {name: dns-tcp, port: 53, targetPort: 53, protocol: TCP}
+        - {name: dns-udp, port: 53, targetPort: 53, protocol: UDP}
+        - {name: kusciaapi, port: 8082, targetPort: 8082, protocol: TCP}
+  - apiVersion: v1
+    kind: Service
+    metadata: {name: kuscia-lite, namespace: kuscia-c}
+    spec:
+      type: ClusterIP
+      selector: {app: kuscia-lite}
+      ports:
+        - {name: envoy, port: 1080, targetPort: 1080, protocol: TCP}
+        - {name: envoy-internal, port: 80, targetPort: 80, protocol: TCP}
+        - {name: dns-tcp, port: 53, targetPort: 53, protocol: TCP}
+        - {name: dns-udp, port: 53, targetPort: 53, protocol: UDP}
+        - {name: kusciaapi, port: 8082, targetPort: 8082, protocol: TCP}
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata: {name: kuscia-lite, namespace: kuscia-a}
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata: {name: kuscia-lite, namespace: kuscia-b}
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata: {name: kuscia-lite, namespace: kuscia-c}
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata: {name: kuscia-var, namespace: kuscia-a}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: monitor-storage
+      resources: {requests: {storage: 20Gi}}
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata: {name: kuscia-var, namespace: kuscia-b}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: monitor-storage
+      resources: {requests: {storage: 20Gi}}
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata: {name: kuscia-var, namespace: kuscia-c}
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: monitor-storage
+      resources: {requests: {storage: 20Gi}}
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata: {name: kuscia-runk, namespace: kuscia-a}
+    rules:
+      - apiGroups: [""]
+        resources: [pods, pods/log, configmaps, secrets, services]
+        verbs: [get, list, watch, create, update, patch, delete]
+      - apiGroups: [coordination.k8s.io]
+        resources: [leases]
+        verbs: [get, list, watch, create, update, patch, delete]
+      - apiGroups: [batch]
+        resources: [jobs]
+        verbs: [get, list, watch, create, update, patch, delete]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata: {name: kuscia-runk, namespace: kuscia-b}
+    rules:
+      - apiGroups: [""]
+        resources: [pods, pods/log, configmaps, secrets, services]
+        verbs: [get, list, watch, create, update, patch, delete]
+      - apiGroups: [coordination.k8s.io]
+        resources: [leases]
+        verbs: [get, list, watch, create, update, patch, delete]
+      - apiGroups: [batch]
+        resources: [jobs]
+        verbs: [get, list, watch, create, update, patch, delete]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata: {name: kuscia-runk, namespace: kuscia-c}
+    rules:
+      - apiGroups: [""]
+        resources: [pods, pods/log, configmaps, secrets, services]
+        verbs: [get, list, watch, create, update, patch, delete]
+      - apiGroups: [coordination.k8s.io]
+        resources: [leases]
+        verbs: [get, list, watch, create, update, patch, delete]
+      - apiGroups: [batch]
+        resources: [jobs]
+        verbs: [get, list, watch, create, update, patch, delete]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata: {name: kuscia-runk, namespace: kuscia-a}
+    roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: kuscia-runk}
+    subjects: [{kind: ServiceAccount, name: kuscia-lite, namespace: kuscia-a}]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata: {name: kuscia-runk, namespace: kuscia-b}
+    roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: kuscia-runk}
+    subjects: [{kind: ServiceAccount, name: kuscia-lite, namespace: kuscia-b}]
+  - apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata: {name: kuscia-runk, namespace: kuscia-c}
+    roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: kuscia-runk}
+    subjects: [{kind: ServiceAccount, name: kuscia-lite, namespace: kuscia-c}]

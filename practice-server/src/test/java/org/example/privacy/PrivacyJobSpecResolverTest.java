@@ -12,6 +12,7 @@ import org.example.privacy.PrivacyComputeModels.TemplateDefinition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -68,6 +69,17 @@ class PrivacyJobSpecResolverTest {
         JobSpec unknown = request(null);
         unknown.getParticipants().get(1).setFields(Collections.singletonList("missing"));
         assertThrows(RegistrationException.class, () -> resolver.resolve(unknown, template(), "A"));
+    }
+
+    @Test
+    void wireModelRejectsUnknownJobAndParticipantFields() {
+        ObjectMapper mapper = new ObjectMapper();
+        assertThrows(IOException.class, () -> mapper.readValue(
+                "{\"templateId\":\"secure-sum-3p-v1\",\"command\":[\"/bin/sh\"]}",
+                JobSpec.class));
+        assertThrows(IOException.class, () -> mapper.readValue(
+                "{\"partyId\":\"A\",\"role\":\"PARTY\",\"upload\":\"payload\"}",
+                ParticipantSpec.class));
     }
 
     @Test

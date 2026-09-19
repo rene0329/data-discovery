@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kuscia-master, namespace: kuscia-master}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: kuscia-master}}
+  template:
+    metadata: {labels: {app: kuscia-master}}
+    spec:
+      serviceAccountName: kuscia-master
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: NotIn, values: [master-88]}
+      containers:
+        - name: master
+          image: 10.212.14.88:30455/topic4-privacy-kuscia:1.2.0b0-amd64@sha256:73bb8180ca9d7fdb0c984ab9ea4ed4f9c4e3b300b98b168098841028e4373f54
+          imagePullPolicy: IfNotPresent
+          command: [tini, --, kuscia, start, -c, etc/conf/kuscia.yaml]
+          workingDir: /home/kuscia
+          ports: [{name: envoy, containerPort: 1080}, {name: kusciaapi, containerPort: 8082}]
+          readinessProbe: {tcpSocket: {port: 1080}, periodSeconds: 10, failureThreshold: 18}
+          resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "4", memory: 8Gi}}
+          volumeMounts:
+            - {name: config, mountPath: /home/kuscia/etc/conf/kuscia.yaml, subPath: kuscia.yaml, readOnly: true}
+            - {name: var, mountPath: /home/kuscia/var/tmp}
+      volumes:
+        - name: config
+          secret: {secretName: kuscia-config}
+        - name: var
+          persistentVolumeClaim: {claimName: kuscia-var}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kuscia-lite, namespace: kuscia-a}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: kuscia-lite}}
+  template:
+    metadata: {labels: {app: kuscia-lite}}
+    spec:
+      serviceAccountName: kuscia-lite
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: NotIn, values: [master-88]}
+      containers:
+        - name: lite
+          image: 10.212.14.88:30455/topic4-privacy-kuscia:1.2.0b0-amd64@sha256:73bb8180ca9d7fdb0c984ab9ea4ed4f9c4e3b300b98b168098841028e4373f54
+          imagePullPolicy: IfNotPresent
+          command: [tini, --, kuscia, start, -c, etc/conf/kuscia.yaml]
+          workingDir: /home/kuscia
+          readinessProbe: {tcpSocket: {port: 1080}, periodSeconds: 10, failureThreshold: 18}
+          resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "8", memory: 16Gi}}
+          volumeMounts:
+            - {name: config, mountPath: /home/kuscia/etc/conf/kuscia.yaml, subPath: kuscia.yaml, readOnly: true}
+            - {name: var, mountPath: /home/kuscia/var/tmp}
+      volumes:
+        - name: config
+          secret: {secretName: kuscia-config}
+        - name: var
+          persistentVolumeClaim: {claimName: kuscia-var}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kuscia-lite, namespace: kuscia-b}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: kuscia-lite}}
+  template:
+    metadata: {labels: {app: kuscia-lite}}
+    spec:
+      serviceAccountName: kuscia-lite
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: NotIn, values: [master-88]}
+      containers:
+        - name: lite
+          image: 10.212.14.88:30455/topic4-privacy-kuscia:1.2.0b0-amd64@sha256:73bb8180ca9d7fdb0c984ab9ea4ed4f9c4e3b300b98b168098841028e4373f54
+          imagePullPolicy: IfNotPresent
+          command: [tini, --, kuscia, start, -c, etc/conf/kuscia.yaml]
+          workingDir: /home/kuscia
+          readinessProbe: {tcpSocket: {port: 1080}, periodSeconds: 10, failureThreshold: 18}
+          resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "8", memory: 16Gi}}
+          volumeMounts:
+            - {name: config, mountPath: /home/kuscia/etc/conf/kuscia.yaml, subPath: kuscia.yaml, readOnly: true}
+            - {name: var, mountPath: /home/kuscia/var/tmp}
+      volumes:
+        - name: config
+          secret: {secretName: kuscia-config}
+        - name: var
+          persistentVolumeClaim: {claimName: kuscia-var}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kuscia-lite, namespace: kuscia-c}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: kuscia-lite}}
+  template:
+    metadata: {labels: {app: kuscia-lite}}
+    spec:
+      serviceAccountName: kuscia-lite
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: NotIn, values: [master-88]}
+      containers:
+        - name: lite
+          image: 10.212.14.88:30455/topic4-privacy-kuscia:1.2.0b0-amd64@sha256:73bb8180ca9d7fdb0c984ab9ea4ed4f9c4e3b300b98b168098841028e4373f54
+          imagePullPolicy: IfNotPresent
+          command: [tini, --, kuscia, start, -c, etc/conf/kuscia.yaml]
+          workingDir: /home/kuscia
+          readinessProbe: {tcpSocket: {port: 1080}, periodSeconds: 10, failureThreshold: 18}
+          resources: {requests: {cpu: "1", memory: 2Gi}, limits: {cpu: "8", memory: 16Gi}}
+          volumeMounts:
+            - {name: config, mountPath: /home/kuscia/etc/conf/kuscia.yaml, subPath: kuscia.yaml, readOnly: true}
+            - {name: var, mountPath: /home/kuscia/var/tmp}
+      volumes:
+        - name: config
+          secret: {secretName: kuscia-config}
+        - name: var
+          persistentVolumeClaim: {claimName: kuscia-var}

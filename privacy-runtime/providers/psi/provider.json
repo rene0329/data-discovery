@@ -1,0 +1,25 @@
+{
+  "providerId": "KUSCIA_APSI",
+  "engine": "SecretFlow PSI",
+  "engineVersion": "0.6.0.dev260105",
+  "sourceRevision": "72f3312fd9142ea567f3a170d0808a2118b75af8",
+  "adapterExecutable": "/opt/topic4/bin/run-engine.py",
+  "requiredExecutables": ["/opt/psi/main"],
+  "requiredFiles": ["/opt/psi/SOURCE_REVISION", "/opt/psi/parameters/100K-1-16.json", "/var/run/topic4-kuscia/context.json"],
+  "requiredEnvironment": {"TOPIC4_KUSCIA_TRANSPORT": "KUSCIA_CLUSTER_MTLS_ENVOY"},
+  "healthCommand": ["python3", "/opt/topic4/bin/kuscia-runtime-entry.py", "check", "/var/run/topic4-kuscia/context.json"],
+  "templates": [
+    {
+      "templateId": "pir-keyword-2p-v1",
+      "operation": "PIR_KEYWORD",
+      "participantCounts": [2],
+      "requiredRoles": {"A": "CLIENT", "B": "SERVER"},
+      "maxTimeoutSeconds": 1800,
+      "securityProfile": "SEMI_HONEST_PIR",
+      "protocolVersion": "psi-v0.6.0.dev260105/apsi",
+      "protocol": "APSI",
+      "resultPolicies": ["receiver-only"]
+      ,"maxValueColumns": 1
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "providerId": "KUSCIA_SECRETFLOW",
+  "engine": "SecretFlow PSI / HEU / SecureBoost",
+  "engineVersion": "1.11.0b1",
+  "sourceRevision": "b9d6fd5ca9dbdfc95cfda5c282e93022e1caebc4",
+  "adapterExecutable": "/opt/topic4/bin/run-engine.py",
+  "requiredExecutables": [
+    "/opt/psi/main"
+  ],
+  "requiredFiles": [
+    "/opt/psi/SOURCE_REVISION",
+    "/var/run/topic4-kuscia/context.json"
+  ],
+  "requiredPythonImports": [
+    "secretflow",
+    "heu",
+    "spu",
+    "numpy",
+    "pandas"
+  ],
+  "requiredEnvironment": {
+    "TOPIC4_KUSCIA_TRANSPORT": "KUSCIA_CLUSTER_MTLS_ENVOY"
+  },
+  "healthCommand": [
+    "python3",
+    "/opt/topic4/bin/secretflow-engine-check.py"
+  ],
+  "templates": [
+    {
+      "templateId": "psi-2p-v1",
+      "operation": "PSI_2P",
+      "participantCounts": [2],
+      "requiredRoles": {"A": "RECEIVER", "B": "PROVIDER"},
+      "maxTimeoutSeconds": 1800,
+      "securityProfile": "SEMI_HONEST",
+      "protocolVersion": "psi-v0.6.0.dev260105/rr22",
+      "protocol": "RR22",
+      "resultPolicies": ["one-receiver", "all-parties"],
+      "plaintextFallback": false
+    },
+    {
+      "templateId": "psi-3p-v1",
+      "operation": "PSI_3P",
+      "participantCounts": [3],
+      "requiredRoles": {"A": "PARTY", "B": "PARTY", "C": "PARTY"},
+      "maxTimeoutSeconds": 1800,
+      "securityProfile": "SEMI_HONEST",
+      "protocolVersion": "psi-v0.6.0.dev260105/ecdh-3pc",
+      "protocol": "ECDH_3PC",
+      "knownDisclosure": "receiver may learn the pairwise intersection cardinality",
+      "resultPolicies": ["one-receiver", "all-parties"],
+      "plaintextFallback": false
+    },
+    {
+      "templateId": "he-paillier-2p-v1",
+      "operation": "HE_PAILLIER",
+      "participantCounts": [2],
+      "requiredRoles": {"A": "KEY_HOLDER", "B": "DATA_HOLDER"},
+      "maxTimeoutSeconds": 1800,
+      "securityProfile": "SEMI_HONEST_HE",
+      "protocolVersion": "secretflow-1.11.0b1/heu-paillier",
+      "scheme": "Paillier",
+      "keySizeBits": 2048,
+      "operations": ["ADD", "PLAINTEXT_MULTIPLY", "DOT_PRODUCT"],
+      "fullyHomomorphic": false,
+      "plaintextFallback": false
+    },
+    {
+      "templateId": "vfl-secureboost-2p-v1",
+      "operation": "VFL_SECUREBOOST",
+      "participantCounts": [2],
+      "requiredRoles": {"A": "ACTIVE", "B": "PASSIVE"},
+      "maxTimeoutSeconds": 3600,
+      "securityProfile": "SEMI_HONEST_HE",
+      "protocolVersion": "secretflow-1.11.0b1/secureboost-heu",
+      "alignment": "RR22_FAST_PSI_2PC",
+      "model": "SecureBoost binary classification",
+      "modelShardsStayAtOwner": true,
+      "plaintextFallback": false
+    }
+  ]
+}

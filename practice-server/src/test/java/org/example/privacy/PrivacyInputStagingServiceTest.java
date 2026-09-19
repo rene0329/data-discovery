@@ -34,10 +34,14 @@ class PrivacyInputStagingServiceTest {
         DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
         DatasetAccessAuthorizationService access = mock(DatasetAccessAuthorizationService.class);
         String digest = repeat('a', 64);
-        DatasetReplica wrong = replica(1L, 1, repeat('b', 64));
+        // Both replicas match the frozen bytes. Party A must still use only its
+        // deployment-owned Agent node instead of the first replica by node id.
+        DatasetReplica wrong = replica(1L, 1, digest);
         DatasetReplica correct = replica(2L, 2, digest);
         when(datasets.listReplicas(42L)).thenReturn(java.util.Arrays.asList(wrong, correct));
         when(availability.evaluate(any())).thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(nodes.getNodeById(1)).thenReturn(NodeManagement.builder()
+                .nodeId(1).nodeName("master-88").internalIp("10.0.0.1").build());
         when(nodes.getNodeById(2)).thenReturn(NodeManagement.builder()
                 .nodeId(2).nodeName("master-89").internalIp("10.0.0.2").build());
         AccessAuthorizationResult token = new AccessAuthorizationResult();
@@ -47,7 +51,8 @@ class PrivacyInputStagingServiceTest {
         when(access.issueInternalOneTime(any(), any())).thenReturn(token);
 
         PrivacyInputStagingService service = new PrivacyInputStagingService(
-                datasets, nodes, availability, access, 8080);
+                datasets, nodes, availability, access, 8080,
+                "master-89", "master-90", "master-91");
         JobSpec spec = new JobSpec();
         ParticipantSpec participant = new ParticipantSpec();
         participant.setPartyId("A");

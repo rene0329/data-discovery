@@ -1,6 +1,7 @@
 package org.example.privacy;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.LocalDateTime;
@@ -159,6 +160,10 @@ public final class PrivacyComputeModels {
         public void setFrozenSchema(List<Map<String, Object>> frozenSchema) { this.frozenSchema = frozenSchema; }
         public List<String> getFields() { return fields; }
         public void setFields(List<String> fields) { this.fields = fields; }
+        @JsonAnySetter
+        public void rejectUnknownField(String name, Object ignored) {
+            throw new IllegalArgumentException("unsupported participant field: " + name);
+        }
     }
 
     public static class JobSpec {
@@ -181,6 +186,10 @@ public final class PrivacyComputeModels {
         public void setTimeoutSeconds(Integer timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
         public Map<String, Object> getEnginePolicy() { return enginePolicy; }
         public void setEnginePolicy(Map<String, Object> enginePolicy) { this.enginePolicy = enginePolicy; }
+        @JsonAnySetter
+        public void rejectUnknownField(String name, Object ignored) {
+            throw new IllegalArgumentException("unsupported privacy job field: " + name);
+        }
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

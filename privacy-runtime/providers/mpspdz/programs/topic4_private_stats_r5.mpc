@@ -1,0 +1,16 @@
+# Generated fixed malicious three-party fixed-point statistics.
+MAX_VECTOR = 8
+sfix.round_nearest = True
+PARTIES = 3
+values = [sfix.get_input_from(party, size=MAX_VECTOR) for party in range(PARTIES)]
+for lane in range(MAX_VECTOR):
+    lane_values = [values[party][lane] for party in range(PARTIES)]
+    total = sum(lane_values)
+    mean = total / PARTIES
+    minimum = (lane_values[0] < lane_values[1]).if_else(lane_values[0], lane_values[1])
+    minimum = (minimum < lane_values[2]).if_else(minimum, lane_values[2])
+    maximum = (lane_values[0] < lane_values[1]).if_else(lane_values[1], lane_values[0])
+    maximum = (maximum < lane_values[2]).if_else(lane_values[2], maximum)
+    variance = sum((value - mean) * (value - mean) for value in lane_values) / PARTIES
+    print_ln_to(0, 'TOPIC4_STATS[%s] sum=%%s count=3 mean=%%s min=%%s max=%%s variance=%%s' % lane, total.reveal_to(0), mean.reveal_to(0), minimum.reveal_to(0), maximum.reveal_to(0), variance.reveal_to(0))
+    print_ln_to(2, 'TOPIC4_STATS[%s] sum=%%s count=3 mean=%%s min=%%s max=%%s variance=%%s' % lane, total.reveal_to(2), mean.reveal_to(2), minimum.reveal_to(2), maximum.reveal_to(2), variance.reveal_to(2))

@@ -1,0 +1,51 @@
+{
+  "providerId": "KUSCIA_SFL",
+  "engine": "SFL",
+  "engineVersion": "commit:c383e40f665063d7f7d87e437a73e015f87c435c",
+  "sourceRevision": "c383e40f665063d7f7d87e437a73e015f87c435c",
+  "adapterExecutable": "/opt/topic4/bin/hfl_fedavg_logreg.py",
+  "requiredFiles": [
+    "/opt/sfl/SOURCE_REVISION",
+    "/var/run/topic4-kuscia/context.json"
+  ],
+  "requiredPythonImports": [
+    "sfl",
+    "secretflow",
+    "spu",
+    "ray",
+    "tensorflow"
+  ],
+  "requiredEnvironment": {
+    "TOPIC4_KUSCIA_TRANSPORT": "KUSCIA_CLUSTER_MTLS_ENVOY"
+  },
+  "healthCommand": [
+    "python3",
+    "/opt/topic4/bin/sfl-engine-check.py"
+  ],
+  "bootstrapHealthCommand": [
+    "python3",
+    "/opt/topic4/bin/sfl-engine-check.py",
+    "--base-check"
+  ],
+  "templates": [
+    {
+      "templateId": "hfl-fedavg-logreg-3p-v1",
+      "operation": "HFL_FEDAVG_LOGREG",
+      "participantCounts": [
+        3
+      ],
+      "requiredRoles": {
+        "A": "TRAINER",
+        "B": "TRAINER",
+        "C": "TRAINER"
+      },
+      "maxTimeoutSeconds": 3600,
+      "securityProfile": "SEMI_HONEST_FL",
+      "protocolVersion": "sfl-c383e40f/fedavg-logreg",
+      "strategy": "fed_avg_w",
+      "model": "binary-logistic-regression",
+      "dropoutRecovery": false,
+      "experimental": true
+    }
+  ]
+}

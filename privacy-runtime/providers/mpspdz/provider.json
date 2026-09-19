@@ -1,0 +1,60 @@
+{
+  "providerId": "MP_SPDZ",
+  "engine": "MP-SPDZ",
+  "engineVersion": "0.4.3",
+  "sourceRevision": "26a605368e40fed3a7e9cee78c9a3f4390b85eb5",
+  "adapterExecutable": "/opt/topic4/bin/run-engine.py",
+  "requiredExecutables": [
+    "/opt/mp-spdz/malicious-rep-ring-party.x",
+    "/opt/mp-spdz/malicious-rep-bin-party.x"
+  ],
+  "requiredFiles": [
+    "/etc/topic4-mpspdz/hosts.txt"
+  ],
+  "healthCommand": ["python3", "/opt/topic4/bin/mpspdz-health.py"],
+  "templates": [
+    {
+      "templateId": "secure-sum-3p-v1",
+      "operation": "SECURE_SUM",
+      "participantCounts": [3],
+      "requiredRoles": {"A": "PARTY", "B": "PARTY", "C": "PARTY"},
+      "maxTimeoutSeconds": 1800,
+      "securityProfile": "MALICIOUS_3PC_HONEST_MAJORITY",
+      "protocolVersion": "mp-spdz-0.4.3/malicious-rep-ring",
+      "operations": ["integer-vector-sum"],
+      "maxVectorLength": 8,
+      "resultPolicy": "any-nonempty-subset-via-precompiled-recipient-mask",
+      "protocolExecutable": "malicious-rep-ring-party.x",
+      "program": "topic4_secure_sum"
+    },
+    {
+      "templateId": "private-stats-3p-v1",
+      "operation": "PRIVATE_STATS",
+      "participantCounts": [3],
+      "requiredRoles": {"A": "PARTY", "B": "PARTY", "C": "PARTY"},
+      "maxTimeoutSeconds": 1800,
+      "securityProfile": "MALICIOUS_3PC_HONEST_MAJORITY",
+      "protocolVersion": "mp-spdz-0.4.3/malicious-rep-ring",
+      "operations": ["sum", "count", "mean", "min", "max", "population-variance"],
+      "maxVectorLength": 8,
+      "resultPolicy": "any-nonempty-subset-via-precompiled-recipient-mask",
+      "protocolExecutable": "malicious-rep-ring-party.x",
+      "program": "topic4_private_stats"
+    },
+    {
+      "templateId": "private-threshold-3p-v1",
+      "operation": "PRIVATE_THRESHOLD",
+      "participantCounts": [3],
+      "requiredRoles": {"A": "PARTY", "B": "PARTY", "C": "PARTY"},
+      "maxTimeoutSeconds": 1800,
+      "securityProfile": "MALICIOUS_3PC_HONEST_MAJORITY",
+      "protocolVersion": "mp-spdz-0.4.3/malicious-rep-ring",
+      "operations": ["sum-greater-than-or-equal-to-100"],
+      "registeredThreshold": 100,
+      "resultPolicy": "any-nonempty-subset-via-precompiled-recipient-mask",
+      "protocolExecutable": "malicious-rep-ring-party.x",
+      "binaryBackendLimitation": "MP-SPDZ 0.4.3 binary shares cannot reveal to selected players; the registered comparison runs in the malicious replicated ring to enforce resultRecipients",
+      "program": "topic4_private_threshold_100"
+    }
+  ]
+}

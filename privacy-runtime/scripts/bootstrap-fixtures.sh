@@ -317,9 +317,12 @@ register_fixture() {
     --argjson nodeId "$node" --argjson columns "$schema" \
     '{datasetId:(.datasetId|tostring),datasetCode:.datasetCode,version:.version,
       fixtureFamily:$family,sourceParty:$sourceParty,fixturePath:$fixturePath,nodeId:$nodeId,
+      sourcePath:(.replicas | map(select(.nodeId == $nodeId)) | sort_by(.filePath) | .[0].filePath),
       sha256:$localSha,sizeBytes:.authoritativeSizeBytes,schema:$columns,
       schemaDigest:.schemaDigest,catalogSchemaDigest:.schemaDigest,
       frozenSchemaDigest:$frozenSchemaDigest,status:.status}')
+  [ "$(printf '%s' "$entry" | jq -r '.sourcePath // ""')" != "" ] ||
+    die "catalog dataset $dataset_id has no concrete source path on node $node"
   next_mapping="$TEMP_DIR/dataset-mapping.next.json"
   jq --arg family "$family" --arg party "$party" --argjson entry "$entry" \
     '.datasets[$family][$party] = $entry' "$MAPPING_TMP" >"$next_mapping"

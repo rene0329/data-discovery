@@ -1,0 +1,5 @@
+{
+  "A": "topic4-psi.kuscia-a.svc.cluster.local:5300",
+  "B": "topic4-psi.kuscia-b.svc.cluster.local:5300",
+  "C": "topic4-psi.kuscia-c.svc.cluster.local:5300"
+}

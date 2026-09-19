@@ -52,7 +52,10 @@ Other bootstrap variables:
 | `TOPIC4_FIXTURE_MAPPING_OUT` | `./privacy-fixture-datasets.json` | Mapping output, or `-` for stdout only |
 
 The mapping contains catalog ids, versions, SHA-256 digests, schemas, schema
-digests, node ids, and fixture provenance. It contains no credential material.
+digests, node ids, the selected registered replica `sourcePath`, and fixture
+provenance. It contains no credential material. The path is needed to mint the
+strictly scoped, one-use SFL bootstrap tokens; the party runner still accepts it
+only when the Agent independently verifies the signed catalog scope.
 
 ## Collect a nine-template acceptance run
 

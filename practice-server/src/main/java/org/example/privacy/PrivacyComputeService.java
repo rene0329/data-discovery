@@ -40,6 +40,7 @@ import java.util.Collections;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
@@ -499,12 +500,17 @@ public class PrivacyComputeService {
 
             if (state == JobStatus.FINALIZING) {
                 if (current == null || current.getStatus() != ProviderRunStatus.SUCCEEDED) {
-                    current = provider.status(externalId);
+                    current = poll(provider, job, externalId);
+                }
+                if (current.getStatus() != ProviderRunStatus.SUCCEEDED) {
+                    throw new ProviderFailure("ENGINE_FINAL_STATE_CHANGED",
+                            "provider no longer reports a successful terminal state");
                 }
                 ResultRecord result = validatedResult(jobId, attemptId, current);
                 if (mapper.findResult(jobId, attemptId) == null) mapper.insertResult(result);
                 if (mapper.findEvidence(jobId, attemptId) == null) {
-                    EvidenceRecord evidence = durableProviderEvidence(provider, job, attemptId, externalId);
+                    EvidenceRecord evidence = durableProviderEvidenceWithRetry(
+                            provider, job, attemptId, externalId);
                     mapper.insertEvidence(evidence);
                 }
                 if (mapper.transition(jobId, attemptId, JobStatus.FINALIZING.name(), JobStatus.SUCCEEDED.name()) == 1) {
@@ -537,7 +543,17 @@ public class PrivacyComputeService {
                 provider.cancel(externalId, "control-plane state changed to " + status);
                 throw new ProviderFailure("ATTEMPT_CANCELLED", "attempt was cancelled");
             }
-            current = provider.status(externalId);
+            try {
+                current = provider.status(externalId);
+            } catch (ProviderFailure ex) {
+                throw ex;
+            } catch (RuntimeException ex) {
+                // A transient gateway/network read must not turn a live or
+                // already-completed protocol into a permanent control-plane
+                // failure. Keep polling until the frozen job deadline.
+                Thread.sleep(POLL_INTERVAL_MILLIS);
+                continue;
+            }
             if (current == null || current.getStatus() == null) {
                 throw new ProviderFailure("ENGINE_STATUS_INVALID", "provider returned no status");
             }
@@ -549,6 +565,23 @@ public class PrivacyComputeService {
         }
         provider.cancel(externalId, "control-plane timeout");
         throw new ProviderFailure("ENGINE_TIMEOUT", "privacy runtime exceeded timeoutSeconds");
+    }
+
+    private EvidenceRecord durableProviderEvidenceWithRetry(
+            PrivacyComputeProvider provider, JobRecord job, String attemptId, String externalId)
+            throws InterruptedException {
+        RuntimeException last = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                return durableProviderEvidence(provider, job, attemptId, externalId);
+            } catch (RuntimeException ex) {
+                last = ex;
+                if (attempt < 2) Thread.sleep(POLL_INTERVAL_MILLIS);
+            }
+        }
+        throw last == null
+                ? new ProviderFailure("PROVIDER_EVIDENCE_MISSING", "provider evidence is unavailable")
+                : last;
     }
 
     private ResultRecord validatedResult(String jobId, String attemptId, ProviderSubmission value) {
@@ -616,24 +649,32 @@ public class PrivacyComputeService {
                 "localpartyindex", "localpartyrank", "tlsenabled", "tlscertificatedigests",
                 "launchconfigdigest", "knowndisclosure", "transportsecurity", "framework",
                 "frameworkversion", "strategy", "aggregator",
+                "protocolmessages", "source", "observations", "counter", "bytes", "reportedbytes",
+                "summarydigest", "transcriptdigestavailable", "invalidengineevidence",
+                "launchersilent", "serverquerykeylogcheck", "kusciacontextdigest", "kusciadeploymentid",
+                "device", "scheme", "keysizebits", "keykeeper", "ciphertextevaluator", "operation",
+                "fixedpointscale", "freshkeyperattempt", "alignmentprotocol", "intersectioncount",
+                "trainer", "securedevice", "labelholder", "modelshardsstayatowner", "released",
+                "executionmode", "transport", "servingid", "localmodel",
+                "modelreference", "modeldigest", "modelbytes", "modelfiles",
                 "participants", "participantstatuses", "partyid", "role", "events", "messages",
                 "messagetype", "messagecode", "messagedigest", "messagedigests", "payloadbytes",
                 "resultdigest", "resultreference", "evidencereference", "workloadrefs", "taskids",
                 "namespace", "pod", "job", "attemptid"));
-        Object value = sanitizeEvidenceValue(raw, allowed, true);
+        Object value = sanitizeEvidenceValue(raw, allowed);
         if (!(value instanceof Map)) return Collections.emptyMap();
         @SuppressWarnings("unchecked") Map<String, Object> result = (Map<String, Object>) value;
         return result;
     }
 
-    private Object sanitizeEvidenceValue(Object value, Set<String> allowed, boolean root) {
+    private Object sanitizeEvidenceValue(Object value, Set<String> allowed) {
         if (value == null || value instanceof String || value instanceof Number || value instanceof Boolean) {
             return value;
         }
         if (value instanceof List) {
             List<Object> result = new ArrayList<>();
             for (Object item : (List<?>) value) {
-                Object sanitized = sanitizeEvidenceValue(item, allowed, false);
+                Object sanitized = sanitizeEvidenceValue(item, allowed);
                 if (sanitized != null) result.add(sanitized);
             }
             return result;
@@ -642,11 +683,31 @@ public class PrivacyComputeService {
         Map<String, Object> result = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
             String key = String.valueOf(entry.getKey());
-            String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
+            String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
             boolean partyObject = normalized.matches("[abc]") && entry.getValue() instanceof Map;
             if (!allowed.contains(normalized) && !partyObject) continue;
-            Object sanitized = sanitizeEvidenceValue(entry.getValue(), allowed, false);
-            if (sanitized != null) result.put(key, sanitized);
+            Object sanitized = "tlscertificatedigests".equals(normalized)
+                    ? sanitizeCertificateDigests(entry.getValue())
+                    : sanitizeEvidenceValue(entry.getValue(), allowed);
+            // A null reportedBytes means the engine supplied no counter; retain that
+            // distinction from a measured zero and preserve the summary's input shape.
+            if (sanitized != null || entry.getValue() == null) result.put(key, sanitized);
+        }
+        return result;
+    }
+
+    private Object sanitizeCertificateDigests(Object value) {
+        if (!(value instanceof Map)) return null;
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) value).entrySet()) {
+            String name = String.valueOf(entry.getKey());
+            Object digest = entry.getValue();
+            // These are public certificate fingerprints emitted by the fixed MP-SPDZ
+            // adapter, not a general file/path dictionary or certificate payload.
+            if (name.matches("P[0-2]\\.pem") && digest instanceof String
+                    && ((String) digest).matches("(?:sha256:)?[0-9a-fA-F]{64}")) {
+                result.put(name, digest);
+            }
         }
         return result;
     }

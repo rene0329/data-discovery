@@ -123,7 +123,15 @@ jwt:
 privacy-computing:
   http:
     connect-timeout-ms: 1500
-    read-timeout-ms: 5000
+    read-timeout-ms: ${PRIVACY_PROVIDER_READ_TIMEOUT_MS:30000}
+  # Each logical party may stage data only from its deployment-owned Agent node.
+  parties:
+    a:
+      node-name: ${PRIVACY_PARTY_A_NODE_NAME:}
+    b:
+      node-name: ${PRIVACY_PARTY_B_NODE_NAME:}
+    c:
+      node-name: ${PRIVACY_PARTY_C_NODE_NAME:}
   auth:
     parties:
       a:

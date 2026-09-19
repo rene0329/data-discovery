@@ -17,7 +17,10 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 
 /** Selects a strongly verified replica and mints an ephemeral scoped READ token at dispatch time. */
 @Service
@@ -27,17 +30,25 @@ public class PrivacyInputStagingService {
     private final DatasetReplicaAvailabilityService availability;
     private final DatasetAccessAuthorizationService access;
     private final int agentPort;
+    private final Map<String, String> partyNodeNames;
 
     public PrivacyInputStagingService(DatasetRegistrationMapper datasets,
                                       NodeManagementMapper nodes,
                                       DatasetReplicaAvailabilityService availability,
                                       DatasetAccessAuthorizationService access,
-                                      @Value("${dispatch.data-discovery.port:8080}") int agentPort) {
+                                      @Value("${dispatch.data-discovery.port:8080}") int agentPort,
+                                      @Value("${privacy-computing.parties.a.node-name:}") String partyANodeName,
+                                      @Value("${privacy-computing.parties.b.node-name:}") String partyBNodeName,
+                                      @Value("${privacy-computing.parties.c.node-name:}") String partyCNodeName) {
         this.datasets = datasets;
         this.nodes = nodes;
         this.availability = availability;
         this.access = access;
         this.agentPort = agentPort;
+        this.partyNodeNames = new LinkedHashMap<>();
+        this.partyNodeNames.put("A", normalizeNodeName(partyANodeName));
+        this.partyNodeNames.put("B", normalizeNodeName(partyBNodeName));
+        this.partyNodeNames.put("C", normalizeNodeName(partyCNodeName));
     }
 
     public List<StagingInput> prepare(String jobId, String attemptId, JobSpec spec) {
@@ -80,18 +91,36 @@ public class PrivacyInputStagingService {
     }
 
     private DatasetReplica select(long datasetId, ParticipantSpec participant) {
+        String party = participant.getPartyId() == null
+                ? "" : participant.getPartyId().trim().toUpperCase(Locale.ROOT);
+        String requiredNodeName = partyNodeNames.get(party);
+        if (blank(requiredNodeName)) {
+            throw new IllegalStateException("fixed privacy input node is not configured for party "
+                    + participant.getPartyId());
+        }
         List<DatasetReplica> replicas = datasets.listReplicas(datasetId);
         if (replicas == null) replicas = new ArrayList<>();
         return replicas.stream()
                 .filter(item -> availability.evaluate(item).isUsable())
                 .filter(item -> participant.getDatasetSha256().equals(normalize(item.getChecksum())))
                 .filter(item -> participant.getAuthoritativeSizeBytes().equals(item.getSizeBytes()))
+                .filter(item -> replicaBelongsTo(item, requiredNodeName))
                 .sorted(Comparator.comparing(DatasetReplica::getNodeId)
                         .thenComparing(DatasetReplica::getFilePath))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException(
                         "no strongly verified replica matches the frozen dataset version for party "
                                 + participant.getPartyId()));
+    }
+
+    private boolean replicaBelongsTo(DatasetReplica replica, String requiredNodeName) {
+        if (replica == null || replica.getNodeId() == null) return false;
+        NodeManagement node = nodes.getNodeById(replica.getNodeId());
+        return node != null && requiredNodeName.equals(normalizeNodeName(node.getNodeName()));
+    }
+
+    private String normalizeNodeName(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 
     private String normalize(String value) {

@@ -56,7 +56,7 @@ public class PrivacyProviderConfiguration {
         String baseUrl = env.getProperty(prefix + ".base-url", "");
         String token = env.getProperty(prefix + ".bearer-token", "");
         int connect = env.getProperty("privacy-computing.http.connect-timeout-ms", Integer.class, 1500);
-        int read = env.getProperty("privacy-computing.http.read-timeout-ms", Integer.class, 5000);
+        int read = env.getProperty("privacy-computing.http.read-timeout-ms", Integer.class, 30000);
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Math.max(250, connect));
         factory.setReadTimeout(Math.max(500, read));

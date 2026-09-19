@@ -3,18 +3,25 @@ package org.example.privacy;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.privacy.PrivacyComputeModels.CapabilityStatus;
 import org.example.privacy.PrivacyComputeModels.ProviderCapability;
+import org.example.privacy.PrivacyComputeModels.ProviderSubmission;
 import org.example.privacy.PrivacyComputeModels.ProviderType;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Arrays;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
 class HttpPrivacyComputeProviderTest {
@@ -47,6 +54,34 @@ class HttpPrivacyComputeProviderTest {
 
         assertEquals(CapabilityStatus.AVAILABLE, capability.getStatus());
         assertEquals(4, capability.getOperations().size());
+        server.verify();
+    }
+
+    @Test
+    void retriesIdempotentStartAfterServerFailureAndRecoversExistingJob() {
+        RestTemplate client = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(client).build();
+        server.expect(requestTo("http://runtime/jobs")).andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+        server.expect(requestTo("http://runtime/jobs")).andExpect(method(HttpMethod.POST))
+                .andRespond(withSuccess("{\"externalJobId\":\"stable-job\",\"status\":\"QUEUED\"}",
+                        MediaType.APPLICATION_JSON));
+
+        ProviderSubmission result = provider(client).start(new ProviderExecutionRequest());
+
+        assertEquals("stable-job", result.getExternalJobId());
+        server.verify();
+    }
+
+    @Test
+    void doesNotRetryDeterministicClientRejection() {
+        RestTemplate client = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(client).build();
+        server.expect(requestTo("http://runtime/jobs")).andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST));
+
+        assertThrows(HttpClientErrorException.class,
+                () -> provider(client).start(new ProviderExecutionRequest()));
         server.verify();
     }
 

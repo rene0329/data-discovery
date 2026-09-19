@@ -1,0 +1,3 @@
+topic4-mpspdz.kuscia-a.svc.cluster.local:5000
+topic4-mpspdz.kuscia-b.svc.cluster.local:5000
+topic4-mpspdz.kuscia-c.svc.cluster.local:5000

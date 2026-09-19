@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://topic4.local/schemas/privacy-gateway-job-v1.json",
+  "title": "Topic4 privacy provider gateway job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "jobId", "attemptId", "templateId", "protocolVersion", "imageDigest",
+    "specDigest", "securityProfile", "participants", "resultRecipients",
+    "timeoutSeconds", "enginePolicy", "staging"
+  ],
+  "properties": {
+    "jobId": {"$ref": "#/$defs/id"},
+    "attemptId": {"$ref": "#/$defs/id"},
+    "templateId": {
+      "enum": [
+        "secure-sum-3p-v1", "private-stats-3p-v1", "private-threshold-3p-v1",
+        "psi-2p-v1", "psi-3p-v1", "pir-keyword-2p-v1",
+        "he-paillier-2p-v1", "hfl-fedavg-logreg-3p-v1",
+        "vfl-secureboost-2p-v1"
+      ]
+    },
+    "protocolVersion": {"type": "string", "minLength": 1},
+    "imageDigest": {"$ref": "#/$defs/digest"},
+    "specDigest": {"$ref": "#/$defs/digest"},
+    "securityProfile": {"type": "string", "minLength": 1},
+    "participants": {
+      "type": "array", "minItems": 2, "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["partyId", "role", "fields"],
+        "properties": {
+          "partyId": {"$ref": "#/$defs/id"},
+          "role": {"type": "string", "minLength": 1},
+          "datasetId": {"type": "string", "minLength": 1},
+          "datasetVersion": {"type": "string", "minLength": 1},
+          "datasetSha256": {"$ref": "#/$defs/digest"},
+          "authoritativeSizeBytes": {"type": "integer", "minimum": 0},
+          "schemaDigest": {"$ref": "#/$defs/digest"},
+          "frozenSchema": {"type": "array"},
+          "fields": {
+            "type": "array", "minItems": 1, "maxItems": 64,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "resultRecipients": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/id"}
+    },
+    "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "enginePolicy": {"type": "object"},
+    "staging": {
+      "type": "array", "minItems": 2, "maxItems": 3,
+      "items": {"$ref": "#/$defs/stage"}
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-fA-F]{64}$"
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "partyId", "nodeName", "agentBaseUrl", "token", "datasetId",
+        "datasetVersion", "sourcePath", "expectedSize", "expectedSha256",
+        "expectedSchema", "expectedSchemaDigest"
+      ],
+      "properties": {
+        "partyId": {"$ref": "#/$defs/id"},
+        "nodeName": {"type": "string", "minLength": 1},
+        "nodeId": {"type": ["integer", "string"]},
+        "agentBaseUrl": {"type": "string", "pattern": "^https?://"},
+        "tokenType": {"type": "string", "minLength": 1},
+        "token": {"type": "string", "minLength": 1},
+        "expiresAt": {"type": ["string", "null"]},
+        "datasetId": {"type": "string", "minLength": 1},
+        "datasetVersion": {"type": "string", "minLength": 1},
+        "sourcePath": {"type": "string", "pattern": "^/"},
+        "expectedSize": {"type": "integer", "minimum": 0},
+        "expectedSha256": {"$ref": "#/$defs/digest"},
+        "expectedSchema": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "required": ["name"],
+            "properties": {"name": {"type": "string", "minLength": 1}}
+          }
+        },
+        "expectedSchemaDigest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}
