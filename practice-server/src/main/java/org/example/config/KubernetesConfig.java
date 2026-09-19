@@ -21,7 +21,7 @@ public class KubernetesConfig {
     @Bean
     public RestTemplate restTemplate(
             @Value("${app.storage-transfer.connect-timeout-ms:5000}") int connectTimeoutMs,
-            @Value("${app.storage-transfer.read-timeout-ms:600000}") int readTimeoutMs) {
+            @Value("${app.storage-transfer.read-timeout-ms:2700000}") int readTimeoutMs) {
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Math.max(1000, connectTimeoutMs));
         requestFactory.setReadTimeout(Math.max(1000, readTimeoutMs));

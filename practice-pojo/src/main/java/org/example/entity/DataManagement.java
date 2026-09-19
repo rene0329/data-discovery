@@ -84,6 +84,11 @@ public class DataManagement {
     private String fileType;            // 文件类型推断 (对应 `file_type` 列)
     private String md5Hash;             // 文件内容的MD5哈希 (对应 `md5_hash` 列，可选)
 
+    // Runtime-only expected digest used by registered task execution evidence.
+    private String contentChecksumAlgorithm;
+    private String contentChecksum;
+    private String datasetVersion;
+
     private Integer dataNodeId;         // <--- 新增，外键，关联到 `node_management.node_id` (对应 `data_node_id` 列)
 
     // 显式 getter/setter，避免 Lombok 处理异常时出现方法缺失

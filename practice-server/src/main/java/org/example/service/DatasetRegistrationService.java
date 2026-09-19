@@ -21,6 +21,7 @@ import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
+import org.example.model.FileIntegrityResult;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
@@ -34,8 +35,10 @@ import org.springframework.web.multipart.MultipartFile;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -152,8 +155,8 @@ public class DatasetRegistrationService {
         if (candidate.getRegisteredDatasetId() != null) {
             throw RegistrationException.conflict("dataset candidate is already registered");
         }
-        if (!"AVAILABLE".equals(candidate.getAvailability())) {
-            throw RegistrationException.invalid("dataset candidate is not available");
+        if ("MISSING".equals(candidate.getAvailability())) {
+            throw RegistrationException.invalid("dataset candidate is missing");
         }
         if (mapper.findReplicaByNodePath(candidate.getNodeId(), candidate.getFilePath()) != null) {
             throw RegistrationException.conflict("dataset file is already registered");
@@ -163,6 +166,9 @@ public class DatasetRegistrationService {
         if (mapper.findDatasetByCodeAndVersion(request.getDatasetCode(), request.getVersion()) != null) {
             throw RegistrationException.conflict("dataset code and version already exist");
         }
+
+        FileIntegrityResult authority = verifyCandidate(node, candidate,
+                metadataDigest(metadataJson), null, request.getVersion(), requestId);
 
         ResourceRequirements resources = request.getRequiredResources();
         RegisteredDataset dataset = RegisteredDataset.builder()
@@ -181,16 +187,19 @@ public class DatasetRegistrationService {
                 .rowVersion(0)
                 .build();
         mapper.insertDataset(dataset);
-        persistDatasetMetadata(dataset.getDatasetId(), metadataJson, request);
+        persistDatasetMetadata(dataset.getDatasetId(), metadataJson, request, authority);
 
         DatasetReplica replica = DatasetReplica.builder()
                 .datasetId(dataset.getDatasetId())
                 .nodeId(candidate.getNodeId())
                 .filePath(candidate.getFilePath())
-                .sizeBytes(candidate.getSizeBytes())
-                .checksum(candidate.getChecksum())
+                .sizeBytes(authority.getSizeBytes())
+                .checksumAlgorithm("SHA-256")
+                .checksum(authority.getDigest())
                 .availability("AVAILABLE")
+                .verificationMessage("verified against dataset-version authority")
                 .lastSeenAt(candidate.getLastSeenAt())
+                .verifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         mapper.insertReplica(replica);
         mapper.markCandidateRegistered(candidate.getCandidateId(), dataset.getDatasetId());
@@ -199,7 +208,7 @@ public class DatasetRegistrationService {
     }
 
     /**
-     * Streams a new NPZ dataset to an available storage node, synchronously
+     * Streams a new dataset file to an available storage node, synchronously
      * refreshes that node's discovery candidates, then reuses normal candidate
      * registration to create the dataset and its first replica.
      */
@@ -222,7 +231,7 @@ public class DatasetRegistrationService {
             throw RegistrationException.conflict("dataset code and version already exist");
         }
 
-        String relativePath = uploadRelativePath(request);
+        String relativePath = uploadRelativePath(request, file);
         Path root = Paths.get(dataDirectory).toAbsolutePath().normalize();
         Path target = root.resolve(relativePath).normalize();
         if (!target.startsWith(root)) {
@@ -235,12 +244,12 @@ public class DatasetRegistrationService {
 
         boolean uploaded = false;
         try {
-            uploadClient.upload(node, file, relativePath);
+            uploadClient.upload(node, file, relativePath, null, request.getVersion(), requestId, null);
             uploaded = true;
             uploadClient.scan(node);
             DatasetDiscoveryCandidate candidate = mapper.findCandidateByNodePath(
                     node.getNodeId(), absolutePath);
-            if (candidate == null || !"AVAILABLE".equals(candidate.getAvailability())) {
+            if (candidate == null || "MISSING".equals(candidate.getAvailability())) {
                 throw RegistrationException.invalid("DATASET_UPLOAD_NOT_DISCOVERED",
                         "uploaded file was not discovered on the target node");
             }
@@ -264,7 +273,8 @@ public class DatasetRegistrationService {
             return transactionTemplate.execute(status -> register(register, requestId));
         } catch (RuntimeException ex) {
             if (uploaded) {
-                uploadClient.deleteQuietly(node, absolutePath);
+                uploadClient.deleteQuietly(node, absolutePath, null,
+                        request.getVersion(), requestId, null);
                 try {
                     uploadClient.scan(node);
                 } catch (RuntimeException cleanupError) {
@@ -302,20 +312,68 @@ public class DatasetRegistrationService {
 
     @Transactional(noRollbackFor = RegistrationException.class)
     public RegisteredDatasetView verify(Long datasetId, String requestId) {
-        requireDataset(datasetId);
+        RegisteredDataset dataset = requireDataset(datasetId);
         mapper.updateDatasetStatus(datasetId, "VERIFYING", null, false);
+        DatasetMetadata metadata = mapper.findDatasetMetadata(datasetId);
+        String authoritativeDigest = metadata == null ? null : normalizeSha256(metadata.getDigestValue());
+        Long authoritativeSize = metadata == null ? null : metadata.getAuthoritativeSizeBytes();
+        boolean invalidAuthority = metadata != null && !blank(metadata.getDigestValue())
+                && (!"SHA-256".equalsIgnoreCase(metadata.getDigestAlgorithm())
+                    || authoritativeDigest == null);
         List<DatasetReplica> replicas = mapper.listReplicas(datasetId);
         boolean available = false;
         for (DatasetReplica replica : replicas) {
-            DatasetDiscoveryCandidate candidate = mapper.findCandidateByNodePath(
-                    replica.getNodeId(), replica.getFilePath());
-            boolean valid = candidate != null && "AVAILABLE".equals(candidate.getAvailability())
-                    && (replica.getSizeBytes() == null || replica.getSizeBytes().equals(candidate.getSizeBytes()))
-                    && (replica.getChecksum() == null || candidate.getChecksum() == null
-                        || replica.getChecksum().equals(candidate.getChecksum()));
-            mapper.updateReplicaAvailability(replica.getReplicaId(),
+            FileIntegrityResult measurement = null;
+            boolean valid = false;
+            String message;
+            try {
+                if (invalidAuthority) {
+                    throw new IllegalStateException("dataset-version authority is not SHA-256");
+                }
+                NodeManagement node = nodeMapper.getNodeById(replica.getNodeId());
+                if (node == null) throw new IllegalStateException("replica node is not registered");
+                Long expectedSize = authoritativeSize == null ? replica.getSizeBytes() : authoritativeSize;
+                measurement = uploadClient.verify(node, replica.getFilePath(),
+                        expectedSize, authoritativeDigest, datasetId,
+                        dataset.getDatasetVersion(), requestId, null);
+                if (authoritativeDigest == null) {
+                    if (!validMeasurement(measurement, expectedSize)) {
+                        throw new IllegalStateException("replica returned no usable SHA-256 measurement");
+                    }
+                    authoritativeDigest = normalizeSha256(measurement.getDigest());
+                    authoritativeSize = measurement.getSizeBytes();
+                    if (metadata == null) {
+                        metadata = DatasetMetadata.builder().datasetId(datasetId)
+                                .metadataVersion("1.0")
+                                .authoritativeSizeBytes(authoritativeSize)
+                                .digestAlgorithm("SHA-256").digestValue(authoritativeDigest).build();
+                        mapper.upsertDatasetMetadata(metadata);
+                    } else {
+                        mapper.setDatasetAuthority(datasetId, authoritativeSize,
+                                "SHA-256", authoritativeDigest);
+                    }
+                    valid = true;
+                } else {
+                    valid = measurement.isVerified()
+                            && validMeasurement(measurement, authoritativeSize)
+                            && authoritativeDigest.equals(normalizeSha256(measurement.getDigest()));
+                }
+                message = valid ? "verified against dataset-version authority"
+                        : firstText(measurement.getMessage(), "integrity verification failed");
+            } catch (RuntimeException error) {
+                message = error.getMessage() == null ? "integrity verification failed" : error.getMessage();
+            }
+            mapper.updateReplicaIntegrity(replica.getReplicaId(),
+                    measurement == null ? replica.getSizeBytes() : measurement.getSizeBytes(),
+                    measurement == null ? null : measurement.getAlgorithm(),
+                    measurement == null ? null : measurement.getDigest(),
+                    valid ? "AVAILABLE" : "VERIFY_FAILED", message, valid);
+            mapper.updateCandidateIntegrity(replica.getNodeId(), replica.getFilePath(),
+                    measurement == null ? replica.getSizeBytes() : measurement.getSizeBytes(),
+                    measurement == null ? null : measurement.getAlgorithm(),
+                    measurement == null ? null : measurement.getDigest(),
                     valid ? "AVAILABLE" : "VERIFY_FAILED", valid);
-            available = available || valid;
+            available |= valid;
         }
         if (!available) {
             mapper.updateDatasetStatus(datasetId, "VERIFY_FAILED", "no valid replica", false);
@@ -349,29 +407,49 @@ public class DatasetRegistrationService {
 
     @Transactional
     public DatasetReplica addReplica(Long datasetId, Long candidateId, String requestId) {
-        requireDataset(datasetId);
+        RegisteredDataset dataset = requireDataset(datasetId);
         DatasetDiscoveryCandidate candidate = mapper.findCandidateById(candidateId);
         if (candidate == null) throw RegistrationException.notFound("dataset candidate not found");
         if (candidate.getRegisteredDatasetId() != null
                 && !datasetId.equals(candidate.getRegisteredDatasetId())) {
             throw RegistrationException.conflict("dataset candidate is already registered");
         }
-        if (!"AVAILABLE".equals(candidate.getAvailability())) {
-            throw RegistrationException.invalid("dataset candidate is not available");
+        if ("MISSING".equals(candidate.getAvailability())) {
+            throw RegistrationException.invalid("dataset candidate is missing");
         }
         DatasetReplica existing = mapper.findReplicaByNodePath(candidate.getNodeId(), candidate.getFilePath());
         if (existing != null) {
             if (datasetId.equals(existing.getDatasetId())) return existing;
             throw RegistrationException.conflict("dataset file is already registered");
         }
+        DatasetMetadata metadata = mapper.findDatasetMetadata(datasetId);
+        String authority = requireAuthority(metadata);
+        NodeManagement node = nodeMapper.getNodeById(candidate.getNodeId());
+        if (node == null) throw RegistrationException.invalid("candidate node is not registered");
+        FileIntegrityResult measurement = uploadClient.verify(node, candidate.getFilePath(),
+                metadata.getAuthoritativeSizeBytes(), authority, datasetId,
+                dataset.getDatasetVersion(), requestId, null);
+        if (!measurement.isVerified()
+                || !validMeasurement(measurement, metadata.getAuthoritativeSizeBytes())) {
+            mapper.updateCandidateIntegrity(candidate.getNodeId(), candidate.getFilePath(),
+                    measurement.getSizeBytes(), measurement.getAlgorithm(), measurement.getDigest(),
+                    "VERIFY_FAILED", false);
+            throw RegistrationException.invalid("candidate does not match dataset-version authority");
+        }
+        mapper.updateCandidateIntegrity(candidate.getNodeId(), candidate.getFilePath(),
+                measurement.getSizeBytes(), measurement.getAlgorithm(), measurement.getDigest(),
+                "AVAILABLE", true);
         DatasetReplica replica = DatasetReplica.builder()
                 .datasetId(datasetId)
                 .nodeId(candidate.getNodeId())
                 .filePath(candidate.getFilePath())
-                .sizeBytes(candidate.getSizeBytes())
-                .checksum(candidate.getChecksum())
+                .sizeBytes(measurement.getSizeBytes())
+                .checksumAlgorithm("SHA-256")
+                .checksum(measurement.getDigest())
                 .availability("AVAILABLE")
+                .verificationMessage("verified against dataset-version authority")
                 .lastSeenAt(candidate.getLastSeenAt())
+                .verifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         mapper.insertReplica(replica);
         mapper.markCandidateRegistered(candidateId, datasetId);
@@ -497,25 +575,21 @@ public class DatasetRegistrationService {
             throw RegistrationException.invalid("nodeId is required");
         }
         applyMetadata(request);
-        if (request.getDataType() == null || request.getDataType().trim().isEmpty()) {
-            request.setDataType("NPZ");
-        }
-        validateDatasetMetadata(request.getDatasetCode(), request.getName(),
-                request.getVersion(), request.getDataType());
         if (file == null || file.isEmpty()) {
             throw RegistrationException.invalid("dataset file is required and must not be empty");
         }
         String originalName = file.getOriginalFilename();
-        if (originalName == null || !originalName.toLowerCase().endsWith(".npz")) {
-            throw RegistrationException.invalid("only .npz dataset files are supported");
+        if (originalName == null || originalName.trim().isEmpty()) {
+            throw RegistrationException.invalid("dataset filename is required");
         }
-        if (!"NPZ".equalsIgnoreCase(request.getDataType())) {
-            throw RegistrationException.invalid("dataType must be NPZ for uploaded files");
+        if (request.getDataType() == null || request.getDataType().trim().isEmpty()) {
+            request.setDataType(inferFileType(originalName));
         }
-        request.setDataType("NPZ");
         if (request.getFormat() == null || request.getFormat().trim().isEmpty()) {
-            request.setFormat("NPZ");
+            request.setFormat(request.getDataType());
         }
+        validateDatasetMetadata(request.getDatasetCode(), request.getName(),
+                request.getVersion(), request.getDataType());
     }
 
     private void validateDatasetMetadata(String datasetCode, String name,
@@ -542,9 +616,24 @@ public class DatasetRegistrationService {
         }
     }
 
-    private String uploadRelativePath(UploadDatasetRequest request) {
+    private String uploadRelativePath(UploadDatasetRequest request, MultipartFile file) {
+        String extension = safeExtension(file.getOriginalFilename());
         return "uploads/" + request.getDatasetCode() + "/" + request.getVersion()
-                + "/" + request.getDatasetCode() + "-" + request.getVersion() + ".npz";
+                + "/" + request.getDatasetCode() + "-" + request.getVersion() + extension;
+    }
+
+    private String safeExtension(String originalName) {
+        String name = Paths.get(originalName).getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        if (dot < 1 || dot == name.length() - 1) return ".bin";
+        String extension = name.substring(dot + 1).toLowerCase(Locale.ROOT);
+        return extension.matches("[a-z0-9]{1,16}") ? "." + extension : ".bin";
+    }
+
+    private String inferFileType(String originalName) {
+        String extension = safeExtension(originalName);
+        return ".bin".equals(extension) ? "BINARY"
+                : extension.substring(1).toUpperCase(Locale.ROOT);
     }
 
     private boolean isStorageRole(String role) {
@@ -563,7 +652,7 @@ public class DatasetRegistrationService {
             if (blank(request.getDescription())) request.setDescription(text(dataset, "description"));
             if (blank(request.getCategory())) request.setCategory(text(dataset, "category"));
             if (blank(request.getFormat())) request.setFormat(text(dataset, "format"));
-            if (blank(request.getDataType())) request.setDataType(firstText(request.getFormat(), "NPZ"));
+            if (blank(request.getDataType())) request.setDataType(firstText(request.getFormat()));
             if (request.getLabels() == null && root.path("labels").isObject()) {
                 request.setLabels(objectMapper.convertValue(root.path("labels"), STRING_MAP));
             }
@@ -601,16 +690,17 @@ public class DatasetRegistrationService {
     }
 
     private void persistDatasetMetadata(Long datasetId, String metadataJson,
-                                        RegisterDatasetRequest request) {
+                                        RegisterDatasetRequest request,
+                                        FileIntegrityResult authority) {
         try {
             JsonNode root = blank(metadataJson) ? objectMapper.createObjectNode()
                     : objectMapper.readTree(metadataJson);
-            JsonNode digest = root.path("digest");
             DatasetMetadata metadata = DatasetMetadata.builder()
                     .datasetId(datasetId)
                     .metadataVersion(firstText(text(root, "metadataVersion"), "1.0"))
-                    .digestAlgorithm(text(digest, "algorithm"))
-                    .digestValue(text(digest, "value"))
+                    .authoritativeSizeBytes(authority.getSizeBytes())
+                    .digestAlgorithm("SHA-256")
+                    .digestValue(normalizeSha256(authority.getDigest()))
                     .schemaJson(json(root.get("schema")))
                     .profileJson(json(root.get("profile")))
                     .sourceJson(json(root.get("source")))
@@ -621,6 +711,74 @@ public class DatasetRegistrationService {
         } catch (JsonProcessingException ex) {
             throw RegistrationException.invalid("invalid dataset metadata JSON");
         }
+    }
+
+    private FileIntegrityResult verifyCandidate(NodeManagement node,
+                                                DatasetDiscoveryCandidate candidate,
+                                                String expectedDigest,
+                                                Long datasetId,
+                                                String datasetVersion,
+                                                String requestId) {
+        FileIntegrityResult measurement = uploadClient.verify(node, candidate.getFilePath(),
+                candidate.getSizeBytes(), expectedDigest, datasetId,
+                datasetVersion, requestId, null);
+        boolean valid = validMeasurement(measurement, candidate.getSizeBytes())
+                && (expectedDigest == null || (measurement.isVerified()
+                    && expectedDigest.equals(normalizeSha256(measurement.getDigest()))));
+        mapper.updateCandidateIntegrity(candidate.getNodeId(), candidate.getFilePath(),
+                measurement.getSizeBytes(), measurement.getAlgorithm(), measurement.getDigest(),
+                valid ? "AVAILABLE" : "VERIFY_FAILED", valid);
+        if (!valid) {
+            throw RegistrationException.invalid("candidate failed SHA-256 verification");
+        }
+        return measurement;
+    }
+
+    private String metadataDigest(String metadataJson) {
+        if (blank(metadataJson)) return null;
+        try {
+            JsonNode digest = objectMapper.readTree(metadataJson).path("digest");
+            String value = text(digest, "value");
+            if (blank(value)) return null;
+            String algorithm = text(digest, "algorithm");
+            if (algorithm == null || !"SHA256".equalsIgnoreCase(algorithm.replace("-", ""))) {
+                throw RegistrationException.invalid("dataset digest algorithm must be SHA-256");
+            }
+            String normalized = normalizeSha256(value);
+            if (normalized == null) {
+                throw RegistrationException.invalid("dataset SHA-256 digest is invalid");
+            }
+            return normalized;
+        } catch (JsonProcessingException e) {
+            throw RegistrationException.invalid("invalid dataset metadata JSON");
+        }
+    }
+
+    private String requireAuthority(DatasetMetadata metadata) {
+        if (metadata == null || metadata.getAuthoritativeSizeBytes() == null
+                || !"SHA-256".equalsIgnoreCase(metadata.getDigestAlgorithm())) {
+            throw RegistrationException.conflict("DATASET_NOT_STRONGLY_VERIFIED",
+                    "dataset version has no authoritative SHA-256");
+        }
+        String digest = normalizeSha256(metadata.getDigestValue());
+        if (digest == null) {
+            throw RegistrationException.conflict("DATASET_NOT_STRONGLY_VERIFIED",
+                    "dataset version has no authoritative SHA-256");
+        }
+        return digest;
+    }
+
+    private boolean validMeasurement(FileIntegrityResult measurement, Long expectedSize) {
+        return measurement != null && "SHA-256".equalsIgnoreCase(measurement.getAlgorithm())
+                && normalizeSha256(measurement.getDigest()) != null
+                && (expectedSize == null || measurement.getSizeBytes() == expectedSize);
+    }
+
+    private String normalizeSha256(String value) {
+        if (value == null) return null;
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("sha256:")) normalized = normalized.substring("sha256:".length());
+        return normalized.matches("[0-9a-f]{64}") ? normalized : null;
     }
 
     private ResourceRequirements resources(JsonNode node) {

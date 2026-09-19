@@ -4,6 +4,14 @@ server:
 app:
         data:
                 directory: /data
+        dataset-access:
+                hmac-secret: ${APP_DATASET_ACCESS_HMAC_SECRET:topic4-acceptance-hmac-secret-change-before-production}
+                strict-download: ${APP_DATASET_ACCESS_STRICT_DOWNLOAD:true}
+        secure-aggregation-worker:
+                enabled: ${APP_SECURE_AGGREGATION_WORKER_ENABLED:true}
+                auth-secret: ${APP_SECURE_AGGREGATION_WORKER_AUTH_SECRET:topic4-aggregation-worker-secret}
+                input-file: ${APP_SECURE_AGGREGATION_WORKER_INPUT_FILE:/dataset/secure-aggregation/input.txt}
+                run-ttl-seconds: ${APP_SECURE_AGGREGATION_WORKER_RUN_TTL_SECONDS:300}
 
 # 添加路径匹配策略（解决 Springfox/Knife4j 兼容问题）
 spring:
@@ -54,7 +62,11 @@ file:
         ms: 60000  # 1分钟扫描一次
   transfer:
     connect-timeout-ms: 5000
-    read-timeout-ms: 600000
+    read-timeout-ms: 2700000
+  read-cache:
+    # Verified blocks only; choose a test file that fits this byte budget for a full memory-hit demo.
+    max-bytes: ${FILE_READ_CACHE_MAX_BYTES:134217728}
+    block-bytes: ${FILE_READ_CACHE_BLOCK_BYTES:1048576}
 
 logging:
         level:

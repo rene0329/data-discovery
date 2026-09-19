@@ -23,6 +23,13 @@ public interface DatasetRegistrationMapper {
     int markCandidateAvailability(@Param("nodeId") Integer nodeId,
                                   @Param("filePath") String filePath,
                                   @Param("availability") String availability);
+    int updateCandidateIntegrity(@Param("nodeId") Integer nodeId,
+                                 @Param("filePath") String filePath,
+                                 @Param("sizeBytes") Long sizeBytes,
+                                 @Param("checksumAlgorithm") String checksumAlgorithm,
+                                 @Param("checksum") String checksum,
+                                 @Param("availability") String availability,
+                                 @Param("verified") boolean verified);
 
     int insertDataset(RegisteredDataset dataset);
     int refreshHeat(@Param("halfLifeHours") double halfLifeHours, @Param("threshold") double threshold);
@@ -66,8 +73,19 @@ public interface DatasetRegistrationMapper {
     int updateReplicaAvailability(@Param("replicaId") Long replicaId,
                                   @Param("availability") String availability,
                                   @Param("verified") boolean verified);
+    int updateReplicaIntegrity(@Param("replicaId") Long replicaId,
+                               @Param("sizeBytes") Long sizeBytes,
+                               @Param("checksumAlgorithm") String checksumAlgorithm,
+                               @Param("checksum") String checksum,
+                               @Param("availability") String availability,
+                               @Param("verificationMessage") String verificationMessage,
+                               @Param("verified") boolean verified);
     int countAvailableReplicas(Long datasetId);
 
     int upsertDatasetMetadata(DatasetMetadata metadata);
     DatasetMetadata findDatasetMetadata(Long datasetId);
+    int setDatasetAuthority(@Param("datasetId") Long datasetId,
+                            @Param("authoritativeSizeBytes") Long authoritativeSizeBytes,
+                            @Param("digestAlgorithm") String digestAlgorithm,
+                            @Param("digestValue") String digestValue);
 }

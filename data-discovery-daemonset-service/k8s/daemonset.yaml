@@ -28,7 +28,7 @@ spec:
           operator: Exists
           effect: NoSchedule
 
-      # ── 节点选择：只在打了 node-role=storage 或 node-role=compute-storage 标签的节点运行 ──
+      # 数据访问入口和有界缓存也需要运行在纯计算节点上。
       # 打标签命令：kubectl label node <node-name> node-role=storage
       affinity:
         nodeAffinity:
@@ -38,6 +38,7 @@ spec:
                   - key: node-role
                     operator: In
                     values:
+                      - compute
                       - storage
                       - compute-storage
 
@@ -79,6 +80,24 @@ spec:
             # 扫描间隔（毫秒）
             - name: FILE_DISCOVERY_SCAN_INTERVAL_MS
               value: "60000"
+            - name: FILE_READ_CACHE_MAX_BYTES
+              value: "134217728"
+            - name: FILE_READ_CACHE_BLOCK_BYTES
+              value: "1048576"
+            - name: APP_DATASET_ACCESS_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: dataset-access-hmac
+                  optional: true
+            - name: APP_SECURE_AGGREGATION_WORKER_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: aggregation-worker-auth
+                  optional: true
+            - name: APP_SECURE_AGGREGATION_WORKER_INPUT_FILE
+              value: "/dataset/secure-aggregation/input.txt"
 
             # MySQL 连接
             - name: SPRING_DATASOURCE_DRUID_URL

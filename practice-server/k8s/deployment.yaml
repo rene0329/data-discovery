@@ -48,6 +48,30 @@ spec:
             # Match the daily bounded network probe plus a two-hour reporting allowance.
             - name: APP_NETWORK_TOPOLOGY_STALE_AFTER_SECONDS
               value: "93600"
+            - name: APP_DATASET_ACCESS_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: dataset-access-hmac
+                  optional: true
+            - name: APP_DATASET_ACCESS_REVIEWER_A_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: reviewer-a-secret
+                  optional: true
+            - name: APP_DATASET_ACCESS_REVIEWER_B_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: reviewer-b-secret
+                  optional: true
+            - name: APP_SECURE_AGGREGATION_WORKER_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: aggregation-worker-auth
+                  optional: true
 
             # MySQL
             - name: SPRING_DATASOURCE_DRUID_URL

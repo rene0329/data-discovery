@@ -18,8 +18,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -49,7 +53,7 @@ class TaskV1ServiceTest {
         nodeMapper = mock(NodeManagementMapper.class);
         service = new TaskV1Service(datasetMapper, imageMapper, taskMapper,
                 mock(RegistrationAuditMapper.class), orchestrator, new ObjectMapper(), nodeMapper,
-                replicaAvailabilityService, nodeAvailabilityService, "compute", mock(DatasetHeatService.class));
+                replicaAvailabilityService, nodeAvailabilityService, "compute");
     }
 
     @Test
@@ -59,7 +63,7 @@ class TaskV1ServiceTest {
         RuntimeImage image = RuntimeImage.builder()
                 .runtimeImageId(3L).status("READY").enabled(true).resolvedDigest("sha256:abc").build();
         when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
-        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(7).availability("AVAILABLE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(3).availability("AVAILABLE").build();
         when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
         when(replicaAvailabilityService.evaluate(replica))
                 .thenReturn(new ReplicaAvailability("USABLE", true, null));
@@ -87,7 +91,8 @@ class TaskV1ServiceTest {
 
         assertEquals(42, created.getTaskId());
         assertEquals("ACCEPTED", created.getStatus());
-        verify(orchestrator).executeRegisteredTask(eq(42), eq(Collections.singletonList(11L)), eq(3L), eq(null));
+        verify(orchestrator).executeRegisteredTask(eq(42), eq(Collections.singletonList(11L)), eq(3L),
+                eq(null), eq("IN_PLACE"));
         org.mockito.InOrder order = org.mockito.Mockito.inOrder(datasetMapper, taskMapper);
         order.verify(datasetMapper).lockDataset(11L);
         order.verify(datasetMapper).countActiveSchedulingReferences(11L);
@@ -128,6 +133,68 @@ class TaskV1ServiceTest {
                 () -> service.create(request(), "request-disabled-node"));
 
         assertEquals("DATASET_NO_USABLE_REPLICA", exception.getErrorCode());
+    }
+
+    @Test
+    void centralizedPreflightAllowsAHealthyReplicaOutsideTheComputePool() {
+        RegisteredDataset dataset = RegisteredDataset.builder()
+                .datasetId(11L).name("catdog").status("ACTIVE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(7)
+                .availability("AVAILABLE").build();
+        RuntimeImage image = RuntimeImage.builder().runtimeImageId(3L).name("image")
+                .status("READY").enabled(true).resolvedDigest("sha256:abc").build();
+        NodeManagement central = NodeManagement.builder().nodeId(3).nodeName("compute").build();
+        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
+        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
+        when(replicaAvailabilityService.evaluate(replica))
+                .thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(imageMapper.findById(3L)).thenReturn(image);
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(central));
+        when(nodeAvailabilityService.isSchedulable(central)).thenReturn(true);
+        when(nodeMapper.getNodeByName("compute")).thenReturn(central);
+        CreateTaskRequest request = request();
+        request.setExecutionMode("CENTRALIZED");
+
+        assertTrue(service.preflight(request).isValid());
+        assertEquals("CENTRALIZED", service.preflight(request).getExecutionMode());
+    }
+
+    @Test
+    void comparisonUsesSemanticDurationsWithoutChangingLegacyT1T2() {
+        TaskManagement centralized = TaskManagement.builder().taskId(1).executionMode("CENTRALIZED")
+                .datasetIdsJson("[11]").runtimeImageId(3L).resourceOverridesJson(null)
+                .dataPreparationMs(2400L).executionEvidenceComplete(true).status("已完成")
+                .T1(9.0).T2(8.0).build();
+        TaskManagement inPlace = TaskManagement.builder().taskId(2).executionMode("IN_PLACE")
+                .datasetIdsJson("[11]").runtimeImageId(3L).resourceOverridesJson(null)
+                .dataPreparationMs(1200L).executionEvidenceComplete(true).status("已完成")
+                .T1(7.0).T2(6.0).build();
+        when(taskMapper.listByAcceptanceRun("judge-1", 1))
+                .thenReturn(Arrays.asList(centralized, inPlace));
+
+        org.example.dto.registration.TaskRunComparison result = service.compareRun("judge-1", 1);
+
+        assertTrue(result.isComparable());
+        assertEquals(2.0, result.getCentralizedToInPlaceRatio());
+        assertEquals(9.0, centralized.getT1());
+        assertEquals(6.0, inPlace.getT2());
+    }
+
+    @Test
+    void comparisonDoesNotProduceARatioForZeroDurationEvidence() {
+        TaskManagement centralized = TaskManagement.builder().taskId(1).executionMode("CENTRALIZED")
+                .datasetIdsJson("[11]").runtimeImageId(3L).dataPreparationMs(0L)
+                .executionEvidenceComplete(true).status("已完成").build();
+        TaskManagement inPlace = TaskManagement.builder().taskId(2).executionMode("IN_PLACE")
+                .datasetIdsJson("[11]").runtimeImageId(3L).dataPreparationMs(1200L)
+                .executionEvidenceComplete(true).status("已完成").build();
+        when(taskMapper.listByAcceptanceRun("judge-zero", 1))
+                .thenReturn(Arrays.asList(centralized, inPlace));
+
+        org.example.dto.registration.TaskRunComparison result = service.compareRun("judge-zero", 1);
+
+        assertFalse(result.isComparable());
+        assertNull(result.getCentralizedToInPlaceRatio());
     }
 
     private CreateTaskRequest request() {

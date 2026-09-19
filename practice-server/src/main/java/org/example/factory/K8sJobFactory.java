@@ -109,7 +109,7 @@ public class K8sJobFactory {
     @Value("${dispatch.job.curl.connect-timeout-seconds:5}")
     private int curlConnectTimeoutSeconds;
 
-    @Value("${dispatch.job.curl.max-time-seconds:600}")
+    @Value("${dispatch.job.curl.max-time-seconds:2700}")
     private int curlMaxTimeSeconds;
 
     @Value("${dispatch.job.curl.retry-count:3}")
@@ -262,7 +262,7 @@ public class K8sJobFactory {
                                                      Double memoryRequest) {
 
         return createDataProcessingJob(jobName, sourceNodeName, dataFileName, dataFilePath,
-                overrideTargetNode, excludedTargetNode, cpuRequest, memoryRequest, null, null);
+                overrideTargetNode, excludedTargetNode, cpuRequest, memoryRequest, null, null, null);
     }
 
     public JobCreationResult createDataProcessingJob(String jobName,
@@ -275,6 +275,22 @@ public class K8sJobFactory {
                                                      Double memoryRequest,
                                                      Double gpuRequest,
                                                      RuntimeImage runtimeImage) {
+        return createDataProcessingJob(jobName, sourceNodeName, dataFileName, dataFilePath,
+                overrideTargetNode, excludedTargetNode, cpuRequest, memoryRequest,
+                gpuRequest, runtimeImage, null);
+    }
+
+    public JobCreationResult createDataProcessingJob(String jobName,
+                                                     String sourceNodeName,
+                                                     String dataFileName,
+                                                     String dataFilePath,
+                                                     String overrideTargetNode,
+                                                     String excludedTargetNode,
+                                                     Double cpuRequest,
+                                                     Double memoryRequest,
+                                                     Double gpuRequest,
+                                                     RuntimeImage runtimeImage,
+                                                     String datasetAccessToken) {
 
         TrainingProfile profile = runtimeImage == null ? resolveTrainingProfile(dataFileName) : null;
         double effectiveCpu = cpuRequest != null ? cpuRequest : (profile != null && profile.getDefaultCpu() != null ? profile.getDefaultCpu() : 0.5);
@@ -411,7 +427,8 @@ public class K8sJobFactory {
                 .withImage(initContainerImage)
                 .withImagePullPolicy("IfNotPresent")
                 .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl,
-                        resolveAndLogLimitRate(sourceNodeName, bestNode.getName(), jobName)))
+                        resolveAndLogLimitRate(sourceNodeName, bestNode.getName(), jobName),
+                        datasetAccessToken != null && !datasetAccessToken.trim().isEmpty()))
                 .addNewVolumeMount()
                 .withName("shared-data")
                 .withMountPath("/data")
@@ -449,6 +466,16 @@ public class K8sJobFactory {
                 .endSpec()
                 .build();
 
+        if (datasetAccessToken != null && !datasetAccessToken.trim().isEmpty()) {
+            io.fabric8.kubernetes.api.model.Container transferContainer =
+                    jobToCreate.getSpec().getTemplate().getSpec().getInitContainers().stream()
+                    .filter(container -> "data-transfer-container".equals(container.getName()))
+                    .findFirst().orElseThrow(() -> new IllegalStateException("data transfer container is missing"));
+            if (transferContainer.getEnv() == null) transferContainer.setEnv(new ArrayList<>());
+            transferContainer.getEnv().add(new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                    .withName("DATASET_ACCESS_TOKEN").withValue(datasetAccessToken).build());
+        }
+
         if (effectiveGpu > 0) {
             io.fabric8.kubernetes.api.model.Container processingContainer = jobToCreate.getSpec()
                     .getTemplate().getSpec().getContainers().stream()
@@ -459,7 +486,7 @@ public class K8sJobFactory {
             processingContainer.getResources().getLimits().put("nvidia.com/gpu", gpuQuantity);
         }
 
-        return new JobCreationResult(jobToCreate, targetClient, bestNode.getName());
+        return new JobCreationResult(jobToCreate, targetClient, bestNode.getName(), selectedDataPath);
     }
 
     private String immutableImageRef(String imageRef, String digest) {
@@ -542,49 +569,20 @@ public class K8sJobFactory {
     }
 
     /**
-     * 将 "--limit-rate" 字符串（如 "5m"、"8m"、"100k"）解析为字节/秒整数。
-     * 支持后缀 k/m/g（大小写均可），无法解析时返回 0。
-     */
-    private static long parseLimitRateToBytes(String rate) {
-        if (rate == null || rate.isEmpty()) return 0;
-        String r = rate.trim().toLowerCase();
-        try {
-            if (r.endsWith("g")) return Long.parseLong(r.substring(0, r.length() - 1)) * 1024L * 1024 * 1024;
-            if (r.endsWith("m")) return Long.parseLong(r.substring(0, r.length() - 1)) * 1024L * 1024;
-            if (r.endsWith("k")) return Long.parseLong(r.substring(0, r.length() - 1)) * 1024L;
-            return Long.parseLong(r);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-    }
-
-    /**
-     * 根据文件大小和源/目节点的限速配置，估算传输所需毫秒数。
-     * 用于"原地调度"场景下替换固定基础时间。
-     */
-    public long calculateBaselineMs(long fileSizeBytes, String srcNode, String dstNode) {
-        String rate = resolveLimitRate(srcNode, dstNode);
-        long rateBytes = parseLimitRateToBytes(rate);
-        return rateBytes > 0 ? (fileSizeBytes * 1000L / rateBytes) : 0;
-    }
-
-    /**
-     * 用指定速率（如 "100m"）估算 fileSizeBytes 字节本地读取所需毫秒数。
-     * 用于原地调度基础时间计算，模拟本地磁盘 I/O 而非网络传输速率。
-     */
-    public long calculateBaselineMsWithRate(long fileSizeBytes, String rate) {
-        long rateBytes = parseLimitRateToBytes(rate);
-        return rateBytes > 0 ? (fileSizeBytes * 1000L / rateBytes) : 0;
-    }
-
-    /**
      * 构建 init container curl 命令（curlimages/curl 镜像，原生支持 --limit-rate）。
      * 使用 curl --write-out '%{time_total}' 获取微秒级传输时间，精度 ~1ms，
      * 避免依赖 /proc/uptime（仅 10ms 精度）。
      * 在 stdout 输出 TRANSFER_MS=<ms>，供 Java 从 pod 日志中提取。
      */
     private String buildWgetCommand(String destPath, String srcUrl, String limitRate) {
+        return buildWgetCommand(destPath, srcUrl, limitRate, false);
+    }
+
+    private String buildWgetCommand(String destPath, String srcUrl, String limitRate,
+                                    boolean includeAuthorization) {
         String limitRateArg = isValidRate(limitRate) ? " --limit-rate " + limitRate : "";
+        String authorizationArg = includeAuthorization
+                ? " -H \"Authorization: Bearer ${DATASET_ACCESS_TOKEN}\"" : "";
         String reliabilityArgs = " --connect-timeout " + Math.max(1, curlConnectTimeoutSeconds)
                 + " --max-time " + Math.max(1, curlMaxTimeSeconds)
                 + " --retry " + Math.max(0, curlRetryCount)
@@ -593,9 +591,12 @@ public class K8sJobFactory {
                 + " --speed-limit " + Math.max(1, curlSpeedLimitBytes)
                 + " --speed-time " + Math.max(1, curlSpeedTimeSeconds);
         return "mkdir -p \"$(dirname '" + destPath + "')\" && "
-                + "_t=$(curl -fsSL" + reliabilityArgs + limitRateArg
+                + "_t=$(curl -fsSL" + reliabilityArgs + limitRateArg + authorizationArg
                 + " -o '" + destPath + "' --write-out '%{time_total}' '" + srcUrl + "') && "
-                + "echo \"TRANSFER_MS=$(echo $_t | awk '{printf \"%d\", $1*1000}')\"";
+                + "_bytes=$(wc -c < '" + destPath + "' | tr -d ' ') && "
+                + "_checksum=$(sha256sum '" + destPath + "' | awk '{print $1}') && "
+                + "echo \"TRANSFER_MS=$(echo $_t | awk '{printf \"%d\", $1*1000}')\" && "
+                + "echo \"INPUT_BYTES=$_bytes\" && echo \"INPUT_SHA256=$_checksum\"";
     }
 
     private List<CandidateNode> gatherAvailableNodes(double cpuRequest, double memoryRequestGi, String sourceNodeName) {

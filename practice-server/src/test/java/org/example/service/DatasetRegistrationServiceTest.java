@@ -14,6 +14,7 @@ import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
+import org.example.model.FileIntegrityResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -41,6 +42,8 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
 
 class DatasetRegistrationServiceTest {
+    private static final String SHA256 =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private DatasetRegistrationMapper mapper;
     private NodeManagementMapper nodeMapper;
     private RestTemplate restTemplate;
@@ -56,6 +59,20 @@ class DatasetRegistrationServiceTest {
         restTemplate = mock(RestTemplate.class);
         replicaAvailabilityService = mock(DatasetReplicaAvailabilityService.class);
         uploadClient = mock(DatasetUploadClient.class);
+        when(uploadClient.verify(any(NodeManagement.class), anyString(),
+                org.mockito.ArgumentMatchers.nullable(Long.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class)))
+                .thenAnswer(invocation -> {
+                    Long size = invocation.getArgument(2);
+                    String expected = invocation.getArgument(3);
+                    return new FileIntegrityResult(invocation.getArgument(1),
+                            size == null ? 3L : size, "SHA-256", SHA256,
+                            expected != null, expected == null ? "expected SHA-256 is required" : "verified");
+                });
         nodeAvailabilityService = mock(NodeAvailabilityService.class);
         PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
         when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
@@ -199,6 +216,8 @@ class DatasetRegistrationServiceTest {
         ArgumentCaptor<DatasetMetadata> metadataCaptor = ArgumentCaptor.forClass(DatasetMetadata.class);
         verify(mapper).upsertDatasetMetadata(metadataCaptor.capture());
         assertEquals("{\"sampleCount\":10}", metadataCaptor.getValue().getProfileJson());
+        assertEquals("SHA-256", metadataCaptor.getValue().getDigestAlgorithm());
+        assertEquals(SHA256, metadataCaptor.getValue().getDigestValue());
     }
 
     @Test
@@ -243,7 +262,8 @@ class DatasetRegistrationServiceTest {
         assertThrows(RegistrationException.class,
                 () -> service.uploadAndRegister(request, file, "upload-request-1"));
 
-        verify(uploadClient, never()).upload(any(), any(), anyString());
+        verify(uploadClient, never()).upload(any(), any(), anyString(),
+                any(), any(), any(), any());
     }
 
     @Test
@@ -301,9 +321,11 @@ class DatasetRegistrationServiceTest {
         verify(mapper).insertDataset(datasetCaptor.capture());
         assertEquals("NPZ", datasetCaptor.getValue().getDataType());
         verify(uploadClient).upload(eq(storage), eq(file),
-                eq("uploads/sales/1.0/sales-1.0.npz"));
+                eq("uploads/sales/1.0/sales-1.0.npz"), eq(null), eq("1.0"),
+                eq("upload-request-2"), eq(null));
         verify(uploadClient).scan(storage);
-        verify(uploadClient, never()).deleteQuietly(any(), anyString());
+        verify(uploadClient, never()).deleteQuietly(any(), anyString(),
+                any(), any(), any(), any());
     }
 
     @Test
@@ -316,7 +338,8 @@ class DatasetRegistrationServiceTest {
         assertThrows(RegistrationException.class,
                 () -> service.uploadAndRegister(request, file, "upload-request-invalid"));
 
-        verify(uploadClient, never()).upload(any(), any(), anyString());
+        verify(uploadClient, never()).upload(any(), any(), anyString(),
+                any(), any(), any(), any());
     }
 
     private UploadDatasetRequest uploadRequest() {

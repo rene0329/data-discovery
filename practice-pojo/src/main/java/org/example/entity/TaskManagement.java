@@ -21,6 +21,9 @@ public class TaskManagement {
     private String datasetIdsJson;
     private Long runtimeImageId;
     private String resourceOverridesJson;
+    private String executionMode;
+    private String acceptanceRunId;
+    private Integer runRound;
     private String status;
 
     private LocalDateTime createTime;
@@ -30,4 +33,11 @@ public class TaskManagement {
     private Double rating;
 
     private String schedule;
+
+    /** New semantic measurements. Legacy T1/T2/rating remain untouched for old tasks. */
+    private Long dataPreparationMs;
+    private Long computeDurationMs;
+    private Boolean executionEvidenceComplete;
+    private LocalDateTime startedAt;
+    private LocalDateTime finishedAt;
 }

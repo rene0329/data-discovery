@@ -114,11 +114,13 @@ package org.example.service;
 
 import org.example.entity.DataManagement;
 import org.example.entity.DatasetDiscoveryCandidate;
+import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
 import org.example.mapper.DataManagementMapper;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.model.FileData;
+import org.example.model.FileIntegrityResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -130,6 +132,7 @@ import javax.annotation.PostConstruct;
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.charset.StandardCharsets;
@@ -244,7 +247,7 @@ public class FileDiscoveryService {
         try (Stream<Path> pathStream = Files.walk(dataPath)) {
             pathStream
                     .filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".npz"))
+                    .filter(this::isDiscoverableDataFile)
                     .forEach(filePath -> {
                         try {
                             BasicFileAttributes attrs = Files.readAttributes(filePath, BasicFileAttributes.class);
@@ -259,6 +262,9 @@ public class FileDiscoveryService {
 
                             if (enableMd5) {
                                 fileData.setMd5Hash(calculateMd5(filePath));
+                                if (fileData.getMd5Hash() != null) {
+                                    fileData.setChecksumAlgorithm("MD5");
+                                }
                             }
 
                             fileList.add(fileData);
@@ -327,6 +333,12 @@ public class FileDiscoveryService {
                     && !"MISSING".equals(candidate.getAvailability())) {
                 datasetRegistrationMapper.markCandidateAvailability(
                         nodeId, candidate.getFilePath(), "MISSING");
+                DatasetReplica replica = datasetRegistrationMapper.findReplicaByNodePath(
+                        nodeId, candidate.getFilePath());
+                if (replica != null) {
+                    datasetRegistrationMapper.updateReplicaAvailability(
+                            replica.getReplicaId(), "MISSING", false);
+                }
                 missingCount++;
             }
         }
@@ -340,15 +352,29 @@ public class FileDiscoveryService {
                     .fileName(fileData.getName())
                     .fileType(fileData.getFileType())
                     .sizeBytes(fileData.getSizeBytes())
+                    .checksumAlgorithm(fileData.getChecksumAlgorithm())
                     .checksum(fileData.getMd5Hash())
                     .metadataJson(fileData.getMetadataJson())
                     .lastModifiedAt(LocalDateTime.ofInstant(
                             java.time.Instant.ofEpochMilli(fileData.getLastModified()),
                             java.time.ZoneId.systemDefault()))
-                    .availability("AVAILABLE")
+                    // A directory observation proves existence, not integrity.
+                    // Only the explicit streaming SHA-256 endpoint may promote
+                    // a candidate/replica to AVAILABLE.
+                    .availability("UNVERIFIED")
                     .lastSeenAt(now)
                     .build();
             datasetRegistrationMapper.upsertCandidate(candidate);
+            DatasetDiscoveryCandidate persisted = datasetRegistrationMapper.findCandidateByNodePath(
+                    nodeId, fileData.getPath());
+            if (persisted != null && !"AVAILABLE".equals(persisted.getAvailability())) {
+                DatasetReplica replica = datasetRegistrationMapper.findReplicaByNodePath(
+                        nodeId, fileData.getPath());
+                if (replica != null) {
+                    datasetRegistrationMapper.updateReplicaAvailability(
+                            replica.getReplicaId(), "UNVERIFIED", false);
+                }
+            }
             observedCount++;
         }
 
@@ -358,10 +384,77 @@ public class FileDiscoveryService {
 
     private String readCompanionMetadata(Path npzPath) throws IOException {
         String fileName = npzPath.getFileName().toString();
+        if (!fileName.toLowerCase(Locale.ROOT).endsWith(".npz")) return null;
         String baseName = fileName.substring(0, fileName.length() - ".npz".length());
         Path metadataPath = npzPath.resolveSibling(baseName + ".meta.json");
         if (!Files.isRegularFile(metadataPath)) return null;
         return new String(Files.readAllBytes(metadataPath), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Scans ordinary dataset files regardless of extension. Transfer temporary
+     * files and NPZ metadata sidecars are implementation artifacts and must not
+     * become independent dataset candidates.
+     */
+    private boolean isDiscoverableDataFile(Path file) {
+        String name = file.getFileName().toString();
+        String lower = name.toLowerCase(Locale.ROOT);
+        if (lower.contains(".part-")) return false;
+        if (!lower.endsWith(".meta.json")) return true;
+        String baseName = name.substring(0, name.length() - ".meta.json".length());
+        return !Files.isRegularFile(file.resolveSibling(baseName + ".npz"));
+    }
+
+    /**
+     * Calculates SHA-256 by streaming the whole file. No size threshold is
+     * applied because this is an explicit verification operation rather than
+     * a periodic discovery scan.
+     */
+    public FileIntegrityResult verifyFile(Path file, Long expectedSize,
+                                          String expectedSha256) throws IOException {
+        if (file == null || !Files.isRegularFile(file) || !Files.isReadable(file)) {
+            throw new NoSuchFileException(String.valueOf(file));
+        }
+        long size = 0L;
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is not available", impossible);
+        }
+        try (InputStream input = new BufferedInputStream(Files.newInputStream(file))) {
+            byte[] buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+                size += read;
+            }
+        }
+        String actual = toHex(digest.digest());
+        String expected = normalizeSha256(expectedSha256);
+        boolean hasExpected = expected != null;
+        boolean sizeMatches = expectedSize != null && expectedSize >= 0 && expectedSize == size;
+        boolean digestMatches = hasExpected && expected.equals(actual);
+        boolean verified = sizeMatches && digestMatches;
+        String message = verified ? "verified"
+                : !hasExpected ? "expected SHA-256 is required"
+                : expectedSize == null ? "expected size is required"
+                : !sizeMatches ? "size mismatch"
+                : "SHA-256 mismatch";
+        return new FileIntegrityResult(file.toString(), size, "SHA-256", actual, verified, message);
+    }
+
+    private String normalizeSha256(String value) {
+        if (value == null) return null;
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (normalized.startsWith("sha256:")) normalized = normalized.substring("sha256:".length());
+        return normalized.matches("[0-9a-f]{64}") ? normalized : null;
+    }
+
+    private String toHex(byte[] value) {
+        StringBuilder result = new StringBuilder(value.length * 2);
+        for (byte item : value) result.append(String.format("%02x", item & 0xff));
+        return result.toString();
     }
 
     // ── 数据集元信息映射（按文件名去扩展名后的 baseName 匹配） ─────────────

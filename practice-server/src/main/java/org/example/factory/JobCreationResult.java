@@ -7,11 +7,17 @@ public class JobCreationResult {
     private final Job job;
     private final KubernetesClient client;
     private final String selectedNodeName;
+    private final String inputPath;
 
     public JobCreationResult(Job job, KubernetesClient client, String selectedNodeName) {
+        this(job, client, selectedNodeName, null);
+    }
+
+    public JobCreationResult(Job job, KubernetesClient client, String selectedNodeName, String inputPath) {
         this.job = job;
         this.client = client;
         this.selectedNodeName = selectedNodeName;
+        this.inputPath = inputPath;
     }
 
     public Job getJob() {
@@ -24,5 +30,9 @@ public class JobCreationResult {
 
     public String getSelectedNodeName() {
         return selectedNodeName;
+    }
+
+    public String getInputPath() {
+        return inputPath;
     }
 }

@@ -52,7 +52,9 @@
 package org.example.controller;
 
 import org.example.model.FileData;
+import org.example.model.FileIntegrityResult;
 import org.example.service.FileDiscoveryService;
+import org.example.security.access.DatasetAccessScopeVerifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -106,6 +108,12 @@ public class DataDiscoveryController {
     @Autowired
     private FileDiscoveryService fileDiscoveryService;
 
+    @Autowired
+    private DatasetAccessScopeVerifier accessTokens;
+
+    @Value("${app.dataset-access.strict-download:true}")
+    private boolean strictDownloadTokens;
+
     @Value("${node.name:unknown}")
     private String nodeName;
 
@@ -115,7 +123,7 @@ public class DataDiscoveryController {
     @Value("${file.transfer.connect-timeout-ms:5000}")
     private int transferConnectTimeoutMs;
 
-    @Value("${file.transfer.read-timeout-ms:600000}")
+    @Value("${file.transfer.read-timeout-ms:2700000}")
     private int transferReadTimeoutMs;
 
     /**
@@ -204,6 +212,38 @@ public class DataDiscoveryController {
     }
 
     /**
+     * Explicit, full-file SHA-256 verification. Unlike periodic discovery this
+     * endpoint intentionally reads every byte, including files larger than the
+     * old MD5 scan threshold.
+     */
+    @PostMapping(value = "/verify", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<FileIntegrityResult> verifyFile(@RequestBody Map<String, Object> request,
+                                                          HttpServletRequest servletRequest) {
+        String requestedPath = request.get("path") == null ? null : String.valueOf(request.get("path"));
+        Long expectedSize = parseLong(request.get("expectedSize"));
+        String expectedSha256 = request.get("expectedSha256") == null
+                ? null : String.valueOf(request.get("expectedSha256"));
+        Path file = resolveDataPath(requestedPath);
+        if (file == null) {
+            return ResponseEntity.badRequest().body(new FileIntegrityResult(
+                    requestedPath, 0L, "SHA-256", null, false, "invalid dataset path"));
+        }
+        if (!authorize(servletRequest, file, "VERIFY")) {
+            return ResponseEntity.status(401).body(new FileIntegrityResult(
+                    file.toString(), 0L, "SHA-256", null, false, "scoped VERIFY token is required"));
+        }
+        try {
+            return ResponseEntity.ok(fileDiscoveryService.verifyFile(file, expectedSize, expectedSha256));
+        } catch (java.nio.file.NoSuchFileException e) {
+            return ResponseEntity.notFound().build();
+        } catch (IOException e) {
+            log.error("文件强校验失败: {}: {}", file, e.getMessage());
+            return ResponseEntity.status(500).body(new FileIntegrityResult(
+                    file.toString(), 0L, "SHA-256", null, false, e.getMessage()));
+        }
+    }
+
+    /**
      * 文件上传接口 —— 供 practice-server saveAll 物理迁移时将数据推送到目标节点。
      * URL: POST /data-discovery/upload
      * 参数:
@@ -214,7 +254,8 @@ public class DataDiscoveryController {
     public ResponseEntity<Map<String, Object>> uploadFile(
             @RequestParam("file") MultipartFile file,
             @RequestParam("path") String relativePath,
-            @RequestParam(value = "overwrite", defaultValue = "true") boolean overwrite) {
+            @RequestParam(value = "overwrite", defaultValue = "true") boolean overwrite,
+            HttpServletRequest servletRequest) {
 
         Path root = Paths.get(dataDirectory).toAbsolutePath().normalize();
         Path target = root.resolve(relativePath).normalize();
@@ -227,6 +268,10 @@ public class DataDiscoveryController {
         if (file == null || file.isEmpty()) {
             Map<String, Object> err = new HashMap<>(); err.put("error", "file must not be empty");
             return ResponseEntity.badRequest().body(err);
+        }
+        if (!authorize(servletRequest, target, "WRITE")) {
+            Map<String, Object> err = new HashMap<>(); err.put("error", "scoped WRITE token is required");
+            return ResponseEntity.status(401).body(err);
         }
         if (!overwrite && Files.exists(target)) {
             Map<String, Object> err = new HashMap<>(); err.put("error", "target file already exists");
@@ -290,14 +335,22 @@ public class DataDiscoveryController {
      * 不再把整个数据文件装进 practice-server 的堆内存。
      */
     @PostMapping(value = "/copy-from", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<Map<String, Object>> copyFrom(@RequestBody Map<String, Object> request) {
+    public ResponseEntity<Map<String, Object>> copyFrom(@RequestBody Map<String, Object> request,
+                                                        HttpServletRequest servletRequest) {
         String sourceUrl = request.get("sourceUrl") == null ? null : String.valueOf(request.get("sourceUrl"));
         String relativePath = request.get("path") == null ? null : String.valueOf(request.get("path"));
         Long expectedSize = parseLong(request.get("expectedSize"));
+        String expectedSha256 = request.get("expectedSha256") == null
+                ? null : String.valueOf(request.get("expectedSha256"));
+        String sourceToken = request.get("sourceToken") == null
+                ? null : String.valueOf(request.get("sourceToken"));
 
         Map<String, Object> result = new HashMap<>();
-        if (sourceUrl == null || sourceUrl.isEmpty() || relativePath == null || relativePath.isEmpty()) {
-            result.put("error", "sourceUrl and path are required");
+        if (sourceUrl == null || sourceUrl.isEmpty() || relativePath == null || relativePath.isEmpty()
+                || expectedSize == null || expectedSize < 0
+                || expectedSha256 == null || expectedSha256.trim().isEmpty()
+                || sourceToken == null || sourceToken.trim().isEmpty()) {
+            result.put("error", "sourceUrl, path, expectedSize, expectedSha256 and sourceToken are required");
             return ResponseEntity.badRequest().body(result);
         }
 
@@ -306,6 +359,10 @@ public class DataDiscoveryController {
         if (!target.startsWith(root)) {
             result.put("error", "path traversal rejected");
             return ResponseEntity.badRequest().body(result);
+        }
+        if (!authorize(servletRequest, target, "COPY")) {
+            result.put("error", "scoped COPY token is required");
+            return ResponseEntity.status(401).body(result);
         }
 
         URI sourceUri;
@@ -330,6 +387,10 @@ public class DataDiscoveryController {
             connection.setConnectTimeout(Math.max(1000, transferConnectTimeoutMs));
             connection.setReadTimeout(Math.max(1000, transferReadTimeoutMs));
             connection.setInstanceFollowRedirects(false);
+            if (sourceToken != null && !sourceToken.trim().isEmpty()) {
+                connection.setRequestProperty(HttpHeaders.AUTHORIZATION,
+                        "Bearer " + sourceToken.trim());
+            }
 
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) {
@@ -353,6 +414,13 @@ public class DataDiscoveryController {
                 throw new IOException("size mismatch: expected=" + expectedSize + ", actual=" + bytesCopied);
             }
 
+            FileIntegrityResult integrity = fileDiscoveryService.verifyFile(
+                    tempFile, expectedSize, expectedSha256);
+            if (!integrity.isVerified()) {
+                throw new IOException(integrity.getMessage() + ": expected=" + expectedSha256
+                        + ", actual=" + integrity.getDigest());
+            }
+
             try {
                 Files.move(tempFile, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException ignored) {
@@ -363,6 +431,10 @@ public class DataDiscoveryController {
             result.put("status", "ok");
             result.put("path", relativePath);
             result.put("size", bytesCopied);
+            result.put("sizeBytes", bytesCopied);
+            result.put("algorithm", integrity.getAlgorithm());
+            result.put("digest", integrity.getDigest());
+            result.put("verified", true);
             log.info("节点间流式复制成功: {} -> {} ({} bytes)", sourceUrl, target, bytesCopied);
             return ResponseEntity.ok(result);
         } catch (Exception e) {
@@ -392,6 +464,15 @@ public class DataDiscoveryController {
         }
     }
 
+    private Path resolveDataPath(String requestedPath) {
+        if (requestedPath == null || requestedPath.trim().isEmpty()) return null;
+        Path root = Paths.get(dataDirectory).toAbsolutePath().normalize();
+        Path raw = Paths.get(requestedPath);
+        Path resolved = raw.isAbsolute() ? raw.toAbsolutePath().normalize()
+                : root.resolve(raw).normalize();
+        return resolved.startsWith(root) ? resolved : null;
+    }
+
     /**
      * 文件删除接口 —— 供 practice-server saveAll 物理迁移后删除源节点旧文件。
      * URL: DELETE /data-discovery/delete/**  （支持多级路径，如 dataset/yelp/npz/yelp.npz）
@@ -405,10 +486,14 @@ public class DataDiscoveryController {
         // 若用 Paths.get(dataDirectory).resolve(filename) 会产生三重前缀（/dataset/dataset/dataset/...）
         Path filePath = Paths.get("/").resolve(filename).normalize();
 
-        if (!filePath.startsWith(Paths.get(dataDirectory).normalize())) {
+        if (!filePath.startsWith(Paths.get(dataDirectory).toAbsolutePath().normalize())) {
             log.warn("拒绝路径穿越删除请求: {}", filename);
             Map<String, Object> err = new HashMap<>(); err.put("error", "path traversal rejected");
             return ResponseEntity.badRequest().body(err);
+        }
+        if (!authorize(request, filePath, "DELETE")) {
+            Map<String, Object> err = new HashMap<>(); err.put("error", "scoped DELETE token is required");
+            return ResponseEntity.status(401).body(err);
         }
         try {
             boolean deleted = Files.deleteIfExists(filePath);
@@ -440,9 +525,13 @@ public class DataDiscoveryController {
         Path filePath = Paths.get("/").resolve(filename).normalize();
 
         // 安全检查：防止路径穿越，确保仍在 dataDirectory 目录下
-        if (!filePath.startsWith(Paths.get(dataDirectory).normalize())) {
+        if (!filePath.startsWith(Paths.get(dataDirectory).toAbsolutePath().normalize())) {
             log.warn("拒绝路径穿越请求: {}", filename);
             return ResponseEntity.badRequest().build();
+        }
+
+        if (!authorize(request, filePath, "READ")) {
+            return ResponseEntity.status(401).build();
         }
 
         if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
@@ -456,5 +545,21 @@ public class DataDiscoveryController {
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         "attachment; filename=\"" + filePath.getFileName() + "\"")
                 .body(resource);
+    }
+
+    private boolean authorize(HttpServletRequest request, Path filePath, String action) {
+        String authorization = request == null ? null : request.getHeader(HttpHeaders.AUTHORIZATION);
+        if ((authorization == null || authorization.trim().isEmpty()) && !strictDownloadTokens) {
+            log.warn("兼容窗口允许无 scoped token 操作: action={}, path={}", action, filePath);
+            return true;
+        }
+        try {
+            accessTokens.verifyPathAction(authorization, filePath.toString(), action);
+            return true;
+        } catch (DatasetAccessScopeVerifier.TokenVerificationException error) {
+            log.warn("拒绝数据操作: action={}, path={}, reason={}",
+                    action, filePath, error.getErrorCode());
+            return false;
+        }
     }
 }

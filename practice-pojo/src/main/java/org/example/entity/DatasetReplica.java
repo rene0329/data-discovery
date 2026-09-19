@@ -18,8 +18,12 @@ public class DatasetReplica {
     private Integer nodeId;
     private String filePath;
     private Long sizeBytes;
+    /** Algorithm used for the digest measured from this physical replica. */
+    private String checksumAlgorithm;
+    /** Digest measured from this physical replica; never the version authority. */
     private String checksum;
     private String availability;
+    private String verificationMessage;
     // Derived business availability; not persisted in dataset_replica.
     private String effectiveAvailability;
     private String statusReason;

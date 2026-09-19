@@ -48,7 +48,7 @@ public class SchedulingService {
             new TypeReference<Map<String, String>>() { };
     private static final Set<String> ACTIONS = new HashSet<>(Arrays.asList(
             "USE_IN_PLACE", "COPY_AND_USE", "MOVE_AND_USE", "REMOTE_READ"));
-    private static final Set<String> DATA_ACTIONS = new HashSet<>(Arrays.asList("COPY", "MOVE"));
+    private static final Set<String> DATA_ACTIONS = new HashSet<>(Arrays.asList("COPY", "MOVE", "DELETE"));
     private static final Set<String> PLAN_STATUSES = new HashSet<>(Arrays.asList(
             "ACCEPTED", "RUNNING", "COMPLETED", "PARTIAL_COMPLETED", "FAILED"));
 
@@ -188,18 +188,23 @@ public class SchedulingService {
             if (!replicaAvailabilityService.evaluate(replica).isUsable()) {
                 throw RegistrationException.conflict("replica is not available: " + item.getReplicaId());
             }
+            String action = item.getAction().trim().toUpperCase(Locale.ROOT);
+            boolean deleteOnly = dataOnly && "DELETE".equals(action);
             NodeManagement target = nodeMapper.getNodeById(item.getTargetNodeId());
             if (target == null || !nodeAvailabilityService.isSchedulable(target)) {
                 throw RegistrationException.conflict("target node is not schedulable: " + item.getTargetNodeId());
             }
-            if (dataOnly && (!DatasetSchedulingExecutor.isStorageNode(target)
+            if (dataOnly && !deleteOnly && (!DatasetSchedulingExecutor.isStorageNode(target)
                     || item.getSourceNodeId().equals(item.getTargetNodeId()))) {
                 throw RegistrationException.invalid("data transfer requires a different STORAGE or COMPUTE_STORAGE target node");
+            }
+            if (deleteOnly && !item.getSourceNodeId().equals(item.getTargetNodeId())) {
+                throw RegistrationException.invalid("DELETE requires targetNodeId = sourceNodeId");
             }
             if (!dataOnly && !isComputeNode(target)) {
                 throw RegistrationException.invalid("compute scheduling requires a COMPUTE or COMPUTE_STORAGE target node");
             }
-            if (dataOnly) {
+            if (dataOnly && !deleteOnly) {
                 DatasetReplica atTarget = datasetMapper.findReplicaByNodePath(target.getNodeId(), replica.getFilePath());
                 if (atTarget != null && !dataset.getDatasetId().equals(atTarget.getDatasetId())) {
                     throw RegistrationException.conflict("target path belongs to another dataset");
@@ -213,11 +218,12 @@ public class SchedulingService {
                     reserved.put(target.getNodeId(), used + 1);
                 }
             }
-            String action = item.getAction().trim().toUpperCase(Locale.ROOT);
             if ("USE_IN_PLACE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId())) {
                 throw RegistrationException.invalid("USE_IN_PLACE requires sourceNodeId = targetNodeId");
             }
-            networkTopologyService.requirePath(item.getSourceNodeId(), item.getTargetNodeId());
+            if (!deleteOnly) {
+                networkTopologyService.requirePath(item.getSourceNodeId(), item.getTargetNodeId());
+            }
             assignments.add(SchedulingAssignment.builder()
                     .datasetId(item.getDatasetId())
                     .replicaId(item.getReplicaId())
@@ -245,8 +251,8 @@ public class SchedulingService {
             assignment.setPlanId(plan.getPlanId());
             planMapper.insertAssignment(assignment);
         }
-        // Moving or copying data is not a business access and must not inflate its heat.
-        if (!dataOnly) new HashSet<>(datasetIds).forEach(heat::recordAccess);
+        // Submission and data movement are not business reads. Heat is raised only after
+        // DatasetAccessService records a complete, checksum-verified read.
         dispatchAfterCommit(plan.getPlanId(), plan.getInternalTaskId(), assignments);
         return accepted(plan);
     }

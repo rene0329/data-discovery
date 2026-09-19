@@ -5,6 +5,7 @@ import org.example.dto.scheduling.SchedulingPlanRequest;
 import org.example.entity.*;
 import org.example.exception.RegistrationException;
 import org.example.mapper.*;
+import org.example.access.DatasetConsumerStat;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
@@ -19,6 +20,7 @@ class DatasetStorageServiceTest {
     TaskManagementMapper tasks = mock(TaskManagementMapper.class);
     SchedulingService scheduling = mock(SchedulingService.class);
     NetworkTopologyService topology = mock(NetworkTopologyService.class);
+    DatasetAccessEventMapper accessEvents = mock(DatasetAccessEventMapper.class);
     DatasetStorageService service;
     List<RegisteredDataset> catalog;
 
@@ -26,7 +28,8 @@ class DatasetStorageServiceTest {
     void setup() {
         NodeAvailabilityService availability = new NodeAvailabilityService(300);
         service = new DatasetStorageService(datasets, nodes, tasks, availability,
-                new DatasetReplicaAvailabilityService(nodes, availability), topology, scheduling);
+                new DatasetReplicaAvailabilityService(nodes, availability), topology, scheduling,
+                accessEvents, 24);
         List<NodeManagement> pool = Arrays.asList(node(1, "storage"), node(2, "compute-storage"), node(3, "storage"));
         when(nodes.selectAllNodes()).thenReturn(pool);
         pool.forEach(n -> when(nodes.getNodeById(n.getNodeId())).thenReturn(n));
@@ -35,8 +38,8 @@ class DatasetStorageServiceTest {
         for (RegisteredDataset dataset : catalog) {
             when(datasets.findDatasetById(dataset.getDatasetId())).thenReturn(dataset);
             when(datasets.listReplicas(dataset.getDatasetId())).thenReturn(Collections.singletonList(
-                    DatasetReplica.builder().replicaId(dataset.getDatasetId() + 100).datasetId(dataset.getDatasetId())
-                            .nodeId(1).filePath("/dataset/" + dataset.getDatasetId() + ".npz").availability("AVAILABLE").build()));
+                    availableReplica(dataset.getDatasetId() + 100, dataset.getDatasetId(), 1,
+                            "/dataset/" + dataset.getDatasetId() + ".npz")));
         }
         Map<Integer, NetworkTopologyService.NetworkPath> paths = new HashMap<>();
         pool.forEach(n -> paths.put(n.getNodeId(), new NetworkTopologyService.NetworkPath(Arrays.asList(1, n.getNodeId()), 1, 100)));
@@ -54,6 +57,43 @@ class DatasetStorageServiceTest {
         assertEquals(109L, plan.getAssignments().get(1).getReplicaId());
         assertNotEquals(plan.getAssignments().get(0).getTargetNodeId(), plan.getAssignments().get(1).getTargetNodeId());
         verifyNoInteractions(scheduling);
+    }
+
+    @Test
+    void usesSuccessfulConsumerEvidenceForNearCopyAndExplainsDecision() {
+        DatasetConsumerStat stat = new DatasetConsumerStat();
+        stat.setConsumerNodeId(2); stat.setAccessCount(4L); stat.setBytesRead(1024L);
+        when(accessEvents.recentConsumers(eq(9L), any())).thenReturn(Collections.singletonList(stat));
+
+        DatasetStoragePlan plan = service.preview("heat");
+
+        DatasetStoragePlan.Placement placement = plan.getPlacements().stream()
+                .filter(row -> row.getDatasetId().equals(9L)).findFirst().orElseThrow(AssertionError::new);
+        assertEquals("COPY", placement.getAction());
+        assertEquals(2, placement.getConsumerNodeId());
+        assertEquals("node-2", placement.getTargetNode());
+        assertTrue(placement.getReason().contains("实际读取 4 次"));
+    }
+
+    @Test
+    void clearsOnlyOneRedundantReplicaFromLowHeatDataset() {
+        when(datasets.listReplicas(10L)).thenReturn(Arrays.asList(
+                availableReplica(110L, 10L, 1, "/dataset/10.npz"),
+                availableReplica(210L, 10L, 2, "/dataset/10.npz")));
+
+        DatasetStoragePlan plan = service.preview("heat");
+        SchedulingPlanRequest.Assignment cleanup = plan.getAssignments().stream()
+                .filter(row -> row.getDatasetId().equals(10L)).findFirst().orElseThrow(AssertionError::new);
+        assertEquals("DELETE", cleanup.getAction());
+        assertEquals(cleanup.getSourceNodeId(), cleanup.getTargetNodeId());
+    }
+
+    @Test
+    void keepsTheOnlyVerifiedReplicaOfLowHeatData() {
+        DatasetStoragePlan plan = service.preview("heat");
+
+        assertTrue(plan.getAssignments().stream().noneMatch(row -> row.getDatasetId().equals(10L)));
+        assertTrue(plan.getNotices().stream().anyMatch(notice -> notice.contains("低热数据仅有一个已验证副本")));
     }
 
     @Test
@@ -89,14 +129,19 @@ class DatasetStorageServiceTest {
     @Test
     void aggregationReusesTargetAndSkipsBusyDatasetsWhileHeatProcessesOthers() {
         when(datasets.countActiveTaskReferences(9L, "same-name")).thenReturn(1);
+        when(datasets.listReplicas(10L)).thenReturn(Arrays.asList(
+                availableReplica(110L, 10L, 1, "/dataset/10.npz"),
+                availableReplica(310L, 10L, 3, "/dataset/10.npz")));
         DatasetStoragePlan heat = service.preview("heat");
         assertTrue(heat.getAssignments().stream().allMatch(a -> a.getDatasetId().equals(10L)));
         assertFalse(heat.getAssignments().isEmpty());
+        when(datasets.listReplicas(10L)).thenReturn(Collections.singletonList(
+                availableReplica(110L, 10L, 1, "/dataset/10.npz")));
         DatasetStoragePlan aggregation = service.preview("aggregation", Arrays.asList(9L, 10L), 2);
         assertEquals(1, aggregation.getAssignments().size());
         assertTrue(aggregation.getNotices().get(0).contains("占用") || aggregation.getNotices().get(0).contains("未完成"));
-        when(datasets.listReplicas(10L)).thenReturn(Collections.singletonList(DatasetReplica.builder()
-                .replicaId(200L).datasetId(10L).nodeId(2).availability("AVAILABLE").build()));
+        when(datasets.listReplicas(10L)).thenReturn(Collections.singletonList(
+                availableReplica(200L, 10L, 2, "/dataset/10.npz")));
         DatasetStoragePlan reuse = service.preview("aggregation", Collections.singletonList(10L), 2);
         assertTrue(reuse.getAssignments().isEmpty());
         assertTrue(reuse.getNotices().get(0).contains("直接复用"));
@@ -162,8 +207,8 @@ class DatasetStorageServiceTest {
     @Test
     void existingReplicasAndFullTargetsDoNotCauseDuplicateCopies() {
         when(datasets.listReplicas(9L)).thenReturn(Arrays.asList(
-                DatasetReplica.builder().datasetId(9L).replicaId(109L).nodeId(1).availability("AVAILABLE").filePath("/dataset/9.npz").build(),
-                DatasetReplica.builder().datasetId(9L).replicaId(200L).nodeId(2).availability("AVAILABLE").filePath("/dataset/9.npz").build()));
+                availableReplica(109L, 9L, 1, "/dataset/9.npz"),
+                availableReplica(200L, 9L, 2, "/dataset/9.npz")));
         nodes.selectAllNodes().get(2).setNumDataset(0);
         DatasetStoragePlan plan = service.preview("heat");
         assertTrue(plan.getAssignments().stream().noneMatch(a -> a.getDatasetId().equals(9L)));
@@ -171,6 +216,12 @@ class DatasetStorageServiceTest {
 
     private RegisteredDataset dataset(long id, double heat) {
         return RegisteredDataset.builder().datasetId(id).name("same-name").status("ACTIVE").dataHeat(heat).build();
+    }
+    private DatasetReplica availableReplica(long replicaId, long datasetId, int nodeId, String path) {
+        return DatasetReplica.builder().replicaId(replicaId).datasetId(datasetId).nodeId(nodeId)
+                .filePath(path).sizeBytes(123L).checksumAlgorithm("SHA-256")
+                .checksum("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                .availability("AVAILABLE").verifiedAt(LocalDateTime.now(ZoneOffset.UTC)).build();
     }
     private NodeManagement node(int id, String type) {
         return NodeManagement.builder().nodeId(id).nodeName("node-" + id).type(type).numDataset(10)

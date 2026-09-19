@@ -76,7 +76,8 @@ dispatch:
       main: python:3.9-slim # 对应 K8sJobFactory 中的 @Value("${dispatch.job.image.main}")
     curl:
       connect-timeout-seconds: 5
-      max-time-seconds: 600
+      # 4 GiB 验收文件在默认 2048k 限速下约需 2048 秒，需覆盖完整传输。
+      max-time-seconds: 2700
       retry-count: 3
       retry-delay-seconds: 2
       speed-limit-bytes: 1024
@@ -87,7 +88,7 @@ dispatch:
         n89-to-88: 3277k
         n89-to-90: 2048k
         n88-to-90: 4096k
-    active-deadline-seconds: 1800
+    active-deadline-seconds: 3600
     ttl-seconds-after-finished: 300
   central-node:
     # 新集群中心计算节点；运行时会通过 node_management.internal_ip 解析实际 K8s 节点名。
@@ -98,8 +99,6 @@ dispatch:
     port: 8080  # Pod 监听端口，与 containerPort 保持一致
     data-directory: /dataset  # 与 DaemonSet FILE_DISCOVERY_DATA_DIRECTORY 一致，用于 upload 路径剥离
   scheduler:
-    in-place-baseline-ms: 50      # 兜底值：文件大小为0时使用(ms)
-    in-place-rate: 6144k           # 原地调度模拟本地读取速率（按比例下调后约 6m）
     weight:
       networkLatency: 0.3          # 网络延迟惩罚权重
       bandwidth: 0.3               # 带宽奖励权重
@@ -143,15 +142,14 @@ app:
     verify-timeout-seconds: 3600
 
   orchestrator:
-    job-wait-timeout-minutes: 30
+    job-wait-timeout-minutes: 60
     job-max-retries: 1
     job-retry-backoff-seconds: 5
-    wait-for-processing-completion: false
     status-poll-interval-ms: 1000
 
   storage-transfer:
     connect-timeout-ms: 5000
-    read-timeout-ms: 600000
+    read-timeout-ms: 2700000
 
   node-sync:
     enabled: true   # 仅 practice-server 启用，heat-update-cronjob 不设此属性故默认 false
@@ -163,6 +161,41 @@ app:
     max-heat: 100
     half-life-hours: 24
     threshold: 10
+
+  heat-placement:
+    # Only successful, complete reads within this window influence placement.
+    consumption-lookback-hours: 24
+
+  # Acceptance identities are intentionally small and static for this phase.
+  # Every value can be replaced through the deployment environment before judge runs.
+  dataset-access:
+    enabled: ${APP_DATASET_ACCESS_ENABLED:true}
+    token-ttl-seconds: ${APP_DATASET_ACCESS_TOKEN_TTL_SECONDS:300}
+    hmac-secret: ${APP_DATASET_ACCESS_HMAC_SECRET:topic4-acceptance-hmac-secret-change-before-production}
+    credentials:
+      reviewer-a: ${APP_DATASET_ACCESS_REVIEWER_A_SECRET:topic4-reviewer-a-secret}
+      reviewer-b: ${APP_DATASET_ACCESS_REVIEWER_B_SECRET:topic4-reviewer-b-secret}
+    permissions:
+      reviewer-a:
+        - "READ:*"
+        - "VERIFY:*"
+      reviewer-b:
+        - "VERIFY:*"
+
+  secure-aggregation:
+    enabled: ${APP_SECURE_AGGREGATION_ENABLED:true}
+    connect-timeout-ms: ${APP_SECURE_AGGREGATION_CONNECT_TIMEOUT_MS:3000}
+    read-timeout-ms: ${APP_SECURE_AGGREGATION_READ_TIMEOUT_MS:10000}
+    participants:
+      - id: A
+        base-url: ${APP_SECURE_AGGREGATION_A_URL:http://10.212.14.88:8080}
+        auth-secret: ${APP_SECURE_AGGREGATION_WORKER_AUTH_SECRET:topic4-aggregation-worker-secret}
+      - id: B
+        base-url: ${APP_SECURE_AGGREGATION_B_URL:http://10.212.14.89:8080}
+        auth-secret: ${APP_SECURE_AGGREGATION_WORKER_AUTH_SECRET:topic4-aggregation-worker-secret}
+      - id: C
+        base-url: ${APP_SECURE_AGGREGATION_C_URL:http://10.212.14.90:8080}
+        auth-secret: ${APP_SECURE_AGGREGATION_WORKER_AUTH_SECRET:topic4-aggregation-worker-secret}
 
 # 禁用 Redis 健康检查（Redis 未实际使用，避免连接失败导致 /actuator/health 报 DOWN）
 management:

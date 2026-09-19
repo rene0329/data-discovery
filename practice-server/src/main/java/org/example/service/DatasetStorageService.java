@@ -8,12 +8,16 @@ import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
 import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
+import org.example.mapper.DatasetAccessEventMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.stream.Collectors;
+import org.example.access.DatasetConsumerStat;
 
 /** The original heat/capacity/proximity policy, applied to logical datasets and real replicas. */
 @Service
@@ -25,11 +29,15 @@ public class DatasetStorageService {
     private final DatasetReplicaAvailabilityService replicaAvailability;
     private final NetworkTopologyService topology;
     private final SchedulingService scheduling;
+    private final DatasetAccessEventMapper accessEvents;
+    private final int consumptionLookbackHours;
 
     public DatasetStorageService(DatasetRegistrationMapper datasets, NodeManagementMapper nodes,
             TaskManagementMapper tasks, NodeAvailabilityService nodeAvailability,
             DatasetReplicaAvailabilityService replicaAvailability, NetworkTopologyService topology,
-            SchedulingService scheduling) {
+            SchedulingService scheduling, DatasetAccessEventMapper accessEvents,
+            @org.springframework.beans.factory.annotation.Value("${app.heat-placement.consumption-lookback-hours:24}")
+            int consumptionLookbackHours) {
         this.datasets = datasets;
         this.nodes = nodes;
         this.tasks = tasks;
@@ -37,6 +45,8 @@ public class DatasetStorageService {
         this.replicaAvailability = replicaAvailability;
         this.topology = topology;
         this.scheduling = scheduling;
+        this.accessEvents = accessEvents;
+        this.consumptionLookbackHours = Math.max(1, consumptionLookbackHours);
     }
 
     public Map<String, Object> policy() {
@@ -109,6 +119,46 @@ public class DatasetStorageService {
             DatasetReplica source = usable.get(0);
             Set<Integer> occupied = usable.stream().map(DatasetReplica::getNodeId).collect(Collectors.toSet());
             Map<Integer, NetworkTopologyService.NetworkPath> paths = topology.pathsFrom(source.getNodeId());
+
+            // Low-heat data may release one redundant near-compute copy, but never its last usable replica.
+            // The executor repeats this invariant immediately before deleting the physical file.
+            int hotCount = Math.max(1, (active.size() + 1) / 2);
+            if (index >= hotCount) {
+                if (usable.size() > 1) {
+                    DatasetReplica removable = chooseRedundantReplica(usable, byId);
+                    if (removable != null) {
+                        NodeManagement node = byId.get(removable.getNodeId());
+                        add(result, dataset, removable, node, node, "DELETE", null,
+                                "低热数据清退冗余副本；仍保留 " + (usable.size() - 1) + " 个已验证副本");
+                    }
+                } else {
+                    result.getNotices().add(dataset.getName() + "：低热数据仅有一个已验证副本，保留不动");
+                }
+                continue;
+            }
+
+            DatasetConsumerStat consumer = preferredConsumer(dataset.getDatasetId());
+            if (consumer != null && index < hotCount) {
+                NodeManagement target = chooseForConsumer(storage, consumer.getConsumerNodeId(), occupied,
+                        paths, used);
+                if (target == null) {
+                    result.getNotices().add(dataset.getName() + "：消费位置附近无可达容量，保留当前副本");
+                } else if (occupied.contains(target.getNodeId())) {
+                    result.getNotices().add(dataset.getName() + "：消费节点 " + consumer.getConsumerNodeId()
+                            + " 附近已有可用副本，直接复用");
+                } else {
+                    DatasetReplica transferSource = chooseSourceForTarget(usable, target.getNodeId());
+                    if (transferSource == null) {
+                        result.getNotices().add(dataset.getName() + "：没有可到达消费位置目标的源副本");
+                    } else {
+                        NodeManagement from = byId.get(transferSource.getNodeId());
+                        add(result, dataset, transferSource, from, target, "COPY", consumer.getConsumerNodeId(),
+                                "近期实际读取 " + consumer.getAccessCount() + " 次，按消费位置、时延和带宽创建近端副本");
+                        reserve(target, dataset, used, heatLoad);
+                    }
+                }
+                continue;
+            }
             NodeManagement best = choose(storage, source, occupied, paths, used, heatLoad, totalHeat, proximity, true);
             if (best == null) {
                 result.getNotices().add(dataset.getName() + "：无可用路径或存储容量，跳过");
@@ -275,6 +325,11 @@ public class DatasetStorageService {
 
     private void add(DatasetStoragePlan result, RegisteredDataset dataset, DatasetReplica source,
             NodeManagement from, NodeManagement target, String action) {
+        add(result, dataset, source, from, target, action, null, null);
+    }
+
+    private void add(DatasetStoragePlan result, RegisteredDataset dataset, DatasetReplica source,
+            NodeManagement from, NodeManagement target, String action, Integer consumerNodeId, String reason) {
         SchedulingPlanRequest.Assignment assignment = new SchedulingPlanRequest.Assignment();
         assignment.setDatasetId(dataset.getDatasetId());
         assignment.setReplicaId(source.getReplicaId());
@@ -289,7 +344,52 @@ public class DatasetStorageService {
         row.setSourceNode(from.getNodeName());
         row.setTargetNode(target.getNodeName());
         row.setAction(action);
+        row.setConsumerNodeId(consumerNodeId);
+        row.setReason(reason);
         result.getPlacements().add(row);
+    }
+
+    private DatasetConsumerStat preferredConsumer(Long datasetId) {
+        List<DatasetConsumerStat> stats = accessEvents.recentConsumers(datasetId,
+                LocalDateTime.now(ZoneOffset.UTC).minusHours(consumptionLookbackHours));
+        return stats == null || stats.isEmpty() ? null : stats.get(0);
+    }
+
+    private NodeManagement chooseForConsumer(List<NodeManagement> storage, Integer consumerNodeId,
+            Set<Integer> occupied, Map<Integer, NetworkTopologyService.NetworkPath> sourcePaths,
+            Map<Integer, Integer> used) {
+        Map<Integer, NetworkTopologyService.NetworkPath> consumerPaths = topology.pathsFrom(consumerNodeId);
+        return storage.stream().filter(node -> consumerPaths.containsKey(node.getNodeId()))
+                .filter(node -> sourcePaths.containsKey(node.getNodeId()))
+                .filter(node -> {
+                    if (occupied.contains(node.getNodeId())) return true;
+                    int capacity = node.getNumDataset() == null ? 0 : node.getNumDataset();
+                    return capacity > used.getOrDefault(node.getNodeId(), 0);
+                })
+                .sorted(Comparator.comparingInt((NodeManagement node) ->
+                                node.getNodeId().equals(consumerNodeId) ? 0 : 1)
+                        .thenComparingDouble(node -> consumerPaths.get(node.getNodeId()).getLatencyMs())
+                        .thenComparing((NodeManagement node) ->
+                                -consumerPaths.get(node.getNodeId()).getBandwidthMbps())
+                        .thenComparing(NodeManagement::getNodeId))
+                .findFirst().orElse(null);
+    }
+
+    private DatasetReplica chooseSourceForTarget(List<DatasetReplica> usable, Integer targetNodeId) {
+        return usable.stream().filter(replica -> topology.pathsFrom(replica.getNodeId()).containsKey(targetNodeId))
+                .min(Comparator.comparingDouble((DatasetReplica replica) ->
+                                topology.pathsFrom(replica.getNodeId()).get(targetNodeId).getLatencyMs())
+                        .thenComparing(DatasetReplica::getReplicaId)).orElse(null);
+    }
+
+    private DatasetReplica chooseRedundantReplica(List<DatasetReplica> usable,
+                                                   Map<Integer, NodeManagement> nodesById) {
+        return usable.stream().filter(replica -> nodesById.containsKey(replica.getNodeId()))
+                .min(Comparator.comparingInt((DatasetReplica replica) -> {
+                            NodeManagement node = nodesById.get(replica.getNodeId());
+                            return "compute-storage".equalsIgnoreCase(node.getType()) ? 0 : 1;
+                        }).thenComparing(DatasetReplica::getReplicaId, Comparator.reverseOrder()))
+                .orElse(null);
     }
 
     private static double heat(RegisteredDataset dataset) {

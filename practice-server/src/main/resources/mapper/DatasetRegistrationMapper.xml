@@ -9,10 +9,12 @@
         <result property="fileName" column="file_name"/>
         <result property="fileType" column="file_type"/>
         <result property="sizeBytes" column="size_bytes"/>
+        <result property="checksumAlgorithm" column="checksum_algorithm"/>
         <result property="checksum" column="checksum"/>
         <result property="metadataJson" column="metadata_json"/>
         <result property="lastModifiedAt" column="last_modified_at"/>
         <result property="availability" column="availability"/>
+        <result property="verifiedAt" column="verified_at"/>
         <result property="registeredDatasetId" column="registered_dataset_id"/>
         <result property="lastSeenAt" column="last_seen_at"/>
         <result property="createdAt" column="created_at"/>
@@ -48,6 +50,7 @@
     <resultMap id="DatasetMetadataMap" type="org.example.entity.DatasetMetadata">
         <id property="datasetId" column="dataset_id"/>
         <result property="metadataVersion" column="metadata_version"/>
+        <result property="authoritativeSizeBytes" column="authoritative_size_bytes"/>
         <result property="digestAlgorithm" column="digest_algorithm"/>
         <result property="digestValue" column="digest_value"/>
         <result property="schemaJson" column="schema_json"/>
@@ -63,8 +66,10 @@
         <result property="nodeId" column="node_id"/>
         <result property="filePath" column="file_path"/>
         <result property="sizeBytes" column="size_bytes"/>
+        <result property="checksumAlgorithm" column="checksum_algorithm"/>
         <result property="checksum" column="checksum"/>
         <result property="availability" column="availability"/>
+        <result property="verificationMessage" column="verification_message"/>
         <result property="lastSeenAt" column="last_seen_at"/>
         <result property="verifiedAt" column="verified_at"/>
         <result property="createdAt" column="created_at"/>
@@ -74,20 +79,34 @@
     <insert id="upsertCandidate" parameterType="org.example.entity.DatasetDiscoveryCandidate"
             useGeneratedKeys="true" keyProperty="candidateId">
         INSERT INTO dataset_discovery_candidate (
-            node_id, file_path, file_name, file_type, size_bytes, checksum, metadata_json,
-            last_modified_at, availability, registered_dataset_id, last_seen_at
+            node_id, file_path, file_name, file_type, size_bytes, checksum_algorithm, checksum, metadata_json,
+            last_modified_at, availability, verified_at, registered_dataset_id, last_seen_at
         ) VALUES (
-            #{nodeId}, #{filePath}, #{fileName}, #{fileType}, #{sizeBytes}, #{checksum}, #{metadataJson},
-            #{lastModifiedAt}, #{availability},
+            #{nodeId}, #{filePath}, #{fileName}, #{fileType}, #{sizeBytes}, #{checksumAlgorithm}, #{checksum}, #{metadataJson},
+            #{lastModifiedAt}, #{availability}, #{verifiedAt},
             (SELECT r.dataset_id FROM dataset_replica r
              WHERE r.node_id = #{nodeId} AND r.file_path = #{filePath} LIMIT 1),
             #{lastSeenAt}
         )
         ON DUPLICATE KEY UPDATE
             file_name = VALUES(file_name), file_type = VALUES(file_type),
-            size_bytes = VALUES(size_bytes), checksum = VALUES(checksum),
+            checksum_algorithm = CASE
+                WHEN size_bytes = VALUES(size_bytes) AND (last_modified_at &lt;=&gt; VALUES(last_modified_at))
+                THEN checksum_algorithm ELSE NULL END,
+            checksum = CASE
+                WHEN size_bytes = VALUES(size_bytes) AND (last_modified_at &lt;=&gt; VALUES(last_modified_at))
+                THEN checksum ELSE NULL END,
+            verified_at = CASE
+                WHEN size_bytes = VALUES(size_bytes) AND (last_modified_at &lt;=&gt; VALUES(last_modified_at))
+                THEN verified_at ELSE NULL END,
+            availability = CASE
+                WHEN size_bytes = VALUES(size_bytes) AND (last_modified_at &lt;=&gt; VALUES(last_modified_at))
+                    AND checksum_algorithm = 'SHA-256' AND checksum IS NOT NULL
+                    AND availability != 'MISSING'
+                THEN availability ELSE 'UNVERIFIED' END,
+            size_bytes = VALUES(size_bytes),
             metadata_json = VALUES(metadata_json),
-            last_modified_at = VALUES(last_modified_at), availability = VALUES(availability),
+            last_modified_at = VALUES(last_modified_at),
             registered_dataset_id = COALESCE(registered_dataset_id, VALUES(registered_dataset_id)),
             last_seen_at = VALUES(last_seen_at)
     </insert>
@@ -121,6 +140,15 @@
     <update id="markCandidateAvailability">
         UPDATE dataset_discovery_candidate
         SET availability = #{availability}, updated_at = UTC_TIMESTAMP(3)
+        WHERE node_id = #{nodeId} AND file_path = #{filePath}
+    </update>
+
+    <update id="updateCandidateIntegrity">
+        UPDATE dataset_discovery_candidate
+        SET size_bytes = #{sizeBytes}, checksum_algorithm = #{checksumAlgorithm}, checksum = #{checksum},
+            availability = #{availability},
+            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>NULL</otherwise></choose>,
+            updated_at = UTC_TIMESTAMP(3)
         WHERE node_id = #{nodeId} AND file_path = #{filePath}
     </update>
 
@@ -273,10 +301,11 @@
     <insert id="insertReplica" parameterType="org.example.entity.DatasetReplica"
             useGeneratedKeys="true" keyProperty="replicaId">
         INSERT INTO dataset_replica (
-            dataset_id, node_id, file_path, size_bytes, checksum, availability, last_seen_at, verified_at
+            dataset_id, node_id, file_path, size_bytes, checksum_algorithm, checksum,
+            availability, verification_message, last_seen_at, verified_at
         ) VALUES (
-            #{datasetId}, #{nodeId}, #{filePath}, #{sizeBytes}, #{checksum}, #{availability},
-            #{lastSeenAt}, #{verifiedAt}
+            #{datasetId}, #{nodeId}, #{filePath}, #{sizeBytes}, #{checksumAlgorithm}, #{checksum},
+            #{availability}, #{verificationMessage}, #{lastSeenAt}, #{verifiedAt}
         )
     </insert>
 
@@ -302,27 +331,40 @@
     <update id="updateReplicaAvailability">
         UPDATE dataset_replica
         SET availability = #{availability},
-            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>verified_at</otherwise></choose>
+            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>NULL</otherwise></choose>
+        WHERE replica_id = #{replicaId}
+    </update>
+
+    <update id="updateReplicaIntegrity">
+        UPDATE dataset_replica
+        SET size_bytes = #{sizeBytes}, checksum_algorithm = #{checksumAlgorithm}, checksum = #{checksum},
+            availability = #{availability}, verification_message = #{verificationMessage},
+            verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>NULL</otherwise></choose>,
+            updated_at = UTC_TIMESTAMP(3)
         WHERE replica_id = #{replicaId}
     </update>
 
     <select id="countAvailableReplicas" resultType="int">
         SELECT COUNT(*) FROM dataset_replica
         WHERE dataset_id = #{datasetId} AND availability = 'AVAILABLE'
+          AND UPPER(checksum_algorithm) = 'SHA-256'
+          AND checksum REGEXP '^[0-9A-Fa-f]{64}$'
+          AND verified_at IS NOT NULL
     </select>
 
     <insert id="upsertDatasetMetadata" parameterType="org.example.entity.DatasetMetadata">
         INSERT INTO dataset_metadata (
-            dataset_id, metadata_version, digest_algorithm, digest_value,
+            dataset_id, metadata_version, authoritative_size_bytes, digest_algorithm, digest_value,
             schema_json, profile_json, source_json, scheduling_hints_json, labels_json
         ) VALUES (
-            #{datasetId}, #{metadataVersion}, #{digestAlgorithm}, #{digestValue},
+            #{datasetId}, #{metadataVersion}, #{authoritativeSizeBytes}, #{digestAlgorithm}, #{digestValue},
             #{schemaJson}, #{profileJson}, #{sourceJson}, #{schedulingHintsJson}, #{labelsJson}
         )
         ON DUPLICATE KEY UPDATE
             metadata_version = VALUES(metadata_version),
-            digest_algorithm = VALUES(digest_algorithm),
-            digest_value = VALUES(digest_value),
+            authoritative_size_bytes = COALESCE(authoritative_size_bytes, VALUES(authoritative_size_bytes)),
+            digest_algorithm = COALESCE(NULLIF(digest_algorithm, ''), VALUES(digest_algorithm)),
+            digest_value = COALESCE(NULLIF(digest_value, ''), VALUES(digest_value)),
             schema_json = VALUES(schema_json),
             profile_json = VALUES(profile_json),
             source_json = VALUES(source_json),
@@ -333,4 +375,13 @@
     <select id="findDatasetMetadata" resultMap="DatasetMetadataMap">
         SELECT * FROM dataset_metadata WHERE dataset_id = #{datasetId}
     </select>
+
+    <update id="setDatasetAuthority">
+        UPDATE dataset_metadata
+        SET authoritative_size_bytes = #{authoritativeSizeBytes},
+            digest_algorithm = #{digestAlgorithm}, digest_value = #{digestValue},
+            updated_at = UTC_TIMESTAMP(3)
+        WHERE dataset_id = #{datasetId}
+          AND (digest_value IS NULL OR digest_value = '')
+    </update>
 </mapper>

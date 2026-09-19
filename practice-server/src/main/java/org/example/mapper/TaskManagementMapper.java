@@ -3,6 +3,7 @@ package org.example.mapper;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
+import org.example.entity.TaskExecutionEvent;
 import org.example.entity.TaskManagement;
 
 import java.util.List;
@@ -40,6 +41,15 @@ public interface TaskManagementMapper {
 
     Integer updateTask(TaskManagement taskManagement);
 
+    Integer updateExecutionSummary(TaskManagement taskManagement);
+
+    int insertExecutionEvent(TaskExecutionEvent event);
+
+    List<TaskExecutionEvent> listExecutionEvents(@Param("taskId") Integer taskId);
+
+    List<TaskManagement> listByAcceptanceRun(@Param("acceptanceRunId") String acceptanceRunId,
+                                             @Param("runRound") Integer runRound);
+
 
     // 删除所有任务
     void deleteAllTasks();
@@ -54,7 +64,7 @@ public interface TaskManagementMapper {
     // 调度展示：返回有 schedule 内容的任务
     List<TaskManagement> listWithSchedule(String query);
 
-    // 性能分析：返回有 T1/T2/rating 数据的任务
+    // 性能分析：仅返回实际执行了两条可比较调度路径的任务
     List<TaskManagement> listWithAnalysis(String query);
 
     // 仅统计未结束任务；已完成、失败和部分完成的历史记录不影响存储策略切换。

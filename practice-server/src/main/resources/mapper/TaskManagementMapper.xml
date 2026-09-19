@@ -7,11 +7,17 @@
     <insert id="submitData" useGeneratedKeys="true" keyProperty="taskId">
         insert into task_management (
             task_name, selected_data, dataset_ids_json, runtime_image_id, resource_overrides_json,
-            status, create_time, T1, T2, rating, schedule
+            execution_mode, acceptance_run_id, run_round,
+            status, create_time, T1, T2, rating, schedule,
+            data_preparation_ms, compute_duration_ms, execution_evidence_complete,
+            started_at, finished_at
         )
         values (
             #{taskName}, #{selectedData}, #{datasetIdsJson}, #{runtimeImageId}, #{resourceOverridesJson},
-            #{status}, #{createTime}, #{T1}, #{T2}, #{rating}, #{schedule}
+            #{executionMode}, #{acceptanceRunId}, #{runRound},
+            #{status}, #{createTime}, #{T1}, #{T2}, #{rating}, #{schedule},
+            #{dataPreparationMs}, #{computeDurationMs}, COALESCE(#{executionEvidenceComplete}, 0),
+            #{startedAt}, #{finishedAt}
         )
     </insert>
     <select id="list" resultType="org.example.entity.TaskManagement">
@@ -47,7 +53,7 @@
     </select>
 
     <!-- 通过 TaskId 获取 Task 对象 -->
-    <select id="getTaskByTaskId" resultType="TaskManagement" parameterType="int">
+    <select id="getTaskByTaskId" resultType="org.example.entity.TaskManagement" parameterType="int">
         SELECT *
         FROM task_management
         WHERE task_id = #{taskId}
@@ -98,7 +104,7 @@
         AND target_id = #{targetId}
     </select>
 
-    <update id="updateTask" parameterType="TaskManagement">
+    <update id="updateTask" parameterType="org.example.entity.TaskManagement">
         UPDATE task_management
         SET
         <if test="taskName != null">
@@ -108,10 +114,58 @@
         T2 = #{T2},
         rating = #{rating},
         schedule = #{schedule},
-        status = #{status}
+        status = #{status},
+        data_preparation_ms = COALESCE(#{dataPreparationMs}, data_preparation_ms),
+        compute_duration_ms = COALESCE(#{computeDurationMs}, compute_duration_ms),
+        execution_evidence_complete = COALESCE(#{executionEvidenceComplete}, execution_evidence_complete),
+        started_at = COALESCE(#{startedAt}, started_at),
+        finished_at = COALESCE(#{finishedAt}, finished_at)
 <!--        update_time = NOW()-->
         WHERE task_id = #{taskId}
     </update>
+
+    <update id="updateExecutionSummary" parameterType="org.example.entity.TaskManagement">
+        UPDATE task_management
+        <set>
+            <if test="status != null">status = #{status},</if>
+            <if test="schedule != null">schedule = #{schedule},</if>
+            <if test="dataPreparationMs != null">data_preparation_ms = #{dataPreparationMs},</if>
+            <if test="computeDurationMs != null">compute_duration_ms = #{computeDurationMs},</if>
+            <if test="executionEvidenceComplete != null">execution_evidence_complete = #{executionEvidenceComplete},</if>
+            <if test="startedAt != null">started_at = #{startedAt},</if>
+            <if test="finishedAt != null">finished_at = #{finishedAt},</if>
+            task_id = task_id
+        </set>
+        WHERE task_id = #{taskId}
+    </update>
+
+    <insert id="insertExecutionEvent" parameterType="org.example.entity.TaskExecutionEvent"
+            useGeneratedKeys="true" keyProperty="eventId">
+        INSERT INTO task_execution_event (
+            task_id, dataset_id, execution_mode, event_type, occurred_at,
+            job_name, pod_name, node_name, input_path, bytes_processed,
+            checksum_sha256, duration_ms, output_summary, output_checksum_sha256,
+            attempt, details_json
+        ) VALUES (
+            #{taskId}, #{datasetId}, #{executionMode}, #{eventType}, #{occurredAt},
+            #{jobName}, #{podName}, #{nodeName}, #{inputPath}, #{bytesProcessed},
+            #{checksumSha256}, #{durationMs}, #{outputSummary}, #{outputChecksumSha256},
+            #{attempt}, #{detailsJson}
+        )
+    </insert>
+
+    <select id="listExecutionEvents" resultType="org.example.entity.TaskExecutionEvent">
+        SELECT * FROM task_execution_event
+        WHERE task_id = #{taskId}
+        ORDER BY occurred_at ASC, event_id ASC
+    </select>
+
+    <select id="listByAcceptanceRun" resultType="org.example.entity.TaskManagement">
+        SELECT * FROM task_management
+        WHERE acceptance_run_id = #{acceptanceRunId}
+          AND run_round = #{runRound}
+        ORDER BY create_time DESC, task_id DESC
+    </select>
 
     <delete id="deleteAllTasks">
         DELETE FROM task_management;
@@ -131,12 +185,18 @@
     </select>
 
     <select id="listWithAnalysis" resultType="org.example.entity.TaskManagement">
-        SELECT * FROM task_management
-        WHERE T1 IS NOT NULL AND T2 IS NOT NULL AND rating IS NOT NULL
+        SELECT tm.* FROM task_management tm
+        WHERE tm.T1 IS NOT NULL AND tm.T2 IS NOT NULL AND tm.rating IS NOT NULL
+        <!-- 兼容过滤历史单路径记录：它们曾将同一次耗时同时写入 T1/T2。 -->
+        AND (
+            tm.schedule IS NULL
+            OR LOCATE('中心化调度方案:', tm.schedule) = 0
+            OR TRIM(SUBSTRING_INDEX(tm.schedule, '中心化调度方案:', -1)) != ''
+        )
         <if test="query != null and query != ''">
-            AND task_name LIKE CONCAT('%', #{query}, '%')
+            AND tm.task_name LIKE CONCAT('%', #{query}, '%')
         </if>
-        ORDER BY create_time ASC
+        ORDER BY tm.create_time ASC
     </select>
 
 </mapper>

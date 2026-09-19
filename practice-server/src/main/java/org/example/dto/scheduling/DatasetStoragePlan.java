@@ -22,6 +22,8 @@ public class DatasetStoragePlan {
         private String sourceNode;
         private String targetNode;
         private String action;
+        private Integer consumerNodeId;
+        private String reason;
     }
 
     @Data

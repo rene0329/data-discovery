@@ -15,9 +15,11 @@ import org.example.entity.MigrationTask;
 import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
 import org.example.entity.DatasetReplica;
+import org.example.entity.DatasetMetadata;
 import org.example.entity.RuntimeImage;
 import org.example.entity.SchedulingAssignment;
 import org.example.entity.TaskManagement;
+import org.example.entity.TaskExecutionEvent;
 import org.example.factory.JobCreationResult;
 import org.example.factory.K8sJobFactory;
 import org.example.mapper.DataManagementMapper;
@@ -29,6 +31,11 @@ import org.example.mapper.TaskManagementMapper;
 import org.example.mapper.SchedulingPlanMapper;
 import org.example.vo.DataItemResult;
 import org.example.dto.registration.ResourceRequirements;
+import org.example.model.FileIntegrityResult;
+import org.example.security.access.AccessAuditContext;
+import org.example.security.access.AccessAuthorizationResult;
+import org.example.security.access.AccessScope;
+import org.example.security.access.DatasetAccessAuthorizationService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,6 +45,9 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -73,17 +83,10 @@ public class K8sTaskOrchestratorService {
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     private final SchedulingPlanMapper schedulingPlanMapper;
     private final DatasetUploadClient datasetUploadClient;
+    private final DatasetAccessAuthorizationService accessAuthorizationService;
 
     private final NetworkTopologyService networkTopologyService;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
-
-    /** 当亲和性调度的目标节点就是数据所在源节点时，跳过实际 Job 直接返回此基础时间(ms)，当文件大小为0时兜底使用。*/
-    @Value("${dispatch.scheduler.in-place-baseline-ms:50}")
-    private long inPlaceBaselineMs;
-
-    /** 原地调度场景下模拟本地磁盘读取速率，用于按文件大小估算原地传输时间，使加速比更合理。*/
-    @Value("${dispatch.scheduler.in-place-rate:100m}")
-    private String inPlaceRate;
 
     /** 等待单个 K8s Job 完成的超时时间（分钟）。 */
     @Value("${app.orchestrator.job-wait-timeout-minutes:30}")
@@ -96,13 +99,6 @@ public class K8sTaskOrchestratorService {
     /** 重试前的退避时间（秒）。 */
     @Value("${app.orchestrator.job-retry-backoff-seconds:5}")
     private long jobRetryBackoffSeconds;
-
-    /**
-     * 传输计时与训练完成解耦。默认在 init container 成功后立即返回测量值，
-     * 训练 Job 继续运行并由 ttlSecondsAfterFinished 自动清理。
-     */
-    @Value("${app.orchestrator.wait-for-processing-completion:false}")
-    private boolean waitForProcessingCompletion;
 
     @Value("${app.orchestrator.status-poll-interval-ms:1000}")
     private long statusPollIntervalMs;
@@ -124,7 +120,8 @@ public class K8sTaskOrchestratorService {
             DatasetReplicaAvailabilityService replicaAvailabilityService,
             SchedulingPlanMapper schedulingPlanMapper,
             DatasetUploadClient datasetUploadClient,
-            NetworkTopologyService networkTopologyService
+            NetworkTopologyService networkTopologyService,
+            DatasetAccessAuthorizationService accessAuthorizationService
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -141,6 +138,7 @@ public class K8sTaskOrchestratorService {
         this.schedulingPlanMapper = schedulingPlanMapper;
         this.datasetUploadClient = datasetUploadClient;
         this.networkTopologyService = networkTopologyService;
+        this.accessAuthorizationService = accessAuthorizationService;
     }
 
 
@@ -189,12 +187,21 @@ public class K8sTaskOrchestratorService {
     @Async
     public void executeRegisteredTask(Integer taskId, List<Long> datasetIds,
                                       Long explicitRuntimeImageId,
-                                      ResourceRequirements overrides) {
-        log.info("注册资源任务 {} 开始执行，datasetIds={}", taskId, datasetIds);
+                                      ResourceRequirements overrides,
+                                      String executionMode) {
+        final String normalizedMode = normalizeExecutionMode(executionMode);
+        log.info("注册资源任务 {} 开始执行，mode={}, datasetIds={}", taskId, normalizedMode, datasetIds);
+        TaskManagement running = new TaskManagement();
+        running.setTaskId(taskId);
+        running.setStatus("执行中");
+        running.setStartedAt(LocalDateTime.now(ZoneOffset.UTC));
+        running.setExecutionEvidenceComplete(false);
+        taskManagementMapper.updateExecutionSummary(running);
         try {
             List<CompletableFuture<DataItemResult>> futures = datasetIds.stream()
                     .map(datasetId -> CompletableFuture.supplyAsync(
-                            () -> processRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId, overrides),
+                            () -> processRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
+                                    overrides, normalizedMode),
                             dataProcessingExecutor).exceptionally(ex -> {
                         log.error("注册数据集 {} 处理失败: {}", datasetId, ex.getMessage());
                         return null;
@@ -202,21 +209,16 @@ public class K8sTaskOrchestratorService {
                     .collect(Collectors.toList());
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
-            List<String> scheduleT1List = new ArrayList<>();
-            List<String> scheduleT2List = new ArrayList<>();
-            double totalT1 = 0.0;
-            double totalT2 = 0.0;
+            List<String> schedules = new ArrayList<>();
+            List<DataItemResult> successful = new ArrayList<>();
             for (CompletableFuture<DataItemResult> future : futures) {
                 DataItemResult result = future.get();
                 if (result != null) {
-                    scheduleT1List.add(result.getScheduleT1());
-                    scheduleT2List.add(result.getScheduleT2());
-                    totalT1 += result.getT1Seconds();
-                    totalT2 += result.getT2Seconds();
+                    schedules.add(result.getScheduleT1());
+                    successful.add(result);
                 }
             }
-            updateFinalTaskStatus(taskId, totalT1, totalT2, scheduleT1List, scheduleT2List,
-                    scheduleT1List.size(), datasetIds.size());
+            updateRegisteredTaskStatus(taskId, normalizedMode, schedules, successful, datasetIds.size());
         } catch (Exception e) {
             log.error("注册资源任务 {} 执行失败", taskId, e);
             updateTaskStatusToFailed(taskId, e.getMessage());
@@ -282,11 +284,15 @@ public class K8sTaskOrchestratorService {
         // Recheck after queuing and before copying: a previously accepted path may have failed.
         networkTopologyService.requirePath(sourceNode.getNodeId(), targetNode.getNodeId());
         NodeManagement executionSource = sourceNode;
+        Long executionSize = replica.getSizeBytes();
+        String executionChecksumAlgorithm = replica.getChecksumAlgorithm();
+        String executionChecksum = replica.getChecksum();
         if (("COPY_AND_USE".equals(assignment.getAction())
                 || "MOVE_AND_USE".equals(assignment.getAction()))
                 && !sourceNode.getNodeId().equals(targetNode.getNodeId())) {
-            datasetUploadClient.copyFrom(sourceNode, targetNode, replica.getFilePath(), replica.getSizeBytes());
-            datasetUploadClient.scan(targetNode);
+            DatasetMetadata metadata = datasetRegistrationMapper.findDatasetMetadata(dataset.getDatasetId());
+            Long authoritativeSize = requireAuthoritativeSize(metadata);
+            String authoritativeSha256 = requireAuthoritativeSha256(metadata);
             DatasetReplica targetReplica = datasetRegistrationMapper.findReplicaByDatasetNodePath(
                     dataset.getDatasetId(), targetNode.getNodeId(), replica.getFilePath());
             if (targetReplica == null) {
@@ -294,17 +300,46 @@ public class K8sTaskOrchestratorService {
                         .datasetId(dataset.getDatasetId())
                         .nodeId(targetNode.getNodeId())
                         .filePath(replica.getFilePath())
-                        .sizeBytes(replica.getSizeBytes())
-                        .checksum(replica.getChecksum())
-                        .availability("AVAILABLE")
-                        .lastSeenAt(LocalDateTime.now())
-                        .verifiedAt(LocalDateTime.now())
+                        .sizeBytes(authoritativeSize)
+                        .availability("VERIFYING")
+                        .verificationMessage("external plan copy in progress")
+                        .lastSeenAt(LocalDateTime.now(ZoneOffset.UTC))
                         .build();
                 datasetRegistrationMapper.insertReplica(targetReplica);
+            } else {
+                datasetRegistrationMapper.updateReplicaAvailability(
+                        targetReplica.getReplicaId(), "VERIFYING", false);
             }
+            String copyRequestId = "task-" + taskId + "-assignment-" + assignment.getAssignmentId();
+            String acceptanceRunId = task == null ? null : task.getAcceptanceRunId();
+            FileIntegrityResult copied = datasetUploadClient.copyFrom(
+                    sourceNode, targetNode, replica.getFilePath(), authoritativeSize,
+                    authoritativeSha256, dataset.getDatasetId(), dataset.getDatasetVersion(),
+                    copyRequestId, acceptanceRunId);
+            if (!matchesAuthority(copied, authoritativeSize, authoritativeSha256)) {
+                if (copied == null) {
+                    datasetRegistrationMapper.updateReplicaAvailability(
+                            targetReplica.getReplicaId(), "VERIFY_FAILED", false);
+                } else {
+                    datasetRegistrationMapper.updateReplicaIntegrity(targetReplica.getReplicaId(),
+                            copied.getSizeBytes(), copied.getAlgorithm(), copied.getDigest(),
+                            "VERIFY_FAILED", "external plan copy does not match dataset-version authority", false);
+                }
+                throw new IllegalStateException("复制后的副本未通过数据集版本 SHA-256 校验");
+            }
+            datasetUploadClient.scan(targetNode);
+            datasetRegistrationMapper.updateCandidateIntegrity(targetNode.getNodeId(), replica.getFilePath(),
+                    copied.getSizeBytes(), "SHA-256", copied.getDigest(), "AVAILABLE", true);
+            datasetRegistrationMapper.updateReplicaIntegrity(targetReplica.getReplicaId(),
+                    copied.getSizeBytes(), "SHA-256", copied.getDigest(), "AVAILABLE",
+                    "verified against dataset-version authority", true);
             executionSource = targetNode;
+            executionSize = copied.getSizeBytes();
+            executionChecksumAlgorithm = "SHA-256";
+            executionChecksum = copied.getDigest();
             if ("MOVE_AND_USE".equals(assignment.getAction())) {
-                datasetUploadClient.deleteQuietly(sourceNode, replica.getFilePath());
+                datasetUploadClient.delete(sourceNode, replica.getFilePath(), dataset.getDatasetId(),
+                        dataset.getDatasetVersion(), copyRequestId, acceptanceRunId);
                 datasetRegistrationMapper.updateReplicaAvailability(
                         replica.getReplicaId(), "MISSING", false);
             }
@@ -316,12 +351,15 @@ public class K8sTaskOrchestratorService {
         DataManagement dataInfo = DataManagement.builder()
                 .dataId(dataset.getLegacyDataId())
                 .dataName(fileName)
-                .dataSize(replica.getSizeBytes())
+                .dataSize(executionSize)
                 .dataServer(executionSource.getNodeName())
                 .dataNodeId(executionSource.getNodeId())
                 .filePath(replica.getFilePath())
                 .requiredCpu(dataset.getRequiredCpu())
                 .requiredMemory(dataset.getRequiredMemoryGi())
+                .contentChecksumAlgorithm(executionChecksumAlgorithm)
+                .contentChecksum(executionChecksum)
+                .datasetVersion(dataset.getDatasetVersion())
                 .build();
         AtomicReference<String> selectedNode = new AtomicReference<>(targetNode.getNodeName());
         long durationMs = executeJobAndMeasureInitContainer(
@@ -355,10 +393,8 @@ public class K8sTaskOrchestratorService {
         String resolvedCentralNodeName = resolveCentralNodeName();
         AtomicReference<String> affinityNodeOut = new AtomicReference<>(sourceNodeName);
         AtomicReference<String> centralNodeOut  = new AtomicReference<>(resolvedCentralNodeName);
-        // 亲和性方案用于和固定中心方案做对照：只要存在其他可用计算节点，
-        // 就不要让亲和性调度再次选中中心节点，否则两组实验会退化为同一条路径。
         long t1_ms = executeJobAndMeasureInitContainer(
-                taskId, "affinity", sourceNodeInfo, null, resolvedCentralNodeName, dataInfo,
+                taskId, "affinity", sourceNodeInfo, null, null, dataInfo,
                 null, null, null, affinityNodeOut);
         long t2_ms = executeJobAndMeasureInitContainer(
                 taskId, "central", sourceNodeInfo, resolvedCentralNodeName, null, dataInfo,
@@ -382,7 +418,8 @@ public class K8sTaskOrchestratorService {
 
     private DataItemResult processRegisteredDataItem(Integer taskId, Long datasetId,
                                                      Long explicitRuntimeImageId,
-                                                     ResourceRequirements overrides) {
+                                                     ResourceRequirements overrides,
+                                                     String executionMode) {
         RegisteredDataset dataset = datasetRegistrationMapper.findDatasetById(datasetId);
         if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
             throw new IllegalStateException("数据集不存在或不再处于 ACTIVE: " + datasetId);
@@ -392,15 +429,36 @@ public class K8sTaskOrchestratorService {
                 .collect(Collectors.toList());
         List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
         Set<Integer> computeNodeIds = computeNodes == null ? Collections.emptySet() : computeNodes.stream()
-                .map(NodeManagement::getNodeId)
-                .collect(Collectors.toSet());
-        DatasetReplica replica = selectPreferredSourceReplica(usableReplicas, computeNodeIds)
-                .orElseThrow(() -> new IllegalStateException("数据集没有位于活动节点上的可用副本: " + datasetId));
+                .map(NodeManagement::getNodeId).collect(Collectors.toSet());
+        String targetNodeName;
+        DatasetReplica replica;
+        if (TaskV1Service.MODE_IN_PLACE.equals(executionMode)) {
+            replica = usableReplicas.stream()
+                    .filter(item -> computeNodeIds.contains(item.getNodeId()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "数据集没有位于可用计算节点上的原位副本: " + datasetId));
+            NodeManagement inPlaceNode = nodeManagementMapper.getNodeById(replica.getNodeId());
+            if (inPlaceNode == null) throw new IllegalStateException("原位副本节点不存在: " + replica.getNodeId());
+            targetNodeName = inPlaceNode.getNodeName();
+        } else {
+            targetNodeName = resolveCentralNodeName();
+            NodeManagement central = nodeManagementMapper.getNodeByName(targetNodeName);
+            if (central == null) throw new IllegalStateException("中心计算节点不存在: " + targetNodeName);
+            replica = usableReplicas.stream()
+                    .sorted((left, right) -> Boolean.compare(
+                            !central.getNodeId().equals(left.getNodeId()),
+                            !central.getNodeId().equals(right.getNodeId())))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException("数据集没有位于活动节点上的可用副本: " + datasetId));
+        }
         NodeManagement sourceNode = nodeManagementMapper.getNodeById(replica.getNodeId());
+        if (sourceNode == null) throw new IllegalStateException("副本源节点不存在: " + replica.getNodeId());
         Long imageId = explicitRuntimeImageId != null
                 ? explicitRuntimeImageId : dataset.getDefaultRuntimeImageId();
         RuntimeImage image = runtimeImageMapper.findById(imageId);
-        if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())) {
+        if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())
+                || image.getResolvedDigest() == null || image.getResolvedDigest().trim().isEmpty()) {
             throw new IllegalStateException("运行镜像不可用于调度: " + imageId);
         }
         image.setCommand(readStringList(image.getCommandJson()));
@@ -421,26 +479,37 @@ public class K8sTaskOrchestratorService {
                         ? overrides.getCpu() : dataset.getRequiredCpu())
                 .requiredMemory(overrides != null && overrides.getMemoryGi() != null
                         ? overrides.getMemoryGi() : dataset.getRequiredMemoryGi())
+                .contentChecksumAlgorithm(replica.getChecksumAlgorithm())
+                .contentChecksum(replica.getChecksum())
+                .datasetVersion(dataset.getDatasetVersion())
                 .build();
 
-        String centralNode = resolveCentralNodeName();
-        AtomicReference<String> affinityNodeOut = new AtomicReference<>(sourceNode.getNodeName());
-        AtomicReference<String> centralNodeOut = new AtomicReference<>(centralNode);
+        AtomicReference<String> selectedNodeOut = new AtomicReference<>(targetNodeName);
+        AtomicReference<JobExecutionEvidence> evidenceOut = new AtomicReference<>();
         Double gpu = overrides != null && overrides.getGpu() != null
                 ? overrides.getGpu() : dataset.getRequiredGpu();
-        long t1Ms = executeJobAndMeasureInitContainer(taskId, "affinity", sourceNode, null,
-                centralNode, dataInfo, datasetId, image, gpu, affinityNodeOut);
-        long t2Ms = executeJobAndMeasureInitContainer(taskId, "central", sourceNode, centralNode,
-                null, dataInfo, datasetId, image, gpu, centralNodeOut);
-        if (t1Ms == -1 || t2Ms == -1) return null;
+        String jobType = TaskV1Service.MODE_IN_PLACE.equals(executionMode) ? "in-place" : "centralized";
+        long preparationMs = executeJobAndMeasureInitContainer(taskId, jobType, sourceNode,
+                targetNodeName, null, dataInfo, datasetId, image, gpu, selectedNodeOut, evidenceOut);
+        if (preparationMs < 0 || evidenceOut.get() == null) return null;
+        JobExecutionEvidence evidence = evidenceOut.get();
+        if (!targetNodeName.equals(evidence.nodeName)) {
+            throw new IllegalStateException("Job 实际节点与指定模式不一致: expected="
+                    + targetNodeName + ", actual=" + evidence.nodeName);
+        }
 
         DataItemResult result = new DataItemResult();
-        result.setT1Seconds(t1Ms / 1000.0);
-        result.setT2Seconds(t2Ms / 1000.0);
+        result.setT1Seconds(preparationMs / 1000.0);
         result.setScheduleT1(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
-                + " -> " + affinityNodeOut.get());
-        result.setScheduleT2(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
-                + " -> " + centralNodeOut.get());
+                + " -> " + selectedNodeOut.get() + " [" + executionMode + "]");
+        result.setPreparationStartedAt(evidence.preparationStartedAt);
+        result.setPreparationReadyAt(evidence.preparationReadyAt);
+        result.setComputeStartedAt(evidence.computeStartedAt);
+        result.setComputeFinishedAt(evidence.computeFinishedAt);
+        result.setActualNodeName(evidence.nodeName);
+        result.setInputBytes(evidence.inputBytes);
+        result.setInputChecksumSha256(evidence.inputChecksumSha256);
+        result.setOutputChecksumSha256(evidence.outputChecksumSha256);
         return result;
     }
 
@@ -526,6 +595,22 @@ public class K8sTaskOrchestratorService {
                                                    RuntimeImage runtimeImage,
                                                    Double gpuRequest,
                                                    AtomicReference<String> selectedNodeOut) {
+        return executeJobAndMeasureInitContainer(taskId, type, sourceNodeInfo, targetNode,
+                excludedTargetNode, dataInfo, registeredDatasetId, runtimeImage, gpuRequest,
+                selectedNodeOut, null);
+    }
+
+    private long executeJobAndMeasureInitContainer(Integer taskId,
+                                                   String type,
+                                                   NodeManagement sourceNodeInfo,
+                                                   String targetNode,
+                                                   String excludedTargetNode,
+                                                   DataManagement dataInfo,
+                                                   Long registeredDatasetId,
+                                                   RuntimeImage runtimeImage,
+                                                   Double gpuRequest,
+                                                   AtomicReference<String> selectedNodeOut,
+                                                   AtomicReference<JobExecutionEvidence> evidenceOut) {
         String dataNameForJob = dataInfo.getDataName() == null
                 ? "dataset"
                 : dataInfo.getDataName().toLowerCase().replace("_", "-");
@@ -540,9 +625,13 @@ public class K8sTaskOrchestratorService {
             KubernetesClient client = null;
             boolean jobSubmitted = false;
             boolean cleanupOnExit = true;
+            String accessToken = null;
             try {
                 log.info("准备Job: {} (源: {}, 目标: {}, attempt={}/{})",
                         jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
+
+                accessToken = issueReadToken(taskId, jobName, registeredDatasetId,
+                        dataInfo, sourceNodeInfo);
 
                 JobCreationResult jobResult = k8sJobFactory.createDataProcessingJob(
                         jobName,
@@ -554,23 +643,12 @@ public class K8sTaskOrchestratorService {
                         dataInfo.getRequiredCpu(),
                         dataInfo.getRequiredMemory(),
                         gpuRequest,
-                        runtimeImage);
+                        runtimeImage,
+                        accessToken);
 
                 client = jobResult.getClient();
                 Job job = jobResult.getJob();
                 String selectedTargetNodeName = jobResult.getSelectedNodeName();
-
-                // 【原地检测】亲和性调度结果为数据所在源节点本身 → 数据已在最优节点，无需迁移
-                // 直接返回基础时间，避免发起无意义的 K8s Job 并防止后续速率计算除零
-                if ("affinity".equals(type) && sourceNodeInfo.getNodeName().equals(selectedTargetNodeName)) {
-                    long fileSizeBytes = dataInfo.getDataSize() != null ? dataInfo.getDataSize() : 0L;
-                    long baseline = k8sJobFactory.calculateBaselineMsWithRate(fileSizeBytes, inPlaceRate);
-                    if (baseline <= 0) baseline = inPlaceBaselineMs;
-                    log.info("数据项[{}] 亲和性调度目标 = 源节点 {}（原地），跳过 K8s Job，本地读取速率 {} 估算时间 {}ms",
-                            dataInfo.getDataName(), selectedTargetNodeName, inPlaceRate, baseline);
-                    if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
-                    return baseline;
-                }
 
                 NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(selectedTargetNodeName);
 
@@ -597,23 +675,27 @@ public class K8sTaskOrchestratorService {
                 client.batch().v1().jobs().inNamespace("default").create(job);
                 jobSubmitted = true;
 
-                // 只等待数据传输 init container。这样训练镜像拉取、训练脚本失败或训练超时，
-                // 都不会抹掉已经成功取得的传输时间。
-                long transferDurationMs = waitForInitContainerDuration(
+                InitContainerEvidence initEvidence = waitForInitContainerEvidence(
                         client, jobName, "data-transfer-container", waitTimeoutMinutes);
                 log.info("Job {} 在集群 {} 中已取得传输时间 {}ms",
-                        jobName, getClusterIdFromClient(client), transferDurationMs);
+                        jobName, getClusterIdFromClient(client), initEvidence.durationMs);
+                validateInputEvidence(dataInfo, initEvidence);
+                if (registeredDatasetId != null) {
+                    persistPreparationEvents(taskId, registeredDatasetId, type, jobName,
+                            jobResult.getInputPath(), initEvidence, attempt);
+                }
 
                 migrationTask.setStatus("VERIFYING");
                 migrationTaskMapper.updateLifecycle(migrationTask);
 
-                // Explicit compute plans must report the processing result, not just data readiness.
-                if (waitForProcessingCompletion || "external".equals(type)) {
-                    waitForJobCompletion(client, jobName, waitTimeoutMinutes);
-                    // Retain the completed Job for log inspection until its configured TTL expires.
-                    if ("external".equals(type)) cleanupOnExit = false;
-                } else {
-                    // Job 仍可能在执行训练，不能在 finally 中立即删除；由 Job TTL 自动清理。
+                ProcessingEvidence processingEvidence = waitForJobCompletion(
+                        client, jobName, waitTimeoutMinutes);
+                if (registeredDatasetId != null) {
+                    persistComputeEvents(taskId, registeredDatasetId, type, jobName,
+                            jobResult.getInputPath(), processingEvidence, attempt);
+                }
+                // Explicit external plans remain visible until the Job TTL expires.
+                if ("external".equals(type)) {
                     cleanupOnExit = false;
                 }
 
@@ -626,7 +708,14 @@ public class K8sTaskOrchestratorService {
                 migrationTaskMapper.updateLifecycle(migrationTask);
 
                 if (selectedNodeOut != null) selectedNodeOut.set(selectedTargetNodeName);
-                return transferDurationMs;
+                if (evidenceOut != null) {
+                    evidenceOut.set(new JobExecutionEvidence(initEvidence.startedAt,
+                            initEvidence.finishedAt, processingEvidence.startedAt,
+                            processingEvidence.finishedAt, processingEvidence.nodeName,
+                            initEvidence.inputBytes, initEvidence.inputChecksumSha256,
+                            processingEvidence.outputChecksumSha256));
+                }
+                return initEvidence.durationMs;
 
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
@@ -641,7 +730,13 @@ public class K8sTaskOrchestratorService {
                 }
                 return -1;
             } catch (Exception e) {
-                lastError = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                lastError = redactSecret(
+                        e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName(),
+                        accessToken);
+                if (registeredDatasetId != null) {
+                    persistFailureEvent(taskId, registeredDatasetId, type, jobName,
+                            selectedNodeOut == null ? null : selectedNodeOut.get(), attempt, lastError);
+                }
                 String clusterId = client != null ? getClusterIdFromClient(client) : "unknown-context";
                 if (attempt < maxRetries) {
                     log.warn("执行Job {}（集群 {}）第 {}/{} 次出现异常，将重试: {}",
@@ -671,7 +766,8 @@ public class K8sTaskOrchestratorService {
                     continue;
                 }
 
-                log.error("执行Job {}（集群 {}）已达到最大重试次数，最终失败", jobName, clusterId, e);
+                log.error("执行Job {}（集群 {}）已达到最大重试次数，最终失败: {}",
+                        jobName, clusterId, lastError);
                 if (migrationTask != null) {
                     migrationTask.setStatus("FAILED");
                     migrationTask.setRetryCount(attempt);
@@ -691,13 +787,37 @@ public class K8sTaskOrchestratorService {
         return -1;
     }
 
+    private String issueReadToken(Integer taskId, String jobName, Long registeredDatasetId,
+                                  DataManagement dataInfo, NodeManagement sourceNode) {
+        String absolutePath = dataInfo.getFilePath();
+        if (absolutePath == null || !absolutePath.startsWith("/")) {
+            throw new IllegalStateException("任务输入缺少绝对源路径，无法签发节点 READ token");
+        }
+        String datasetIdentifier = registeredDatasetId != null
+                ? String.valueOf(registeredDatasetId)
+                : "legacy-" + (dataInfo.getDataId() == null ? dataInfo.getDataName() : dataInfo.getDataId());
+        String datasetVersion = dataInfo.getDatasetVersion() == null
+                || dataInfo.getDatasetVersion().trim().isEmpty()
+                ? "unversioned" : dataInfo.getDatasetVersion().trim();
+        TaskManagement task = taskManagementMapper.getTaskByTaskId(taskId);
+        String runId = task == null ? null : task.getAcceptanceRunId();
+        AccessAuthorizationResult grant = accessAuthorizationService.issueInternal(
+                new AccessScope(datasetIdentifier, datasetVersion, absolutePath,
+                        "READ", sourceNode.getNodeName()),
+                new AccessAuditContext("task-" + taskId + "-" + jobName, runId, null));
+        if (grant == null || grant.getToken() == null || grant.getToken().trim().isEmpty()) {
+            throw new IllegalStateException("节点 READ token 签发失败");
+        }
+        return grant.getToken();
+    }
+
     /**
      * 【架构修正#4】: 方法增加一个client参数，以确保从正确的集群获取Pod信息。
      */
-    private long waitForInitContainerDuration(KubernetesClient client,
-                                              String jobName,
-                                              String initContainerName,
-                                              long timeoutMinutes) throws InterruptedException {
+    private InitContainerEvidence waitForInitContainerEvidence(KubernetesClient client,
+                                                               String jobName,
+                                                               String initContainerName,
+                                                               long timeoutMinutes) throws InterruptedException {
         long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
         long pollMs = Math.max(200L, statusPollIntervalMs);
 
@@ -707,13 +827,32 @@ public class K8sTaskOrchestratorService {
 
             for (Pod pod : pods) {
                 ContainerStateTerminated terminated = findTerminatedInitContainer(pod, initContainerName);
-                if (terminated == null || terminated.getExitCode() == null || terminated.getExitCode() != 0) {
-                    continue;
+                if (terminated == null) continue;
+                if (terminated.getExitCode() == null || terminated.getExitCode() != 0) {
+                    throw new IllegalStateException("Job " + jobName + " 的数据准备容器失败，exitCode="
+                            + terminated.getExitCode());
                 }
-                Long duration = extractInitContainerDuration(client, pod, initContainerName, terminated);
-                if (duration != null && duration >= 0) {
-                    return duration;
+                String logs = readContainerLog(client, pod, initContainerName);
+                Long duration = parseLongMetric(logs, "TRANSFER_MS=");
+                Instant startedAt = parseInstant(terminated.getStartedAt());
+                Instant finishedAt = parseInstant(terminated.getFinishedAt());
+                if (duration == null && startedAt != null && finishedAt != null) {
+                    duration = Duration.between(startedAt, finishedAt).toMillis();
                 }
+                if (duration == null || duration < 0) {
+                    throw new IllegalStateException("Job " + jobName + " 缺少有效的数据准备耗时");
+                }
+                if (startedAt == null || finishedAt == null || finishedAt.isBefore(startedAt)) {
+                    throw new IllegalStateException("Job " + jobName + " 缺少有效的数据准备起止时间");
+                }
+                Long inputBytes = parseLongMetric(logs, "INPUT_BYTES=");
+                String checksum = parseStringMetric(logs, "INPUT_SHA256=");
+                if (inputBytes == null || inputBytes < 0 || checksum == null
+                        || !checksum.matches("[0-9a-fA-F]{64}")) {
+                    throw new IllegalStateException("Job " + jobName + " 缺少完整输入字节数或 SHA-256 证据");
+                }
+                return new InitContainerEvidence(duration, startedAt, finishedAt,
+                        podName(pod), podNodeName(pod), inputBytes, checksum.toLowerCase());
             }
 
             Job currentJob = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
@@ -726,18 +865,36 @@ public class K8sTaskOrchestratorService {
                 + timeoutMinutes + " 分钟）");
     }
 
-    private void waitForJobCompletion(KubernetesClient client,
-                                      String jobName,
-                                      long timeoutMinutes) throws InterruptedException {
+    private ProcessingEvidence waitForJobCompletion(KubernetesClient client,
+                                                    String jobName,
+                                                    long timeoutMinutes) throws InterruptedException {
         long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
         long pollMs = Math.max(200L, statusPollIntervalMs);
         while (System.nanoTime() < deadlineNanos) {
             Job job = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
-            if (hasJobCondition(job, "Complete")) {
-                return;
-            }
             if (hasJobCondition(job, "Failed")) {
                 throw new IllegalStateException("Job " + jobName + " 的处理容器执行失败");
+            }
+            List<Pod> pods = client.pods().inNamespace("default")
+                    .withLabel("job-name", jobName).list().getItems();
+            for (Pod pod : pods) {
+                ContainerStateTerminated terminated = findTerminatedContainer(pod, "processing-container");
+                if (terminated == null) continue;
+                if (terminated.getExitCode() == null || terminated.getExitCode() != 0) {
+                    throw new IllegalStateException("Job " + jobName + " 的处理容器执行失败，exitCode="
+                            + terminated.getExitCode());
+                }
+                if (!hasJobCondition(job, "Complete")) continue;
+                Instant startedAt = parseInstant(terminated.getStartedAt());
+                Instant finishedAt = parseInstant(terminated.getFinishedAt());
+                if (startedAt == null || finishedAt == null || finishedAt.isBefore(startedAt)) {
+                    throw new IllegalStateException("Job " + jobName + " 缺少有效的计算起止时间");
+                }
+                String output = readContainerLog(client, pod, "processing-container");
+                String summary = output.length() <= 4096
+                        ? output : output.substring(output.length() - 4096);
+                return new ProcessingEvidence(startedAt, finishedAt, podName(pod),
+                        podNodeName(pod), summary, sha256Hex(output));
             }
             TimeUnit.MILLISECONDS.sleep(pollMs);
         }
@@ -768,38 +925,188 @@ public class K8sTaskOrchestratorService {
         return null;
     }
 
-    private Long extractInitContainerDuration(KubernetesClient client,
-                                              Pod pod,
-                                              String initContainerName,
-                                              ContainerStateTerminated terminatedState) {
-        String podName = pod.getMetadata().getName();
-        try {
-            String logs = client.pods().inNamespace("default").withName(podName)
-                    .inContainer(initContainerName).getLog();
-            if (logs != null) {
-                for (String line : logs.split("\n")) {
-                    String trimmed = line.trim();
-                    if (trimmed.startsWith("TRANSFER_MS=")) {
-                        long duration = Long.parseLong(trimmed.substring("TRANSFER_MS=".length()).trim());
-                        log.info("精确测量到 Init Container '{}' 的执行时间为: {} ms", initContainerName, duration);
-                        return duration;
-                    }
-                }
-            }
-        } catch (Exception logEx) {
-            log.warn("读取 Init Container '{}' 日志失败，回退到 K8s 时间戳: {}",
-                    initContainerName, logEx.getMessage());
+    private ContainerStateTerminated findTerminatedContainer(Pod pod, String containerName) {
+        if (pod == null || pod.getStatus() == null || pod.getStatus().getContainerStatuses() == null) {
+            return null;
         }
-
-        if (terminatedState.getFinishedAt() != null && terminatedState.getStartedAt() != null) {
-            Instant startTime = Instant.parse(terminatedState.getStartedAt());
-            Instant finishTime = Instant.parse(terminatedState.getFinishedAt());
-            long duration = Duration.between(startTime, finishTime).toMillis();
-            log.info("回退测量到 Init Container '{}' 的执行时间为: {} ms (K8s 时间戳)",
-                    initContainerName, duration);
-            return duration;
+        for (ContainerStatus status : pod.getStatus().getContainerStatuses()) {
+            if (containerName.equals(status.getName()) && status.getState() != null) {
+                return status.getState().getTerminated();
+            }
         }
         return null;
+    }
+
+    private String readContainerLog(KubernetesClient client, Pod pod, String containerName) {
+        String name = podName(pod);
+        try {
+            String value = client.pods().inNamespace("default").withName(name)
+                    .inContainer(containerName).getLog();
+            return value == null ? "" : value;
+        } catch (Exception e) {
+            throw new IllegalStateException("读取容器日志失败: pod=" + name
+                    + ", container=" + containerName, e);
+        }
+    }
+
+    private Long parseLongMetric(String logs, String prefix) {
+        String value = parseStringMetric(logs, prefix);
+        if (value == null) return null;
+        try {
+            return Long.valueOf(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String parseStringMetric(String logs, String prefix) {
+        if (logs == null) return null;
+        for (String line : logs.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith(prefix)) return trimmed.substring(prefix.length()).trim();
+        }
+        return null;
+    }
+
+    private Instant parseInstant(String value) {
+        if (value == null || value.trim().isEmpty()) return null;
+        try {
+            return Instant.parse(value);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String podName(Pod pod) {
+        return pod == null || pod.getMetadata() == null ? null : pod.getMetadata().getName();
+    }
+
+    private String podNodeName(Pod pod) {
+        return pod == null || pod.getSpec() == null ? null : pod.getSpec().getNodeName();
+    }
+
+    private void validateInputEvidence(DataManagement dataInfo, InitContainerEvidence evidence) {
+        if (dataInfo.getDataSize() != null && dataInfo.getDataSize() >= 0
+                && !dataInfo.getDataSize().equals(evidence.inputBytes)) {
+            throw new IllegalStateException("完整输入字节数不一致: expected=" + dataInfo.getDataSize()
+                    + ", actual=" + evidence.inputBytes);
+        }
+        if ("SHA-256".equalsIgnoreCase(dataInfo.getContentChecksumAlgorithm())
+                && dataInfo.getContentChecksum() != null
+                && !dataInfo.getContentChecksum().equalsIgnoreCase(evidence.inputChecksumSha256)) {
+            throw new IllegalStateException("输入 SHA-256 与已验证副本不一致");
+        }
+    }
+
+    private Long requireAuthoritativeSize(DatasetMetadata metadata) {
+        if (metadata == null || metadata.getAuthoritativeSizeBytes() == null
+                || metadata.getAuthoritativeSizeBytes() < 0) {
+            throw new IllegalStateException("数据集版本缺少权威字节数");
+        }
+        return metadata.getAuthoritativeSizeBytes();
+    }
+
+    private String requireAuthoritativeSha256(DatasetMetadata metadata) {
+        if (metadata == null || !"SHA-256".equalsIgnoreCase(metadata.getDigestAlgorithm())) {
+            throw new IllegalStateException("数据集版本缺少权威 SHA-256");
+        }
+        String digest = normalizeSha256(metadata.getDigestValue());
+        if (digest == null) throw new IllegalStateException("数据集版本缺少权威 SHA-256");
+        return digest;
+    }
+
+    private boolean matchesAuthority(FileIntegrityResult result, Long expectedSize, String expectedSha256) {
+        return result != null && result.isVerified() && expectedSize != null
+                && result.getSizeBytes() == expectedSize
+                && "SHA-256".equalsIgnoreCase(result.getAlgorithm())
+                && expectedSha256.equals(normalizeSha256(result.getDigest()));
+    }
+
+    private String normalizeSha256(String value) {
+        if (value == null) return null;
+        String normalized = value.trim().toLowerCase(java.util.Locale.ROOT);
+        return normalized.matches("[0-9a-f]{64}") ? normalized : null;
+    }
+
+    private void persistPreparationEvents(Integer taskId, Long datasetId, String type,
+                                          String jobName, String inputPath,
+                                          InitContainerEvidence evidence, int attempt) {
+        taskManagementMapper.insertExecutionEvent(TaskExecutionEvent.builder()
+                .taskId(taskId).datasetId(datasetId).executionMode(eventMode(type))
+                .eventType("DATA_PREPARATION_STARTED").occurredAt(toLocalDateTime(evidence.startedAt))
+                .jobName(jobName).podName(evidence.podName).nodeName(evidence.nodeName)
+                .inputPath(inputPath).attempt(attempt + 1).build());
+        taskManagementMapper.insertExecutionEvent(TaskExecutionEvent.builder()
+                .taskId(taskId).datasetId(datasetId).executionMode(eventMode(type))
+                .eventType("DATA_PREPARATION_READY").occurredAt(toLocalDateTime(evidence.finishedAt))
+                .jobName(jobName).podName(evidence.podName).nodeName(evidence.nodeName)
+                .inputPath(inputPath).bytesProcessed(evidence.inputBytes)
+                .checksumSha256(evidence.inputChecksumSha256).durationMs(evidence.durationMs)
+                .attempt(attempt + 1).build());
+    }
+
+    private void persistComputeEvents(Integer taskId, Long datasetId, String type,
+                                      String jobName, String inputPath,
+                                      ProcessingEvidence evidence, int attempt) {
+        taskManagementMapper.insertExecutionEvent(TaskExecutionEvent.builder()
+                .taskId(taskId).datasetId(datasetId).executionMode(eventMode(type))
+                .eventType("COMPUTE_STARTED").occurredAt(toLocalDateTime(evidence.startedAt))
+                .jobName(jobName).podName(evidence.podName).nodeName(evidence.nodeName)
+                .inputPath(inputPath).attempt(attempt + 1).build());
+        taskManagementMapper.insertExecutionEvent(TaskExecutionEvent.builder()
+                .taskId(taskId).datasetId(datasetId).executionMode(eventMode(type))
+                .eventType("COMPUTE_COMPLETED").occurredAt(toLocalDateTime(evidence.finishedAt))
+                .jobName(jobName).podName(evidence.podName).nodeName(evidence.nodeName)
+                .inputPath(inputPath)
+                .durationMs(Math.max(0L, Duration.between(evidence.startedAt, evidence.finishedAt).toMillis()))
+                .outputSummary(evidence.outputSummary)
+                .outputChecksumSha256(evidence.outputChecksumSha256)
+                .attempt(attempt + 1).build());
+    }
+
+    private void persistFailureEvent(Integer taskId, Long datasetId, String type, String jobName,
+                                     String nodeName, int attempt, String error) {
+        taskManagementMapper.insertExecutionEvent(TaskExecutionEvent.builder()
+                .taskId(taskId).datasetId(datasetId).executionMode(eventMode(type))
+                .eventType("JOB_FAILED").occurredAt(LocalDateTime.now(ZoneOffset.UTC))
+                .jobName(jobName).nodeName(nodeName).attempt(attempt + 1)
+                .detailsJson(writeDetails(error)).build());
+    }
+
+    private String writeDetails(String error) {
+        try {
+            return objectMapper.writeValueAsString(Collections.singletonMap("error", error));
+        } catch (Exception ignored) {
+            return "{\"error\":\"execution failed\"}";
+        }
+    }
+
+    private String redactSecret(String message, String secret) {
+        if (message == null) return "execution failed";
+        if (secret == null || secret.isEmpty()) return message;
+        return message.replace(secret, "[REDACTED]");
+    }
+
+    private String eventMode(String type) {
+        if ("centralized".equals(type) || "central".equals(type)) return TaskV1Service.MODE_CENTRALIZED;
+        if ("in-place".equals(type) || "affinity".equals(type)) return TaskV1Service.MODE_IN_PLACE;
+        return type == null ? "UNKNOWN" : type.toUpperCase().replace('-', '_');
+    }
+
+    private LocalDateTime toLocalDateTime(Instant instant) {
+        return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
+    }
+
+    private String sha256Hex(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest((value == null ? "" : value).getBytes(StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder(64);
+            for (byte item : digest) result.append(String.format("%02x", item & 0xff));
+            return result.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
     }
 
     /**
@@ -816,18 +1123,77 @@ public class K8sTaskOrchestratorService {
         }
     }
 
+    private void updateRegisteredTaskStatus(Integer taskId, String executionMode,
+                                            List<String> schedules,
+                                            List<DataItemResult> successful,
+                                            int expectedCount) {
+        Instant preparationStart = null;
+        Instant preparationReady = null;
+        Instant computeStart = null;
+        Instant computeFinished = null;
+        boolean completeEvidence = successful.size() == expectedCount;
+        for (DataItemResult result : successful) {
+            if (result.getPreparationStartedAt() == null || result.getPreparationReadyAt() == null
+                    || result.getComputeStartedAt() == null || result.getComputeFinishedAt() == null
+                    || result.getActualNodeName() == null || result.getInputBytes() == null
+                    || result.getInputChecksumSha256() == null || result.getOutputChecksumSha256() == null) {
+                completeEvidence = false;
+                continue;
+            }
+            if (preparationStart == null || result.getPreparationStartedAt().isBefore(preparationStart)) {
+                preparationStart = result.getPreparationStartedAt();
+            }
+            if (preparationReady == null || result.getPreparationReadyAt().isAfter(preparationReady)) {
+                preparationReady = result.getPreparationReadyAt();
+            }
+            if (computeStart == null || result.getComputeStartedAt().isBefore(computeStart)) {
+                computeStart = result.getComputeStartedAt();
+            }
+            if (computeFinished == null || result.getComputeFinishedAt().isAfter(computeFinished)) {
+                computeFinished = result.getComputeFinishedAt();
+            }
+        }
+        Long preparationMs = preparationStart == null || preparationReady == null
+                ? null : Math.max(0L, Duration.between(preparationStart, preparationReady).toMillis());
+        Long computeMs = computeStart == null || computeFinished == null
+                ? null : Math.max(0L, Duration.between(computeStart, computeFinished).toMillis());
+        completeEvidence = completeEvidence && preparationMs != null && computeMs != null;
+
+        TaskManagement summary = new TaskManagement();
+        summary.setTaskId(taskId);
+        summary.setSchedule(executionMode + "方案:" + String.join("\n", schedules));
+        summary.setDataPreparationMs(preparationMs);
+        summary.setComputeDurationMs(computeMs);
+        summary.setExecutionEvidenceComplete(completeEvidence);
+        summary.setFinishedAt(LocalDateTime.now(ZoneOffset.UTC));
+        if (successful.isEmpty()) summary.setStatus("执行失败");
+        else if (successful.size() < expectedCount || !completeEvidence) summary.setStatus("部分完成");
+        else summary.setStatus("已完成");
+        taskManagementMapper.updateExecutionSummary(summary);
+        log.info("任务 {} 单模式执行结束: mode={}, status={}, dataPreparationMs={}, computeDurationMs={}",
+                taskId, executionMode, summary.getStatus(), preparationMs, computeMs);
+    }
+
+    private String normalizeExecutionMode(String mode) {
+        if (TaskV1Service.MODE_CENTRALIZED.equalsIgnoreCase(mode)) return TaskV1Service.MODE_CENTRALIZED;
+        if (TaskV1Service.MODE_IN_PLACE.equalsIgnoreCase(mode)) return TaskV1Service.MODE_IN_PLACE;
+        throw new IllegalArgumentException("unsupported execution mode: " + mode);
+    }
+
     // ... updateFinalTaskStatus 和 updateTaskStatusToFailed 方法无需修改 ...
     private void updateFinalTaskStatus(Integer taskId, double totalT1, double totalT2,
                                        List<String> scheduleT1List, List<String> scheduleT2List,
                                        int successCount, int expectedCount) {
         TaskManagement finalTask = taskManagementMapper.getTaskByTaskId(taskId);
         if (finalTask != null) {
-            double rating = totalT1 > 0 ? (totalT2 / totalT1) : 0;
+            boolean hasComparisonPath = scheduleT2List != null && !scheduleT2List.isEmpty();
+            Double comparisonT2 = hasComparisonPath ? totalT2 : null;
+            Double rating = hasComparisonPath && totalT1 > 0 ? (totalT2 / totalT1) : null;
             String finalSchedule = "分布式调度方案:" + String.join("\n", scheduleT1List) +
                     "\n中心化调度方案:" + String.join("\n", scheduleT2List);
 
             finalTask.setT1(totalT1);
-            finalTask.setT2(totalT2);
+            finalTask.setT2(comparisonT2);
             finalTask.setRating(rating);
             finalTask.setSchedule(finalSchedule);
             if (successCount == 0) {
@@ -841,8 +1207,10 @@ public class K8sTaskOrchestratorService {
 
             log.info("==================== 任务 {} 完成 ====================", taskId);
             log.info("调度方案:\n{}", finalSchedule);
-            log.info("亲和性调度总时间: {}s, 中心化调度总时间: {}s, 性能比: {}",
-                    String.format("%.3f", totalT1), String.format("%.3f", totalT2), String.format("%.3f", rating));
+            log.info("亲和性调度总时间: {}s, 中心化调度总时间: {}, 性能比: {}",
+                    String.format("%.3f", totalT1),
+                    comparisonT2 == null ? "未执行" : String.format("%.3fs", comparisonT2),
+                    rating == null ? "不可计算" : String.format("%.3f", rating));
             log.info("===============================================================");
         }
     }
@@ -850,7 +1218,76 @@ public class K8sTaskOrchestratorService {
         TaskManagement failedTask = new TaskManagement();
         failedTask.setTaskId(taskId);
         failedTask.setStatus("执行失败");
-        taskManagementMapper.updateTask(failedTask);
+        failedTask.setExecutionEvidenceComplete(false);
+        failedTask.setFinishedAt(LocalDateTime.now(ZoneOffset.UTC));
+        taskManagementMapper.updateExecutionSummary(failedTask);
+    }
+
+    private static final class InitContainerEvidence {
+        private final long durationMs;
+        private final Instant startedAt;
+        private final Instant finishedAt;
+        private final String podName;
+        private final String nodeName;
+        private final Long inputBytes;
+        private final String inputChecksumSha256;
+
+        private InitContainerEvidence(long durationMs, Instant startedAt, Instant finishedAt,
+                                      String podName, String nodeName, Long inputBytes,
+                                      String inputChecksumSha256) {
+            this.durationMs = durationMs;
+            this.startedAt = startedAt;
+            this.finishedAt = finishedAt;
+            this.podName = podName;
+            this.nodeName = nodeName;
+            this.inputBytes = inputBytes;
+            this.inputChecksumSha256 = inputChecksumSha256;
+        }
+    }
+
+    private static final class ProcessingEvidence {
+        private final Instant startedAt;
+        private final Instant finishedAt;
+        private final String podName;
+        private final String nodeName;
+        private final String outputSummary;
+        private final String outputChecksumSha256;
+
+        private ProcessingEvidence(Instant startedAt, Instant finishedAt, String podName,
+                                   String nodeName, String outputSummary,
+                                   String outputChecksumSha256) {
+            this.startedAt = startedAt;
+            this.finishedAt = finishedAt;
+            this.podName = podName;
+            this.nodeName = nodeName;
+            this.outputSummary = outputSummary;
+            this.outputChecksumSha256 = outputChecksumSha256;
+        }
+    }
+
+    private static final class JobExecutionEvidence {
+        private final Instant preparationStartedAt;
+        private final Instant preparationReadyAt;
+        private final Instant computeStartedAt;
+        private final Instant computeFinishedAt;
+        private final String nodeName;
+        private final Long inputBytes;
+        private final String inputChecksumSha256;
+        private final String outputChecksumSha256;
+
+        private JobExecutionEvidence(Instant preparationStartedAt, Instant preparationReadyAt,
+                                     Instant computeStartedAt, Instant computeFinishedAt,
+                                     String nodeName, Long inputBytes, String inputChecksumSha256,
+                                     String outputChecksumSha256) {
+            this.preparationStartedAt = preparationStartedAt;
+            this.preparationReadyAt = preparationReadyAt;
+            this.computeStartedAt = computeStartedAt;
+            this.computeFinishedAt = computeFinishedAt;
+            this.nodeName = nodeName;
+            this.inputBytes = inputBytes;
+            this.inputChecksumSha256 = inputChecksumSha256;
+            this.outputChecksumSha256 = outputChecksumSha256;
+        }
     }
 
     private String getClusterIdFromClient(KubernetesClient client) {

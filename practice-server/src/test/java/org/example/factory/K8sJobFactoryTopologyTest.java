@@ -1,6 +1,7 @@
 package org.example.factory;
 
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.api.model.Container;
 import org.example.entity.EdgeManagement;
 import org.example.entity.NodeManagement;
 import org.example.exception.RegistrationException;
@@ -67,8 +68,47 @@ class K8sJobFactoryTopologyTest {
                 "test-job", "alihz", "test.npz", "/dataset/test.npz", "alibj", null, 0.5, 1.0));
     }
 
+    @Test
+    void dataPreparationCommandEmitsMeasuredBytesAndSha256() {
+        String command = ReflectionTestUtils.invokeMethod(factory, "buildWgetCommand",
+                "/data/test.npz", "http://source/test.npz", "");
+
+        assertNotNull(command);
+        assertTrue(command.contains("wc -c"));
+        assertTrue(command.contains("sha256sum"));
+        assertTrue(command.contains("INPUT_BYTES="));
+        assertTrue(command.contains("INPUT_SHA256="));
+    }
+
+    @Test
+    void scopedReadTokenIsInjectedAsAnEnvironmentVariableAndNotLoggedInCommandText() {
+        String token = "signed.secret.token";
+        JobCreationResult result = factory.createDataProcessingJob(
+                "authorized-job", "alihz", "test.npz", "/dataset/test.npz",
+                "alibj", null, 0.5, 1.0, null, null, token);
+        Container transfer = result.getJob().getSpec().getTemplate().getSpec().getInitContainers().get(0);
+        String command = transfer.getCommand().get(2);
+
+        assertTrue(command.contains("Authorization: Bearer ${DATASET_ACCESS_TOKEN}"));
+        assertFalse(command.contains(token));
+        assertEquals(token, transfer.getEnv().stream()
+                .filter(env -> "DATASET_ACCESS_TOKEN".equals(env.getName()))
+                .findFirst().orElseThrow(AssertionError::new).getValue());
+    }
+
+    @Test
+    void sameNodeOverrideCreatesTheInPlaceJobOnTheSourceNode() {
+        JobCreationResult result = factory.createDataProcessingJob(
+                "in-place-job", "alihz", "test.npz", "/dataset/test.npz",
+                "alihz", null, 0.5, 1.0, null, null, "scoped-read-token");
+
+        assertEquals("alihz", result.getSelectedNodeName());
+        assertEquals("alihz", result.getJob().getSpec().getTemplate().getSpec().getNodeName());
+    }
+
     private NodeManagement node(int id, String name) {
         return NodeManagement.builder().nodeId(id).nodeName(name).cluster("cluster-a")
+                .internalIp("10.0.0." + id)
                 .maxCpu(4.0).maxMemory(8.0).enabled(true).registrationStatus("ACTIVE")
                 .observedStatus("ONLINE").lastSeenAt(LocalDateTime.now(ZoneOffset.UTC)).build();
     }
