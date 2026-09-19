@@ -69,6 +69,15 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
             pod = dep["spec"]["template"]["spec"]
             container = pod["containers"][0]
             self.assertEqual(container["image"], "%s@%s" % (IMAGE, DIGEST))
+            prepare = named(pod["initContainers"])["prepare-gateway-state"]
+            self.assertEqual(prepare["image"], "%s@%s" % (IMAGE, DIGEST))
+            self.assertEqual(prepare["volumeMounts"],
+                             [{"name": "state", "mountPath": "/state"}])
+            self.assertIn("chown 10001:10001 /state", prepare["command"][-1])
+            self.assertIn("chmod 0700 /state", prepare["command"][-1])
+            self.assertFalse(prepare["securityContext"]["runAsNonRoot"])
+            self.assertEqual(prepare["securityContext"]["capabilities"]["add"],
+                             ["CHOWN", "DAC_OVERRIDE", "FOWNER"])
             self.assertNotIn("envFrom", container)
             env = {item["name"]: item["value"] for item in container["env"]
                    if "value" in item}

@@ -77,6 +77,21 @@ def gateway(provider, image, digest):
                             },
                         }},
                         "securityContext": {"runAsNonRoot": True, "runAsUser": 10001, "fsGroup": 10001},
+                        "initContainers": [{
+                            "name": "prepare-gateway-state", "image": "%s@%s" % (image, digest),
+                            "imagePullPolicy": "IfNotPresent",
+                            "command": ["sh", "-c",
+                                        "chown 10001:10001 /state && chmod 0700 /state"],
+                            "securityContext": {
+                                "runAsNonRoot": False, "runAsUser": 0, "runAsGroup": 0,
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {
+                                    "drop": ["ALL"],
+                                    "add": ["CHOWN", "DAC_OVERRIDE", "FOWNER"],
+                                },
+                            },
+                            "volumeMounts": [{"name": "state", "mountPath": "/state"}],
+                        }],
                         "containers": [{
                             "name": "gateway", "image": "%s@%s" % (image, digest),
                             "imagePullPolicy": "IfNotPresent",
