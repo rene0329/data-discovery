@@ -223,15 +223,43 @@ party_pod() {
   printf '%s\n' "$pod" | sed -n '1p'
 }
 
-for ns in kuscia-a kuscia-b kuscia-c; do
+run_sfl_engine_check() {
+  local ns="$1" action="$2" pod
   pod="$(party_pod "$ns")"
-  kubectl -n "$ns" exec "$pod" -c runner -- \
-    python3 /opt/topic4/bin/sfl-engine-check.py --verify-smoke >/dev/null
+  kubectl -n "$ns" exec "$pod" -c runner -- python3 -c '
+import os
+import sys
+
+allowed = {
+    "TOPIC4_KUSCIA_CONTEXT_FILE",
+    "TOPIC4_KUSCIA_DEPLOYMENT_ID",
+}
+environment = dict(os.environ)
+with open("/proc/1/environ", "rb") as stream:
+    entries = stream.read().split(b"\0")
+for entry in entries:
+    key, separator, value = entry.partition(b"=")
+    if not separator:
+        continue
+    name = key.decode("ascii", "strict")
+    if name in allowed:
+        environment[name] = value.decode("utf-8", "strict")
+missing = sorted(name for name in allowed if not environment.get(name))
+if missing:
+    raise SystemExit("validated runner context variables are unavailable")
+os.execve(
+    sys.executable,
+    [sys.executable, "/opt/topic4/bin/sfl-engine-check.py", sys.argv[1]],
+    environment,
+)
+' "$action"
+}
+
+for ns in kuscia-a kuscia-b kuscia-c; do
+  run_sfl_engine_check "$ns" --verify-smoke >/dev/null
 done
 for ns in kuscia-a kuscia-b kuscia-c; do
-  pod="$(party_pod "$ns")"
-  kubectl -n "$ns" exec "$pod" -c runner -- \
-    python3 /opt/topic4/bin/sfl-engine-check.py --approve-smoke >"$work/approve-${ns}.json"
+  run_sfl_engine_check "$ns" --approve-smoke >"$work/approve-${ns}.json"
 done
 
 deadline=$((SECONDS + 120))

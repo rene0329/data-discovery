@@ -183,6 +183,15 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
         self.assertIn('index .data "bearer-token"', script)
         self.assertNotIn("privacy-sfl-auth", script)
 
+    def test_sfl_smoke_exec_inherits_only_validated_runtime_identity(self):
+        script = (K8S / "run-and-approve-sfl-smoke.sh").read_text(encoding="utf-8")
+        self.assertIn('with open("/proc/1/environ", "rb")', script)
+        self.assertIn('"TOPIC4_KUSCIA_CONTEXT_FILE"', script)
+        self.assertIn('"TOPIC4_KUSCIA_DEPLOYMENT_ID"', script)
+        self.assertIn('missing = sorted(name for name in allowed', script)
+        self.assertNotIn('environment.update(os.environ)', script)
+        self.assertNotIn('print(entries)', script)
+
 
 if __name__ == "__main__":
     unittest.main()
