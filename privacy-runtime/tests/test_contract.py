@@ -1044,6 +1044,14 @@ class AdapterPolicyTest(unittest.TestCase):
         self.assertEqual(context["secretflowEndpoints"]["fed"]["B"], "topic4-sfl-fed.domain-b.svc:80")
         self.assertEqual(context["secretflowEndpoints"]["spu"]["C"], "http://topic4-sfl-spu.domain-c.svc:80")
         self.assertEqual(context["sflClusterConfig"]["self_party"], "A")
+        self.assertEqual(
+            context["sflClusterConfig"]["parties"]["A"],
+            {"address": "http://0.0.0.0:16101", "listen_addr": "0.0.0.0:16101"},
+        )
+        self.assertEqual(
+            context["sflClusterConfig"]["parties"]["B"]["address"],
+            "http://topic4-sfl-fed.domain-b.svc:80",
+        )
         psi_path = ROOT / "providers/psi/run-engine.py"
         psi_spec = importlib.util.spec_from_file_location("topic4_psi_context_adapter", psi_path)
         psi_module = importlib.util.module_from_spec(psi_spec)
@@ -1098,6 +1106,8 @@ class ArtifactTest(unittest.TestCase):
             self.assertIn('"brpc_channel_connection_type": "pooled"', source)
         sfl = (ROOT / "providers/sfl/hfl_fedavg_logreg.py").read_text(encoding="utf-8")
         self.assertIn('sf.SPU(context["spuClusterDef"], link_desc=link_desc', sfl)
+        secretflow = (ROOT / "providers/secretflow/run-engine.py").read_text(encoding="utf-8")
+        self.assertIn('"address": "http://" + config["fed"][party]', secretflow)
 
     def test_psi_image_uses_verified_cached_source_archive(self):
         dockerfile = (ROOT / "providers/secretflow/Dockerfile").read_text(encoding="utf-8")

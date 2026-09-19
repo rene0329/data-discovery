@@ -190,7 +190,11 @@ def validate_context(path):
         normalized["sflClusterConfig"] = {
             "parties": {
                 party_id: {
-                    "address": fed_endpoints[party_id],
+                    # Kuscia's Cluster-scope Envoy route selects the remote
+                    # domain from the HTTP Host header.  Supplying an explicit
+                    # scheme makes brpc preserve the service hostname instead
+                    # of replacing it with the resolved Lite Envoy address.
+                    "address": "http://" + fed_endpoints[party_id],
                     **({"listen_addr": fed_endpoints[party_id]}
                        if party_id == normalized["partyId"] else {}),
                 }

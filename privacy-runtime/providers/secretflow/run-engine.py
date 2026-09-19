@@ -514,8 +514,10 @@ def _initialize_secretflow(
         raise EngineUnavailable("SecretFlow runtime version differs from 1.11.0b1")
     cluster_config = {
         "parties": {
-            party: ({"address": config["fed"][party], "listen_addr": config["fed"][party]}
-                    if party == local_party else {"address": config["fed"][party]})
+            party: ({"address": "http://" + config["fed"][party],
+                     "listen_addr": config["fed"][party]}
+                    if party == local_party
+                    else {"address": "http://" + config["fed"][party]})
             for party in PARTIES
         },
         "self_party": local_party,
