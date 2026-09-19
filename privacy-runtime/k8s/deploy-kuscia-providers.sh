@@ -117,7 +117,8 @@ done
 # emptyDirs and are deleted by the runner on every terminal/recovery path.
 patch_party_storage() {
   local provider="$1" domain="$2"
-  local deployment count image state_path patch
+  local deployment count expected_image expected_digest expected_image_id state_path patch
+  local actual_image actual_digest actual_image_id
   # Lite mode uses the outer cluster ServiceAccount for its RunK runtime, so a
   # kubectl invocation inside the Lite Pod cannot read the logical domain
   # namespace.  The master embedded cluster owns these Deployments and is the
@@ -148,20 +149,25 @@ patch_party_storage() {
     exit 1
   }
   deployment="$(printf '%s\n' "$deployment" | sed -n '1p')"
-  image="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
-    kubectl -n "$domain" get deployment "$deployment" \
-    -o 'jsonpath={.spec.template.spec.containers[?(@.name=="runner")].image}')"
-  [[ "$image" =~ :v-[0-9a-f]{40}$ ]] || {
-    echo "${provider}/${domain} runner image is not an immutable Topic4 tag" >&2
-    exit 1
-  }
+  if [[ "$provider" == "sfl" ]]; then
+    expected_image="$SFL_IMAGE"
+    expected_digest="$SFL_IMAGE_DIGEST"
+    expected_image_id="$SFL_IMAGE_ID"
+  else
+    expected_image="$PSI_IMAGE"
+    expected_digest="$PSI_IMAGE_DIGEST"
+    expected_image_id="$PSI_IMAGE_ID"
+  fi
   state_path="/data/topic4-privacy/party-state/${domain}/${provider}"
   # RunK projects the hostPath through a bind-mounted volume whose mount root
   # cannot be chmod'ed from the nested Pod. The fixed AppImages run as UID 0
   # with every capability dropped, so make only their state subdirectories
   # root-owned and private; the mount root remains traversable and read-only.
+  # Kuscia 1.2 only reconciles the image and resources when an existing
+  # AppImage changes. Keep the manifest digest and OCI config-id metadata in
+  # lockstep here so party health and evidence cannot describe the old image.
   patch="$(cat <<EOF
-{"spec":{"strategy":{"type":"Recreate"},"template":{"metadata":{"annotations":{"topic4.openai.com/party-state":"${state_path}"}},"spec":{"initContainers":[{"name":"prepare-party-state","image":"${image}","imagePullPolicy":"IfNotPresent","command":["sh","-c","mkdir -p /state/jobs /state/models /state/smoke && chown -R 0:0 /state/jobs /state/models /state/smoke && chmod 0700 /state/jobs /state/models /state/smoke"],"securityContext":{"runAsUser":0,"runAsGroup":0,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER"]}},"volumeMounts":[{"name":"party-state","mountPath":"/state"}]}],"containers":[{"name":"runner","volumeMounts":[{"name":"party-state","mountPath":"/var/lib/topic4-privacy"},{"name":"staged-inputs","mountPath":"/var/run/topic4-inputs"},{"name":"private-work","mountPath":"/var/run/topic4-work"}]}],"volumes":[{"name":"party-state","hostPath":{"path":"${state_path}","type":"DirectoryOrCreate"}},{"name":"staged-inputs","emptyDir":{}},{"name":"private-work","emptyDir":{}}]}}}}
+{"spec":{"strategy":{"type":"Recreate"},"template":{"metadata":{"annotations":{"topic4.openai.com/party-state":"${state_path}","kuscia.secretflow/image-id":"${expected_image_id}"}},"spec":{"initContainers":[{"name":"prepare-party-state","image":"${expected_image}","imagePullPolicy":"IfNotPresent","command":["sh","-c","mkdir -p /state/jobs /state/models /state/smoke && chown -R 0:0 /state/jobs /state/models /state/smoke && chmod 0700 /state/jobs /state/models /state/smoke"],"securityContext":{"runAsUser":0,"runAsGroup":0,"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"],"add":["CHOWN","DAC_OVERRIDE","FOWNER"]}},"volumeMounts":[{"name":"party-state","mountPath":"/state"}]}],"containers":[{"name":"runner","image":"${expected_image}","env":[{"name":"TOPIC4_IMAGE_DIGEST","value":"${expected_digest}"}],"volumeMounts":[{"name":"party-state","mountPath":"/var/lib/topic4-privacy"},{"name":"staged-inputs","mountPath":"/var/run/topic4-inputs"},{"name":"private-work","mountPath":"/var/run/topic4-work"}]}],"volumes":[{"name":"party-state","hostPath":{"path":"${state_path}","type":"DirectoryOrCreate"}},{"name":"staged-inputs","emptyDir":{}},{"name":"private-work","emptyDir":{}}]}}}}
 EOF
 )"
   kubectl -n kuscia-master exec deploy/kuscia-master -- \
@@ -173,6 +179,24 @@ EOF
     kubectl -n "$domain" rollout restart "deployment/${deployment}"
   kubectl -n kuscia-master exec deploy/kuscia-master -- \
     kubectl -n "$domain" rollout status "deployment/${deployment}" --timeout="$timeout"
+  actual_image="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
+    kubectl -n "$domain" get deployment "$deployment" \
+    -o 'jsonpath={.spec.template.spec.containers[?(@.name=="runner")].image}')"
+  actual_digest="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
+    kubectl -n "$domain" get deployment "$deployment" -o json | jq -r \
+    '.spec.template.spec.containers[] | select(.name=="runner") | .env[] | select(.name=="TOPIC4_IMAGE_DIGEST") | .value')"
+  actual_image_id="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
+    kubectl -n "$domain" get deployment "$deployment" -o json | jq -r \
+    '.spec.template.metadata.annotations["kuscia.secretflow/image-id"] // empty')"
+  [[ "$actual_image" == "$expected_image" ]] || {
+    echo "${provider}/${domain} runner image differs from the requested immutable tag" >&2; exit 1;
+  }
+  [[ "$actual_digest" == "$expected_digest" ]] || {
+    echo "${provider}/${domain} manifest digest metadata differs from the requested digest" >&2; exit 1;
+  }
+  [[ "$actual_image_id" == "$expected_image_id" ]] || {
+    echo "${provider}/${domain} OCI config id metadata differs from the requested image id" >&2; exit 1;
+  }
 }
 
 for provider in apsi secretflow sfl; do
