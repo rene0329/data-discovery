@@ -10,6 +10,7 @@ public class AccessTokenClaims {
     private long issuedAtEpochSeconds;
     private long expiresAtEpochSeconds;
     private String jti;
+    private boolean singleUse;
 
     public String getSubject() { return subject; }
     public void setSubject(String subject) { this.subject = subject; }
@@ -29,4 +30,6 @@ public class AccessTokenClaims {
     public void setExpiresAtEpochSeconds(long expiresAtEpochSeconds) { this.expiresAtEpochSeconds = expiresAtEpochSeconds; }
     public String getJti() { return jti; }
     public void setJti(String jti) { this.jti = jti; }
+    public boolean isSingleUse() { return singleUse; }
+    public void setSingleUse(boolean singleUse) { this.singleUse = singleUse; }
 }

@@ -119,6 +119,47 @@ jwt:
   user-ttl: 7200000
   user-token-name: authentication
 
+# Privacy-computing control plane. Secrets and runner endpoints are injected by Kubernetes Secret/env.
+privacy-computing:
+  http:
+    connect-timeout-ms: 1500
+    read-timeout-ms: 5000
+  auth:
+    parties:
+      a:
+        secret: ${PRIVACY_PARTY_A_SECRET:}
+      b:
+        secret: ${PRIVACY_PARTY_B_SECRET:}
+      c:
+        secret: ${PRIVACY_PARTY_C_SECRET:}
+  providers:
+    mp-spdz:
+      base-url: ${PRIVACY_MP_SPDZ_BASE_URL:}
+      bearer-token: ${PRIVACY_MP_SPDZ_BEARER_TOKEN:}
+    secretflow:
+      base-url: ${PRIVACY_SECRETFLOW_BASE_URL:}
+      bearer-token: ${PRIVACY_SECRETFLOW_BEARER_TOKEN:}
+    apsi:
+      base-url: ${PRIVACY_APSI_BASE_URL:}
+      bearer-token: ${PRIVACY_APSI_BEARER_TOKEN:}
+    sfl:
+      base-url: ${PRIVACY_SFL_BASE_URL:}
+      bearer-token: ${PRIVACY_SFL_BEARER_TOKEN:}
+  legacy-secure-sum:
+    parties:
+      a:
+        dataset-id: ${PRIVACY_LEGACY_A_DATASET_ID:}
+        dataset-version: ${PRIVACY_LEGACY_A_DATASET_VERSION:}
+        fields: ${PRIVACY_LEGACY_A_FIELDS:}
+      b:
+        dataset-id: ${PRIVACY_LEGACY_B_DATASET_ID:}
+        dataset-version: ${PRIVACY_LEGACY_B_DATASET_VERSION:}
+        fields: ${PRIVACY_LEGACY_B_FIELDS:}
+      c:
+        dataset-id: ${PRIVACY_LEGACY_C_DATASET_ID:}
+        dataset-version: ${PRIVACY_LEGACY_C_DATASET_VERSION:}
+        fields: ${PRIVACY_LEGACY_C_FIELDS:}
+
 # 原 practice.wechat.*，现在直接定义
 wechat:
   appid: wx6bd13dcb6bb751d1 # 敏感信息，会被 Secret 覆盖

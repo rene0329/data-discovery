@@ -72,6 +72,49 @@ spec:
                   name: topic4-acceptance-secrets
                   key: aggregation-worker-auth
                   optional: true
+            - name: PRIVACY_PARTY_A_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: privacy-party-a-secret
+            - name: PRIVACY_PARTY_B_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: privacy-party-b-secret
+            - name: PRIVACY_PARTY_C_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: privacy-party-c-secret
+            - name: PRIVACY_MP_SPDZ_BASE_URL
+              value: "http://topic4-privacy-mpspdz-gateway.kuscia-master.svc.cluster.local:8080"
+            - name: PRIVACY_SECRETFLOW_BASE_URL
+              value: "http://topic4-privacy-secretflow-gateway.kuscia-master.svc.cluster.local:8080"
+            - name: PRIVACY_APSI_BASE_URL
+              value: "http://topic4-privacy-apsi-gateway.kuscia-master.svc.cluster.local:8080"
+            - name: PRIVACY_SFL_BASE_URL
+              value: "http://topic4-privacy-sfl-gateway.kuscia-master.svc.cluster.local:8080"
+            - name: PRIVACY_MP_SPDZ_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: privacy-mpspdz-token
+            - name: PRIVACY_SECRETFLOW_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: privacy-secretflow-token
+            - name: PRIVACY_APSI_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: privacy-apsi-token
+            - name: PRIVACY_SFL_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-acceptance-secrets
+                  key: privacy-sfl-token
 
             # MySQL
             - name: SPRING_DATASOURCE_DRUID_URL

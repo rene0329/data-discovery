@@ -18,6 +18,13 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -104,8 +111,54 @@ class DatasetAccessScopeVerifierTest {
         assertEquals("REPLICA_NOT_USABLE", denied.getErrorCode());
     }
 
+    @Test
+    void concurrentSingleUseTokenAllowsExactlyOneVerification() throws Exception {
+        String token = token("1", "v1", "/dataset/a.bin", "READ", "master-88",
+                Instant.now().plusSeconds(60).getEpochSecond(), true);
+        int workers = 12;
+        ExecutorService pool = Executors.newFixedThreadPool(workers);
+        CountDownLatch ready = new CountDownLatch(workers);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<String>> futures = new ArrayList<>();
+        try {
+            for (int i = 0; i < workers; i++) {
+                futures.add(pool.submit(new Callable<String>() {
+                    @Override
+                    public String call() throws Exception {
+                        ready.countDown();
+                        start.await();
+                        try {
+                            verifier.verifyPathAction("Bearer " + token, "/dataset/a.bin", "READ");
+                            return "ALLOWED";
+                        } catch (DatasetAccessScopeVerifier.TokenVerificationException ex) {
+                            return ex.getErrorCode();
+                        }
+                    }
+                }));
+            }
+            ready.await();
+            start.countDown();
+            int allowed = 0;
+            int replayed = 0;
+            for (Future<String> future : futures) {
+                String result = future.get();
+                if ("ALLOWED".equals(result)) allowed++;
+                if ("TOKEN_REPLAYED".equals(result)) replayed++;
+            }
+            assertEquals(1, allowed);
+            assertEquals(workers - 1, replayed);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private String token(String datasetId, String version, String path, String action,
                          String target, long expiry) throws Exception {
+        return token(datasetId, version, path, action, target, expiry, false);
+    }
+
+    private String token(String datasetId, String version, String path, String action,
+                         String target, long expiry, boolean singleUse) throws Exception {
         Map<String, Object> claims = new LinkedHashMap<>();
         claims.put("subject", "reviewer-a");
         claims.put("datasetId", datasetId);
@@ -116,6 +169,7 @@ class DatasetAccessScopeVerifierTest {
         claims.put("issuedAtEpochSeconds", Instant.now().getEpochSecond());
         claims.put("expiresAtEpochSeconds", expiry);
         claims.put("jti", "test-jti");
+        claims.put("singleUse", singleUse);
         String payload = Base64.getUrlEncoder().withoutPadding().encodeToString(
                 objectMapper.writeValueAsBytes(claims));
         String signed = "t4v1." + payload;

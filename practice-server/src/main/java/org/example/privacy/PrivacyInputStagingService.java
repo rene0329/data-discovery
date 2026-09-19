@@ -1,0 +1,115 @@
+package org.example.privacy;
+
+import org.example.entity.DatasetReplica;
+import org.example.entity.NodeManagement;
+import org.example.mapper.DatasetRegistrationMapper;
+import org.example.mapper.NodeManagementMapper;
+import org.example.privacy.PrivacyComputeModels.JobSpec;
+import org.example.privacy.PrivacyComputeModels.ParticipantSpec;
+import org.example.privacy.PrivacyComputeModels.StagingInput;
+import org.example.security.access.AccessAuditContext;
+import org.example.security.access.AccessAuthorizationResult;
+import org.example.security.access.AccessScope;
+import org.example.security.access.DatasetAccessAuthorizationService;
+import org.example.service.DatasetReplicaAvailabilityService;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
+/** Selects a strongly verified replica and mints an ephemeral scoped READ token at dispatch time. */
+@Service
+public class PrivacyInputStagingService {
+    private final DatasetRegistrationMapper datasets;
+    private final NodeManagementMapper nodes;
+    private final DatasetReplicaAvailabilityService availability;
+    private final DatasetAccessAuthorizationService access;
+    private final int agentPort;
+
+    public PrivacyInputStagingService(DatasetRegistrationMapper datasets,
+                                      NodeManagementMapper nodes,
+                                      DatasetReplicaAvailabilityService availability,
+                                      DatasetAccessAuthorizationService access,
+                                      @Value("${dispatch.data-discovery.port:8080}") int agentPort) {
+        this.datasets = datasets;
+        this.nodes = nodes;
+        this.availability = availability;
+        this.access = access;
+        this.agentPort = agentPort;
+    }
+
+    public List<StagingInput> prepare(String jobId, String attemptId, JobSpec spec) {
+        List<StagingInput> result = new ArrayList<>();
+        for (ParticipantSpec participant : spec.getParticipants()) {
+            long datasetId = Long.parseLong(participant.getDatasetId());
+            DatasetReplica replica = select(datasetId, participant);
+            NodeManagement node = nodes.getNodeById(replica.getNodeId());
+            if (node == null || blank(node.getNodeName())) {
+                throw new IllegalStateException("selected privacy input node is unavailable");
+            }
+            String address = !blank(node.getInternalIp()) ? node.getInternalIp() : node.getExternalIp();
+            if (blank(address)) throw new IllegalStateException("selected privacy input node has no address");
+            AccessScope scope = new AccessScope(participant.getDatasetId(), participant.getDatasetVersion(),
+                    replica.getFilePath(), "READ", node.getNodeName());
+            AccessAuthorizationResult token = access.issueInternalOneTime(scope,
+                    new AccessAuditContext(jobId + ":" + participant.getPartyId(), attemptId, null));
+            if (participant.getFrozenSchema() == null || participant.getFrozenSchema().isEmpty()) {
+                throw new IllegalStateException("frozen dataset schema is unavailable at dispatch");
+            }
+
+            StagingInput input = new StagingInput();
+            input.setPartyId(participant.getPartyId());
+            input.setDatasetId(participant.getDatasetId());
+            input.setDatasetVersion(participant.getDatasetVersion());
+            input.setExpectedSha256(digestWire(participant.getDatasetSha256()));
+            input.setExpectedSize(participant.getAuthoritativeSizeBytes());
+            input.setExpectedSchema(participant.getFrozenSchema());
+            input.setExpectedSchemaDigest(digestWire(participant.getSchemaDigest()));
+            input.setNodeId(node.getNodeId());
+            input.setNodeName(node.getNodeName());
+            input.setAgentBaseUrl("http://" + host(address) + ":" + agentPort);
+            input.setSourcePath(replica.getFilePath());
+            input.setTokenType(token.getTokenType());
+            input.setToken(token.getToken());
+            input.setExpiresAt(token.getExpiresAt());
+            result.add(input);
+        }
+        return result;
+    }
+
+    private DatasetReplica select(long datasetId, ParticipantSpec participant) {
+        List<DatasetReplica> replicas = datasets.listReplicas(datasetId);
+        if (replicas == null) replicas = new ArrayList<>();
+        return replicas.stream()
+                .filter(item -> availability.evaluate(item).isUsable())
+                .filter(item -> participant.getDatasetSha256().equals(normalize(item.getChecksum())))
+                .filter(item -> participant.getAuthoritativeSizeBytes().equals(item.getSizeBytes()))
+                .sorted(Comparator.comparing(DatasetReplica::getNodeId)
+                        .thenComparing(DatasetReplica::getFilePath))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "no strongly verified replica matches the frozen dataset version for party "
+                                + participant.getPartyId()));
+    }
+
+    private String normalize(String value) {
+        if (value == null) return "";
+        String result = value.trim().toLowerCase();
+        return result.startsWith("sha256:") ? result.substring(7) : result;
+    }
+
+    private String host(String value) {
+        String trimmed = value.trim();
+        return trimmed.contains(":") && !trimmed.startsWith("[") ? "[" + trimmed + "]" : trimmed;
+    }
+
+    private String digestWire(String value) {
+        if (blank(value)) throw new IllegalStateException("frozen SHA-256 digest is unavailable");
+        String normalized = value.trim().toLowerCase();
+        return normalized.startsWith("sha256:") ? normalized : "sha256:" + normalized;
+    }
+
+    private boolean blank(String value) { return value == null || value.trim().isEmpty(); }
+}

@@ -28,6 +28,10 @@ public class RegisteredDatasetView {
     private Integer totalReplicaCount;
     private String statusReason;
     private Integer rowVersion;
+    private String authoritativeSha256;
+    private Long authoritativeSizeBytes;
+    private Object schema;
+    private String schemaDigest;
 
     public static RegisteredDatasetView from(RegisteredDataset entity, Map<String, String> labels,
                                              List<DatasetReplica> replicas) {
@@ -75,6 +79,10 @@ public class RegisteredDatasetView {
     public Integer getAvailableReplicaCount() { return availableReplicaCount; }
     public Integer getTotalReplicaCount() { return totalReplicaCount; }
     public String getStatusReason() { return statusReason; }
+    public String getAuthoritativeSha256() { return authoritativeSha256; }
+    public Long getAuthoritativeSizeBytes() { return authoritativeSizeBytes; }
+    public Object getSchema() { return schema; }
+    public String getSchemaDigest() { return schemaDigest; }
 
     public void setReplicaHealth(String healthStatus, int availableReplicaCount,
                                  int totalReplicaCount, String statusReason) {
@@ -82,5 +90,13 @@ public class RegisteredDatasetView {
         this.availableReplicaCount = availableReplicaCount;
         this.totalReplicaCount = totalReplicaCount;
         this.statusReason = statusReason;
+    }
+
+    public void setVersionAuthority(String authoritativeSha256, Long authoritativeSizeBytes,
+                                    Object schema, String schemaDigest) {
+        this.authoritativeSha256 = authoritativeSha256;
+        this.authoritativeSizeBytes = authoritativeSizeBytes;
+        this.schema = schema;
+        this.schemaDigest = schemaDigest;
     }
 }

@@ -34,6 +34,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Collections;
@@ -541,7 +543,48 @@ public class DatasetRegistrationService {
                 : usable < replicas.size() ? "DEGRADED" : "HEALTHY";
         view.setReplicaHealth(health, usable, replicas.size(),
                 usable == replicas.size() ? null : reason);
+        DatasetMetadata metadata = mapper.findDatasetMetadata(dataset.getDatasetId());
+        if (metadata != null) {
+            Object schema = readSchemaForView(metadata.getSchemaJson());
+            String canonicalSchema = canonicalJsonForView(schema);
+            view.setVersionAuthority(normalizeSha256(metadata.getDigestValue()),
+                    metadata.getAuthoritativeSizeBytes(), schema,
+                    canonicalSchema == null ? null : sha256ForView(canonicalSchema));
+        }
         return view;
+    }
+
+    private Object readSchemaForView(String value) {
+        if (value == null || value.trim().isEmpty()) return null;
+        try {
+            return objectMapper.readValue(value, Object.class);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String canonicalJsonForView(Object value) {
+        if (value == null) return null;
+        try {
+            ObjectMapper canonical = objectMapper.copy();
+            canonical.configure(com.fasterxml.jackson.databind.MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
+            canonical.configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+            return canonical.writeValueAsString(value);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String sha256ForView(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder(64);
+            for (byte item : digest) result.append(String.format("%02x", item & 0xff));
+            return result.toString();
+        } catch (Exception ex) {
+            throw new IllegalStateException("SHA-256 is unavailable", ex);
+        }
     }
 
     private int countUsableReplicas(Long datasetId) {

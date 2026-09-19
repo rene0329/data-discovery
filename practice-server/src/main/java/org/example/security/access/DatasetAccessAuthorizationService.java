@@ -67,7 +67,7 @@ public class DatasetAccessAuthorizationService {
         }
         validateRegisteredScope(principal, scope, context, rule);
 
-        return issue(principal, scope, context, rule, properties.getTokenTtlSeconds());
+        return issue(principal, scope, context, rule, properties.getTokenTtlSeconds(), false);
     }
 
     /**
@@ -87,12 +87,25 @@ public class DatasetAccessAuthorizationService {
         }
         // A task token must remain valid for the longest accepted Job transfer.
         // Public reviewer tokens retain the shorter configured TTL.
-        return issue("SYSTEM", scope, context, "INTERNAL_SYSTEM", 3600L);
+        return issue("SYSTEM", scope, context, "INTERNAL_SYSTEM", 3600L, false);
+    }
+
+    /** Issues an internal token whose JTI may be consumed exactly once by the target Agent. */
+    public AccessAuthorizationResult issueInternalOneTime(AccessScope requested,
+                                                          AccessAuditContext context) {
+        AccessScope scope = normalize(requested);
+        if (!properties.isEnabled()) {
+            audit("SYSTEM", scope, context, "INTERNAL_PRIVACY_ONE_TIME", "DENIED",
+                    "ACCESS_CONTROL_DISABLED", null, null);
+            throw new AccessAuthorizationException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "ACCESS_CONTROL_DISABLED", "dataset access control is disabled");
+        }
+        return issue("SYSTEM", scope, context, "INTERNAL_PRIVACY_ONE_TIME", 3600L, true);
     }
 
     private AccessAuthorizationResult issue(String principal, AccessScope scope,
                                             AccessAuditContext context, String rule,
-                                            long requestedTtlSeconds) {
+                                            long requestedTtlSeconds, boolean singleUse) {
 
         long now = Instant.now().getEpochSecond();
         long ttl = Math.max(1L, Math.min(requestedTtlSeconds, 3600L));
@@ -106,6 +119,7 @@ public class DatasetAccessAuthorizationService {
         claims.setIssuedAtEpochSeconds(now);
         claims.setExpiresAtEpochSeconds(now + ttl);
         claims.setJti(UUID.randomUUID().toString());
+        claims.setSingleUse(singleUse);
         String token = tokenCodec.encode(claims);
         LocalDateTime expiresAt = LocalDateTime.ofInstant(
                 Instant.ofEpochSecond(claims.getExpiresAtEpochSeconds()), ZoneOffset.UTC);

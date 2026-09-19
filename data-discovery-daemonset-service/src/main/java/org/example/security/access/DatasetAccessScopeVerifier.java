@@ -19,6 +19,8 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Reusable verifier for read/download/copy/verify/write/delete node endpoints. */
 @Component
@@ -30,6 +32,7 @@ public class DatasetAccessScopeVerifier {
     private final DatasetRegistrationMapper datasets;
     private final NodeManagementMapper nodes;
     private final DatasetReplicaAvailabilityService availability;
+    private final ConcurrentHashMap<String, Long> consumedSingleUseJtis = new ConcurrentHashMap<>();
 
     @Autowired(required = false)
     private NodeDatasetAccessAuditMapper auditMapper;
@@ -63,6 +66,7 @@ public class DatasetAccessScopeVerifier {
                 throw new TokenVerificationException("TOKEN_SCOPE_MISMATCH",
                         "token does not permit this node dataset operation");
             }
+            consumeIfSingleUse(claims);
             audit(claims, datasetId, datasetVersion, path, action, "ALLOWED", "TOKEN_VERIFIED");
             return claims;
         } catch (TokenVerificationException ex) {
@@ -83,6 +87,7 @@ public class DatasetAccessScopeVerifier {
                         "token does not permit this node path operation");
             }
             validateRegisteredPathScope(claims, path, action);
+            consumeIfSingleUse(claims);
             audit(claims, claims.getDatasetId(), claims.getDatasetVersion(), path, action,
                     "ALLOWED", "TOKEN_VERIFIED");
             return claims;
@@ -141,6 +146,23 @@ public class DatasetAccessScopeVerifier {
             return Long.valueOf(value);
         } catch (RuntimeException ex) {
             return null;
+        }
+    }
+
+    private void consumeIfSingleUse(NodeAccessTokenClaims claims) {
+        if (claims == null || !claims.isSingleUse()) return;
+        long now = Instant.now().getEpochSecond();
+        for (Map.Entry<String, Long> item : consumedSingleUseJtis.entrySet()) {
+            Long expiresAt = item.getValue();
+            if (expiresAt <= now) {
+                consumedSingleUseJtis.remove(item.getKey(), expiresAt);
+            }
+        }
+        Long alreadyConsumedUntil = consumedSingleUseJtis.putIfAbsent(
+                claims.getJti(), claims.getExpiresAtEpochSeconds());
+        if (alreadyConsumedUntil != null) {
+            throw new TokenVerificationException("TOKEN_REPLAYED",
+                    "single-use scoped access token was already consumed");
         }
     }
 

@@ -115,6 +115,17 @@ class DatasetAccessAuthorizationServiceTest {
     }
 
     @Test
+    void privacyInternalTokenCarriesSingleUseClaim() {
+        AccessScope scope = scope("1", "/dataset/a.bin", "READ", "master-88");
+
+        AccessAuthorizationResult result = service.issueInternalOneTime(scope, context());
+
+        AccessTokenClaims claims = codec.decodeAndVerify(result.getToken());
+        assertEquals("SYSTEM", claims.getSubject());
+        org.junit.jupiter.api.Assertions.assertTrue(claims.isSingleUse());
+    }
+
+    @Test
     void publicTokenCannotSubstituteAnotherDatasetsPath() {
         AccessAuthorizationException denied = assertThrows(AccessAuthorizationException.class,
                 () -> service.authorizeAndIssue(

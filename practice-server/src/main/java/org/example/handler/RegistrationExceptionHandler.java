@@ -19,7 +19,8 @@ import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 @Order(Ordered.HIGHEST_PRECEDENCE)
-@RestControllerAdvice(basePackages = "org.example.controller.registration")
+@RestControllerAdvice(basePackages = {"org.example.controller.registration",
+        "org.example.security.aggregation.coordinator"})
 @Slf4j
 public class RegistrationExceptionHandler {
 
