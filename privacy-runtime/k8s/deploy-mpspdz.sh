@@ -117,11 +117,11 @@ kubectl -n kuscia-master create configmap topic4-privacy-mpspdz-gateway-config \
   --from-file=runner-endpoints.json="$work/runner-endpoints.json" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-export MPSPDZ_IMAGE NODE_A NODE_B NODE_C
+export MPSPDZ_IMAGE MPSPDZ_IMAGE_DIGEST NODE_A NODE_B NODE_C
 python3 - "$here/mpspdz.json.tpl" "$work/mpspdz.json" <<'PY'
 import os, sys
 value = open(sys.argv[1], encoding="utf-8").read()
-for name in ("MPSPDZ_IMAGE", "NODE_A", "NODE_B", "NODE_C"):
+for name in ("MPSPDZ_IMAGE", "MPSPDZ_IMAGE_DIGEST", "NODE_A", "NODE_B", "NODE_C"):
     value = value.replace("__%s__" % name, os.environ[name])
 if "__" in value:
     raise SystemExit("unresolved manifest placeholder")

@@ -68,6 +68,7 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
                              "topic4-privacy-%s-gateway" % provider)
             pod = dep["spec"]["template"]["spec"]
             container = pod["containers"][0]
+            self.assertEqual(container["image"], "%s@%s" % (IMAGE, DIGEST))
             self.assertNotIn("envFrom", container)
             env = {item["name"]: item["value"] for item in container["env"]
                    if "value" in item}
@@ -109,6 +110,8 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
         dep = deployment(gateway_items, "topic4-privacy-mpspdz-gateway")
         pod = dep["spec"]["template"]["spec"]
         container = pod["containers"][0]
+        self.assertEqual(container["image"],
+                         "__MPSPDZ_IMAGE__@__MPSPDZ_IMAGE_DIGEST__")
         env = {item["name"]: item["value"] for item in container["env"]
                if "value" in item}
         self.assertEqual(env["TOPIC4_AUTH_TOKEN_FILE"],
@@ -147,6 +150,8 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
         self.assertIn("privacy-mpspdz-gateway-auth", mpspdz)
         self.assertIn("privacy-mpspdz-runner-auth", mpspdz)
         self.assertIn('"privacy-mpspdz-runner-${lower}-auth"', mpspdz)
+        self.assertIn('export MPSPDZ_IMAGE MPSPDZ_IMAGE_DIGEST', mpspdz)
+        self.assertIn('"MPSPDZ_IMAGE_DIGEST", "NODE_A"', mpspdz)
 
     def test_sfl_smoke_uses_gateway_ingress_secret(self):
         script = (K8S / "run-and-approve-sfl-smoke.sh").read_text(encoding="utf-8")

@@ -982,7 +982,7 @@
                     "value": "/var/lib/topic4-privacy/gateway"
                   }
                 ],
-                "image": "__MPSPDZ_IMAGE__",
+                "image": "__MPSPDZ_IMAGE__@__MPSPDZ_IMAGE_DIGEST__",
                 "imagePullPolicy": "IfNotPresent",
                 "livenessProbe": {
                   "failureThreshold": 3,

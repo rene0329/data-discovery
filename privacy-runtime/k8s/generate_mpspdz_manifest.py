@@ -151,7 +151,9 @@ def gateway():
                         "affinity": affinity(),
                         "securityContext": {"runAsNonRoot": True, "runAsUser": 10001, "fsGroup": 10001},
                         "containers": [{
-                            "name": "gateway", "image": "__MPSPDZ_IMAGE__", "imagePullPolicy": "IfNotPresent",
+                            "name": "gateway",
+                            "image": "__MPSPDZ_IMAGE__@__MPSPDZ_IMAGE_DIGEST__",
+                            "imagePullPolicy": "IfNotPresent",
                             "command": ["python3", "/opt/topic4/bin/topic4_privacy_gateway.py"],
                             "ports": [{"name": "http", "containerPort": 8080}],
                             "env": [
