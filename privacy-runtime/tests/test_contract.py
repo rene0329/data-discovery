@@ -1156,6 +1156,11 @@ class ArtifactTest(unittest.TestCase):
         self.assertIn("/state/jobs /state/models /state/smoke", function)
         self.assertIn("chmod 0700 /state/jobs /state/models /state/smoke", function)
         self.assertNotIn("chmod 0700 /state\"", function)
+        apply_kd = script.index('kubectl apply -f -')
+        patch_storage = script.index('patch_party_storage "$provider" domain-a')
+        available = script.index('jsonpath={.status.phase}=Available')
+        self.assertLess(apply_kd, patch_storage)
+        self.assertLess(patch_storage, available)
 
 
 if __name__ == "__main__":

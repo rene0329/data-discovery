@@ -107,13 +107,6 @@ for provider in apsi secretflow sfl; do
     < "$work/${provider}-kd.json"
 done
 
-for provider in apsi secretflow sfl; do
-  kubectl -n kuscia-master exec deploy/kuscia-master -- \
-    kubectl -n cross-domain wait \
-    --for='jsonpath={.status.phase}=Available' \
-    "kusciadeployment/topic4-privacy-${provider}-parties" --timeout="$timeout"
-done
-
 # AppImage v1.2 exposes config-template mounts but no arbitrary Pod volumes.
 # Patch the concrete Deployment in each Lite domain after Kuscia materializes
 # it. The v1.2 deployment reconciler preserves operator-added pod fields while
@@ -129,6 +122,22 @@ patch_party_storage() {
   # kubectl invocation inside the Lite Pod cannot read the logical domain
   # namespace.  The master embedded cluster owns these Deployments and is the
   # only supported administrative path for patching them.
+  timeout "$timeout" bash -c '
+    set -euo pipefail
+    while true; do
+      deployments="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
+        kubectl -n "$1" get deployment \
+        -l "kuscia.secretflow/kd-name=topic4-privacy-$2-parties" \
+        -o name \
+        2>/dev/null || true)"
+      count="$(printf "%s\n" "$deployments" | sed "/^$/d" | wc -l | tr -d " ")"
+      [[ "$count" == 1 ]] && exit 0
+      sleep 2
+    done
+  ' _ "$domain" "$provider" || {
+    echo "timed out waiting for ${provider} deployment in ${domain}" >&2
+    exit 1
+  }
   deployment="$(kubectl -n kuscia-master exec deploy/kuscia-master -- \
     kubectl -n "$domain" get deployment \
     -l "kuscia.secretflow/kd-name=topic4-privacy-${provider}-parties" \
@@ -169,6 +178,13 @@ for provider in apsi secretflow sfl; do
   patch_party_storage "$provider" domain-a
   patch_party_storage "$provider" domain-b
   patch_party_storage "$provider" domain-c
+done
+
+for provider in apsi secretflow sfl; do
+  kubectl -n kuscia-master exec deploy/kuscia-master -- \
+    kubectl -n cross-domain wait \
+    --for='jsonpath={.status.phase}=Available' \
+    "kusciadeployment/topic4-privacy-${provider}-parties" --timeout="$timeout"
 done
 
 # RunK projects Pods, ConfigMaps and Secrets into the outer Kubernetes
