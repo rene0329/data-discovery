@@ -4,6 +4,7 @@ ARG SECRETFLOW_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-secr
 FROM ${PSI_BUILDER_BASE} AS psi-builder
 ARG PSI_COMMIT=72f3312fd9142ea567f3a170d0808a2118b75af8
 ARG PSI_SOURCE_SHA256=aafae2d0351ab301baa33693d68a25dd5cf45955632a476e8bd617212003fb72
+ARG BAZEL_VERSION=7.4.1
 WORKDIR /build
 COPY providers/secretflow/psi-v0.6.0.dev260105-72f3312fd9142ea567f3a170d0808a2118b75af8.tar.gz /tmp/psi-source.tar.gz
 RUN echo "${PSI_SOURCE_SHA256}  /tmp/psi-source.tar.gz" | sha256sum --check --strict \
@@ -13,7 +14,7 @@ RUN echo "${PSI_SOURCE_SHA256}  /tmp/psi-source.tar.gz" | sha256sum --check --st
 WORKDIR /build/source
 RUN conda install -y perl=5.32.1 \
     && conda update -y sysroot_linux-64 \
-    && bazel build //psi/apps/psi_launcher:main -c opt --config=linux-release \
+    && USE_BAZEL_VERSION="${BAZEL_VERSION}" bazel build //psi/apps/psi_launcher:main -c opt --config=linux-release \
        --repository_cache=/tmp/bazel_repo_cache --remote_timeout=300s --remote_retries=10 \
     && install -D -m 0555 bazel-bin/psi/apps/psi_launcher/main /out/main \
     && install -D -m 0444 examples/pir/apsi/parameters/100K-1-16.json /out/parameters/100K-1-16.json \
