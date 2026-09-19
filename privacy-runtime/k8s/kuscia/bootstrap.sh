@@ -35,7 +35,13 @@ trap cleanup EXIT
 umask 077
 
 domain_key() {
-  openssl genrsa -traditional 2048 2>/dev/null
+  # OpenSSL 3 needs -traditional for Kuscia's PKCS#1 domain key, while
+  # OpenSSL 1.1 emits PKCS#1 by default and rejects that option.
+  if openssl genrsa -help 2>&1 | grep -q -- '-traditional'; then
+    openssl genrsa -traditional 2048 2>/dev/null
+  else
+    openssl genrsa 2048 2>/dev/null
+  fi
 }
 
 write_master_config() {
