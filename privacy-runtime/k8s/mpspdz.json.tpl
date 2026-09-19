@@ -256,7 +256,8 @@
                   "capabilities": {
                     "add": [
                       "CHOWN",
-                      "DAC_OVERRIDE"
+                      "DAC_OVERRIDE",
+                      "FOWNER"
                     ],
                     "drop": [
                       "ALL"
@@ -580,7 +581,8 @@
                   "capabilities": {
                     "add": [
                       "CHOWN",
-                      "DAC_OVERRIDE"
+                      "DAC_OVERRIDE",
+                      "FOWNER"
                     ],
                     "drop": [
                       "ALL"
@@ -904,7 +906,8 @@
                   "capabilities": {
                     "add": [
                       "CHOWN",
-                      "DAC_OVERRIDE"
+                      "DAC_OVERRIDE",
+                      "FOWNER"
                     ],
                     "drop": [
                       "ALL"

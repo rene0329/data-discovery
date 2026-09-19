@@ -115,7 +115,7 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
                           prepare["command"][-1])
             self.assertFalse(prepare["securityContext"]["runAsNonRoot"])
             self.assertEqual(prepare["securityContext"]["capabilities"]["add"],
-                             ["CHOWN", "DAC_OVERRIDE"])
+                             ["CHOWN", "DAC_OVERRIDE", "FOWNER"])
         gateway_items = module.gateway()
         items.extend(gateway_items)
         dep = deployment(gateway_items, "topic4-privacy-mpspdz-gateway")

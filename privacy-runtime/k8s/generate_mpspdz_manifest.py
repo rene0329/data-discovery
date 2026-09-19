@@ -76,7 +76,7 @@ def party(letter, index):
                                 "allowPrivilegeEscalation": False,
                                 "capabilities": {
                                     "drop": ["ALL"],
-                                    "add": ["CHOWN", "DAC_OVERRIDE"],
+                                    "add": ["CHOWN", "DAC_OVERRIDE", "FOWNER"],
                                 },
                             },
                             "volumeMounts": [
