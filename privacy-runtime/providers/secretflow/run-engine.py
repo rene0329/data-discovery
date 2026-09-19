@@ -538,6 +538,8 @@ def _initialize_secretflow(
             "connect_retry_interval_ms": 1000,
             "recv_timeout_ms": timeout_ms,
             "http_timeout_ms": timeout_ms,
+            "brpc_channel_protocol": "http",
+            "brpc_channel_connection_type": "pooled",
         },
         enable_waiting_for_other_parties_ready=True,
         logging_level="warning",
@@ -573,6 +575,8 @@ def _initialize_secretflow(
                 "connect_retry_interval_ms": 1000,
                 "recv_timeout_ms": timeout_ms,
                 "http_timeout_ms": timeout_ms,
+                "brpc_channel_protocol": "http",
+                "brpc_channel_connection_type": "pooled",
             },
             id="topic4-psi-%s" % request["attemptId"],
         )

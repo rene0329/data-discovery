@@ -180,10 +180,23 @@ def execute(request, work_dir, context, local_party, epochs):
     job_name = "topic4-%s-%s" % (request["jobId"], request["attemptId"])
     if not re.fullmatch(r"topic4-[A-Za-z0-9._:-]+-[A-Za-z0-9._:-]+", job_name):
         raise ValueError("invalid production job name")
+    timeout_ms = min(int(request["timeoutSeconds"]) * 1000, 3_600_000)
+    link_desc = {
+        "connect_retry_times": 120,
+        "connect_retry_interval_ms": 1000,
+        "recv_timeout_ms": timeout_ms,
+        "http_timeout_ms": timeout_ms,
+        # Kuscia Cluster routes terminate mTLS in Envoy and expose an HTTP
+        # upstream on port 80. BRPC's native baidu_std framing cannot traverse
+        # that route, so both RayFed and SPU must use BRPC-over-HTTP.
+        "brpc_channel_protocol": "http",
+        "brpc_channel_connection_type": "pooled",
+    }
     sf.init(
         cluster_config=context["sflClusterConfig"],
         ray_mode=False,
         cross_silo_comm_backend="brpc_link",
+        cross_silo_comm_options=dict(link_desc, timeout_in_ms=timeout_ms),
         enable_waiting_for_other_parties_ready=True,
         job_name=job_name,
         log_to_driver=True,
@@ -193,7 +206,8 @@ def execute(request, work_dir, context, local_party, epochs):
     local_model = attempt_root / local_party / "logreg"
     try:
         devices = {party: sf.PYU(party) for party in PARTIES}
-        spu = sf.SPU(context["spuClusterDef"])
+        spu = sf.SPU(context["spuClusterDef"], link_desc=link_desc,
+                     id="topic4-sfl-aggregate-%s" % request["attemptId"])
         fed_model = FLModel(
             device_list=[devices[party] for party in PARTIES],
             model=model_builder,

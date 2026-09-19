@@ -1090,6 +1090,15 @@ class ArtifactTest(unittest.TestCase):
         self.assertNotIn("git fetch", dockerfile)
         self.assertNotIn("git clone", dockerfile)
 
+    def test_secretflow_transports_use_kuscia_http_routes(self):
+        for relative in ("providers/sfl/hfl_fedavg_logreg.py",
+                         "providers/secretflow/run-engine.py"):
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn('"brpc_channel_protocol": "http"', source)
+            self.assertIn('"brpc_channel_connection_type": "pooled"', source)
+        sfl = (ROOT / "providers/sfl/hfl_fedavg_logreg.py").read_text(encoding="utf-8")
+        self.assertIn('sf.SPU(context["spuClusterDef"], link_desc=link_desc', sfl)
+
     def test_psi_image_uses_verified_cached_source_archive(self):
         dockerfile = (ROOT / "providers/secretflow/Dockerfile").read_text(encoding="utf-8")
         lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
