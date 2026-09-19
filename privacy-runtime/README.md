@@ -75,7 +75,10 @@ The PSI build consumes a reproducible archive of commit
 `72f3312fd9142ea567f3a170d0808a2118b75af8` and verifies its SHA-256 before
 running Bazel 7.4.1. The Bazel version is pinned because newer Bazel binaries
 do not run on the glibc supplied by the upstream digest-pinned release-ci
-image. The source step does not resolve a live tag or branch.
+image. SecretFlow's Bazel registry is also frozen at release-time commit
+`e38aa6c2082bba3a92b2771f83a04f50ad8d5a61`, verified from a cached archive,
+and used through a local `file:///` registry. The source step does not resolve
+a live tag, branch, or raw GitHub registry file.
 
 SFL is pinned to `c383e40f665063d7f7d87e437a73e015f87c435c`. That
 unreleased source declares `1.0.0.dev$$DATE$$` and requires

@@ -1094,8 +1094,13 @@ class ArtifactTest(unittest.TestCase):
         dockerfile = (ROOT / "providers/secretflow/Dockerfile").read_text(encoding="utf-8")
         lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
         psi = next(item for item in lock["dependencies"] if item["name"] == "SecretFlow PSI")
+        registry = next(item for item in lock["dependencies"]
+                        if item["name"] == "SecretFlow Bazel Registry")
         self.assertIn(psi["sourceArchive"], dockerfile)
         self.assertIn(psi["sourceArchiveSha256"], dockerfile)
+        self.assertIn(registry["sourceArchive"], dockerfile)
+        self.assertIn(registry["sourceArchiveSha256"], dockerfile)
+        self.assertIn("common --registry=file:///opt/bazel-registry", dockerfile)
         self.assertIn("sha256sum --check --strict", dockerfile)
         self.assertNotIn("git clone", dockerfile)
 

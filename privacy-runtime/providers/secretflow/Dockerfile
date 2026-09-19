@@ -4,21 +4,33 @@ ARG SECRETFLOW_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-secr
 FROM ${PSI_BUILDER_BASE} AS psi-builder
 ARG PSI_COMMIT=72f3312fd9142ea567f3a170d0808a2118b75af8
 ARG PSI_SOURCE_SHA256=aafae2d0351ab301baa33693d68a25dd5cf45955632a476e8bd617212003fb72
+ARG BAZEL_REGISTRY_COMMIT=e38aa6c2082bba3a92b2771f83a04f50ad8d5a61
+ARG BAZEL_REGISTRY_SHA256=11929433e8268f16b855a1b1f9f51630154055d3f66164f5df02f438b93eec57
 ARG BAZEL_VERSION=7.4.1
 WORKDIR /build
 COPY providers/secretflow/psi-v0.6.0.dev260105-72f3312fd9142ea567f3a170d0808a2118b75af8.tar.gz /tmp/psi-source.tar.gz
+COPY providers/secretflow/bazel-registry-e38aa6c2082bba3a92b2771f83a04f50ad8d5a61.tar.gz /tmp/bazel-registry.tar.gz
 RUN echo "${PSI_SOURCE_SHA256}  /tmp/psi-source.tar.gz" | sha256sum --check --strict \
+    && echo "${BAZEL_REGISTRY_SHA256}  /tmp/bazel-registry.tar.gz" | sha256sum --check --strict \
     && mkdir source \
     && tar -xzf /tmp/psi-source.tar.gz --strip-components=1 -C source \
-    && rm -f /tmp/psi-source.tar.gz
+    && mkdir /opt/bazel-registry \
+    && tar -xzf /tmp/bazel-registry.tar.gz --strip-components=1 -C /opt/bazel-registry \
+    && test -f /opt/bazel-registry/bazel_registry.json \
+    && rm -f /tmp/psi-source.tar.gz /tmp/bazel-registry.tar.gz
 WORKDIR /build/source
 RUN conda install -y perl=5.32.1 \
     && conda update -y sysroot_linux-64 \
+    && test "$(grep -Fxc 'common --registry=https://raw.githubusercontent.com/secretflow/bazel-registry/main' .bazelrc)" = 1 \
+    && sed -i 's#^common --registry=https://raw.githubusercontent.com/secretflow/bazel-registry/main$#common --registry=file:///opt/bazel-registry#' .bazelrc \
+    && test "$(grep -Fxc 'common --registry=file:///opt/bazel-registry' .bazelrc)" = 1 \
+    && ! grep -Fq 'raw.githubusercontent.com/secretflow/bazel-registry' .bazelrc \
     && USE_BAZEL_VERSION="${BAZEL_VERSION}" bazel build //psi/apps/psi_launcher:main -c opt --config=linux-release \
        --repository_cache=/tmp/bazel_repo_cache --remote_timeout=300s --remote_retries=10 \
     && install -D -m 0555 bazel-bin/psi/apps/psi_launcher/main /out/main \
     && install -D -m 0444 examples/pir/apsi/parameters/100K-1-16.json /out/parameters/100K-1-16.json \
-    && printf '%s\n' "${PSI_COMMIT}" > /out/SOURCE_REVISION
+    && printf '%s\n' "${PSI_COMMIT}" > /out/SOURCE_REVISION \
+    && printf '%s\n' "${BAZEL_REGISTRY_COMMIT}" > /out/BAZEL_REGISTRY_REVISION
 
 FROM ${SECRETFLOW_BASE}
 

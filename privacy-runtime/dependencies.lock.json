@@ -9,6 +9,7 @@
     {"name": "MP-SPDZ", "version": "0.4.3", "gitCommit": "26a605368e40fed3a7e9cee78c9a3f4390b85eb5", "releaseAsset": "mp-spdz-0.4.3.tar.xz", "releaseAssetSha256": "4b5f4f7a79f31365288fe4498ba2b70afc314c028696929c8d259ef50ab2e759", "license": "BSD-3-Clause"},
     {"name": "Python base", "version": "3.10.3-bullseye", "linuxAmd64Image": "docker.io/library/python@sha256:460573a11357df4f338df5b5afe8ac1fddb6338391a318296fe9b13bd919319b"},
     {"name": "SecretFlow release-ci", "version": "20250228", "linuxAmd64Image": "docker.io/secretflow/release-ci@sha256:b84f9cacf93a20963811addc794ef1b92ccc3a86c7e94c7994a91e2f10f305c0"},
+    {"name": "SecretFlow Bazel Registry", "gitCommit": "e38aa6c2082bba3a92b2771f83a04f50ad8d5a61", "sourceArchive": "bazel-registry-e38aa6c2082bba3a92b2771f83a04f50ad8d5a61.tar.gz", "sourceArchiveSha256": "11929433e8268f16b855a1b1f9f51630154055d3f66164f5df02f438b93eec57", "purpose": "Offline module metadata for the SecretFlow PSI build", "license": "Apache-2.0"},
     {"name": "Bazel", "version": "7.4.1", "purpose": "SecretFlow PSI build tool", "license": "Apache-2.0"}
   ]
 }
