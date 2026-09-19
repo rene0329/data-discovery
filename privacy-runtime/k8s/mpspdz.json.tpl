@@ -263,6 +263,7 @@
                     ]
                   },
                   "runAsGroup": 0,
+                  "runAsNonRoot": false,
                   "runAsUser": 0
                 },
                 "volumeMounts": [
@@ -586,6 +587,7 @@
                     ]
                   },
                   "runAsGroup": 0,
+                  "runAsNonRoot": false,
                   "runAsUser": 0
                 },
                 "volumeMounts": [
@@ -909,6 +911,7 @@
                     ]
                   },
                   "runAsGroup": 0,
+                  "runAsNonRoot": false,
                   "runAsUser": 0
                 },
                 "volumeMounts": [

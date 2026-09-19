@@ -72,7 +72,7 @@ def party(letter, index):
                                 " && chmod 0700 /state /inputs /work",
                             ],
                             "securityContext": {
-                                "runAsUser": 0, "runAsGroup": 0,
+                                "runAsNonRoot": False, "runAsUser": 0, "runAsGroup": 0,
                                 "allowPrivilegeEscalation": False,
                                 "capabilities": {
                                     "drop": ["ALL"],

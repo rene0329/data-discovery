@@ -113,6 +113,7 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
                 {"state": "/state", "inputs": "/inputs", "work": "/work"})
             self.assertIn("chown 10001:10001 /state /inputs /work",
                           prepare["command"][-1])
+            self.assertFalse(prepare["securityContext"]["runAsNonRoot"])
             self.assertEqual(prepare["securityContext"]["capabilities"]["add"],
                              ["CHOWN", "DAC_OVERRIDE"])
         gateway_items = module.gateway()
