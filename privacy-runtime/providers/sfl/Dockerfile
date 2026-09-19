@@ -18,8 +18,8 @@ RUN mkdir /opt/sfl \
     && git -C /opt/sfl checkout --detach FETCH_HEAD \
     && test "$(git -C /opt/sfl rev-parse HEAD)" = "${SFL_COMMIT}" \
     && printf '%s\n' "${SFL_COMMIT}" > /opt/sfl/SOURCE_REVISION \
-    && sed -i "s|^__version__ = .*|__version__ = \\"${SFL_LOCAL_BUILD_VERSION}\\"|" /opt/sfl/sfl/version.py \
-    && sed -i "s|^__commit_id__ = .*|__commit_id__ = \\"${SFL_COMMIT}\\"|" /opt/sfl/sfl/version.py \
+    && python3 -c 'import pathlib,sys; p=pathlib.Path("/opt/sfl/sfl/version.py"); s=p.read_text(); s=s.replace("1.0.0.dev$$DATE$$", sys.argv[1]).replace("$$COMMIT_ID$$", sys.argv[2]); p.write_text(s); assert sys.argv[1] in s and sys.argv[2] in s' \
+      "${SFL_LOCAL_BUILD_VERSION}" "${SFL_COMMIT}" \
     && PIP_INDEX_URL="${PIP_INDEX_URL}" python3 -m pip install \
       --no-cache-dir --no-deps /opt/sfl
 COPY providers/sfl/hfl_fedavg_logreg.py providers/sfl/sfl-engine-check.py runner/topic4_sfl_smoke.py /opt/topic4/bin/
