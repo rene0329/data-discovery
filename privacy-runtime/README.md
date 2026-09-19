@@ -75,6 +75,8 @@ empty/duplicate keys, and returns hit/value rows to the client runner.
 SFL is pinned to `c383e40f665063d7f7d87e437a73e015f87c435c`. That
 unreleased source declares `1.0.0.dev$$DATE$$` and requires
 `secretflow-lite==1.13.0b0`, SPU `>=0.9.4.dev20250618`, and Ray 2.52.0.
+The build consumes a reproducible `git archive` of that commit and verifies its
+SHA-256 before extraction, so the build does not depend on a live GitHub fetch.
 It has an independent image containing the registered TensorFlow FedAvg path;
 the unrelated Torch, vision, audio, ONNX, and XGBoost backends declared by the
 upstream package are excluded. The build check verifies the pinned libraries

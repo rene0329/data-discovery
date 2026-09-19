@@ -1,27 +1,25 @@
 ARG PYTHON_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-python-3.10.3-bullseye-amd64@sha256:460573a11357df4f338df5b5afe8ac1fddb6338391a318296fe9b13bd919319b
 FROM ${PYTHON_BASE}
 ARG SFL_COMMIT=c383e40f665063d7f7d87e437a73e015f87c435c
+ARG SFL_SOURCE_SHA256=ecf68f1bc97fdd4db08f16a56899e273013b442bce76d09e99f060e973cb2938
 ARG SFL_LOCAL_BUILD_VERSION=1.0.0.dev0+c383e40f
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-# Git and the CA bundle are part of the digest-pinned Python base.  Keeping the
-# build off mutable Debian indexes makes the fixed SFL source build repeatable.
-RUN command -v git \
-    && test -s /etc/ssl/certs/ca-certificates.crt
+# The source archive is produced with git archive at the pinned commit and is
+# checked before extraction. The build never resolves a moving branch or tag.
 COPY providers/sfl/runtime-requirements.txt /tmp/sfl-runtime-requirements.txt
 RUN python3 -m pip install --no-cache-dir \
       --index-url "${PIP_INDEX_URL}" \
       --requirement /tmp/sfl-runtime-requirements.txt
-RUN mkdir /opt/sfl \
-    && git -C /opt/sfl init \
-    && git -C /opt/sfl remote add origin https://github.com/secretflow/sfl.git \
-    && git -C /opt/sfl fetch --depth=1 origin "${SFL_COMMIT}" \
-    && git -C /opt/sfl checkout --detach FETCH_HEAD \
-    && test "$(git -C /opt/sfl rev-parse HEAD)" = "${SFL_COMMIT}" \
+COPY providers/sfl/sfl-c383e40f665063d7f7d87e437a73e015f87c435c.tar.gz /tmp/sfl-source.tar.gz
+RUN echo "${SFL_SOURCE_SHA256}  /tmp/sfl-source.tar.gz" | sha256sum --check --strict \
+    && mkdir /opt/sfl \
+    && tar -xzf /tmp/sfl-source.tar.gz --strip-components=1 -C /opt/sfl \
     && printf '%s\n' "${SFL_COMMIT}" > /opt/sfl/SOURCE_REVISION \
     && python3 -c 'import pathlib,sys; p=pathlib.Path("/opt/sfl/sfl/version.py"); s=p.read_text(); s=s.replace("1.0.0.dev$$DATE$$", sys.argv[1]).replace("$$COMMIT_ID$$", sys.argv[2]); p.write_text(s); assert sys.argv[1] in s and sys.argv[2] in s' \
       "${SFL_LOCAL_BUILD_VERSION}" "${SFL_COMMIT}" \
     && PIP_INDEX_URL="${PIP_INDEX_URL}" python3 -m pip install \
-      --no-cache-dir --no-deps /opt/sfl
+      --no-cache-dir --no-deps /opt/sfl \
+    && rm -f /tmp/sfl-source.tar.gz
 COPY providers/sfl/hfl_fedavg_logreg.py providers/sfl/sfl-engine-check.py runner/topic4_sfl_smoke.py /opt/topic4/bin/
 RUN python3 /opt/topic4/bin/hfl_fedavg_logreg.py --self-test
 COPY runner/topic4_privacy_runner.py /opt/topic4/bin/topic4_privacy_runner.py

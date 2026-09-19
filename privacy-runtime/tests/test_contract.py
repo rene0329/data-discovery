@@ -1082,7 +1082,12 @@ class ArtifactTest(unittest.TestCase):
         dockerfile = (ROOT / "providers/sfl/Dockerfile").read_text(encoding="utf-8")
         self.assertIn("--requirement /tmp/sfl-runtime-requirements.txt", dockerfile)
         self.assertIn("--no-cache-dir --no-deps /opt/sfl", dockerfile)
-        self.assertIn('fetch --depth=1 origin "${SFL_COMMIT}"', dockerfile)
+        lock = json.loads((ROOT / "dependencies.lock.json").read_text(encoding="utf-8"))
+        sfl = next(item for item in lock["dependencies"] if item["name"] == "SFL")
+        self.assertIn(sfl["sourceArchive"], dockerfile)
+        self.assertIn(sfl["sourceArchiveSha256"], dockerfile)
+        self.assertIn("sha256sum --check --strict", dockerfile)
+        self.assertNotIn("git fetch", dockerfile)
         self.assertNotIn("git clone", dockerfile)
 
     def test_generated_mpspdz_registry_is_current(self):
