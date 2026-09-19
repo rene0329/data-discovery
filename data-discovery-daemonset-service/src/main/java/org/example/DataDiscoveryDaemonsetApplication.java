@@ -1,6 +1,7 @@
 package org.example;
 
 import lombok.extern.slf4j.Slf4j;
+import org.example.config.Knife4jConfig;
 import org.example.controller.DataDiscoveryController;
 import org.example.controller.DatasetAccessController;
 import org.example.daemon.DaemonComponentRoot;
@@ -30,6 +31,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;  // 如果你
  */
 @SpringBootApplication(scanBasePackageClasses = DaemonComponentRoot.class)
 @Import({
+        Knife4jConfig.class,
         DataDiscoveryController.class,
         DatasetAccessController.class,
         FileDiscoveryService.class,
