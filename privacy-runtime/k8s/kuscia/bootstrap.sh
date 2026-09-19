@@ -137,7 +137,14 @@ if [[ "$rotate_domain_credentials" == 1 ]]; then
   # immediately recreates its namespaced DomainRoute with the old Pod as the
   # revision initializer, racing the cleanup below.
   for letter in a b c; do
+    active_pods="$(kubectl -n "kuscia-${letter}" get pods -l app=kuscia-lite \
+      -o 'jsonpath={range .items[?(@.status.containerStatuses[0].ready==true)]}{.metadata.name}{"\n"}{end}')"
     kubectl -n "kuscia-${letter}" scale deploy/kuscia-lite --replicas=0
+    while IFS= read -r active_pod; do
+      [[ -z "$active_pod" ]] && continue
+      kubectl -n "kuscia-${letter}" wait --for=delete "pod/${active_pod}" \
+        --timeout="$rollout_timeout"
+    done <<< "$active_pods"
     kubectl -n "kuscia-${letter}" rollout status deploy/kuscia-lite \
       --timeout="$rollout_timeout"
   done
