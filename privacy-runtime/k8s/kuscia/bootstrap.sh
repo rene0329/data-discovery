@@ -170,6 +170,12 @@ if [[ "$rotate_domain_credentials" == 1 ]]; then
   kubectl -n kuscia-master exec "$master_pod" -- \
     kubectl delete domains domain-a domain-b domain-c \
     --ignore-not-found=true --wait=true
+  # The Domain controller intentionally leaves logical namespaces behind.
+  # Recreate them during a credential rotation so their ServiceAccount UID,
+  # projected API token and any route authorization headers are invalidated.
+  kubectl -n kuscia-master exec "$master_pod" -- \
+    kubectl delete namespaces domain-a domain-b domain-c \
+    --ignore-not-found=true --wait=true --timeout="$rollout_timeout"
 fi
 
 for letter in a b c; do

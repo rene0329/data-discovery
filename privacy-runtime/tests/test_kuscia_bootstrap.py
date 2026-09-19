@@ -103,12 +103,16 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
         delete_domain_routes = script.index("delete domainroutes --all", delete_routes)
         delete_domains = script.index("kubectl delete domains domain-a domain-b domain-c",
                                       delete_domain_routes)
-        mint_tokens = script.index("for letter in a b c; do", delete_domains)
+        delete_namespaces = script.index(
+            "kubectl delete namespaces domain-a domain-b domain-c", delete_domains)
+        mint_tokens = script.index("for letter in a b c; do", delete_namespaces)
         self.assertLess(scale_down, delete_routes)
         self.assertLess(scale_down, wait_deleted)
         self.assertLess(wait_deleted, delete_routes)
         self.assertLess(delete_routes, delete_domain_routes)
         self.assertLess(delete_domain_routes, delete_domains)
+        self.assertLess(delete_domains, delete_namespaces)
+        self.assertLess(delete_namespaces, mint_tokens)
         self.assertLess(delete_domains, mint_tokens)
         self.assertIn('route_names+=("domain-${source}-${master_domain}")',
                       script[rotation:delete_routes])
