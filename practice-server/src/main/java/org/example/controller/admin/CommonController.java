@@ -455,7 +455,7 @@ public class CommonController {
     }
 
     /**
-     * 性能分析数据：返回有 T1/T2/rating 数据的任务。
+     * 性能分析数据：仅返回实际执行了两条可比较调度路径的任务。
      */
     @GetMapping("/analysisData")
     public ResponseEntity<ApiResponse<PageResult<TaskManagement>>> analysisData(
