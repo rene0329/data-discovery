@@ -1062,6 +1062,27 @@ class ArtifactTest(unittest.TestCase):
             with self.subTest(path=path):
                 json.loads(path.read_text(encoding="utf-8"))
 
+    def test_sfl_image_uses_only_the_registered_tensorflow_runtime(self):
+        requirements = {
+            line.strip()
+            for line in (ROOT / "providers/sfl/runtime-requirements.txt").read_text(
+                encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        self.assertEqual(requirements, {
+            "secretflow-lite==1.13.0b0",
+            "secretflow-rayfed==0.2.1a2",
+            "ray==2.52.0",
+            "tensorflow==2.12.0",
+            "dp-accounting==0.4.4",
+        })
+        self.assertFalse(any(
+            requirement.startswith(("torch", "torchvision", "torchaudio", "xgboost"))
+            for requirement in requirements))
+        dockerfile = (ROOT / "providers/sfl/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("--requirement /tmp/sfl-runtime-requirements.txt", dockerfile)
+        self.assertIn("--no-cache-dir --no-deps /opt/sfl", dockerfile)
+
     def test_generated_mpspdz_registry_is_current(self):
         before = {
             path.name: path.read_bytes()

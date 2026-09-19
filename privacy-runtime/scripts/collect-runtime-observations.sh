@@ -25,6 +25,8 @@ fi
   items:[.items[]
     | select((.metadata.namespace | startswith("kuscia-"))
       and (((.metadata.labels.app // "") | startswith("topic4-"))
+        or ((.metadata.labels["kuscia.secretflow/kd-name"] // "")
+          | startswith("topic4-privacy-"))
         or ((.metadata.name // "") | startswith("topic4-"))))]}' \
   >"$OUTPUT_DIR/privacy-pods.json"
 

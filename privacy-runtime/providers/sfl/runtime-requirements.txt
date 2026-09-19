@@ -1,0 +1,10 @@
+# Template-scoped runtime for hfl-fedavg-logreg-3p-v1.  The pinned SFL source
+# advertises Torch, vision, audio, ONNX, and XGBoost backends as mandatory
+# distribution metadata.  This registered template uses only the TensorFlow
+# FedAvg path with SecretFlow's SPU aggregator, so those unrelated backends are
+# deliberately excluded from the execution image.
+secretflow-lite==1.13.0b0
+secretflow-rayfed==0.2.1a2
+ray==2.52.0
+tensorflow==2.12.0
+dp-accounting==0.4.4

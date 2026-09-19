@@ -2,17 +2,23 @@ ARG PYTHON_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-python-3
 FROM ${PYTHON_BASE}
 ARG SFL_COMMIT=c383e40f665063d7f7d87e437a73e015f87c435c
 ARG SFL_LOCAL_BUILD_VERSION=1.0.0.dev0+c383e40f
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 # Git and the CA bundle are part of the digest-pinned Python base.  Keeping the
 # build off mutable Debian indexes makes the fixed SFL source build repeatable.
 RUN command -v git \
     && test -s /etc/ssl/certs/ca-certificates.crt
+COPY providers/sfl/runtime-requirements.txt /tmp/sfl-runtime-requirements.txt
+RUN python3 -m pip install --no-cache-dir \
+      --index-url "${PIP_INDEX_URL}" \
+      --requirement /tmp/sfl-runtime-requirements.txt
 RUN git clone https://github.com/secretflow/sfl.git /opt/sfl \
     && git -C /opt/sfl checkout --detach "${SFL_COMMIT}" \
     && test "$(git -C /opt/sfl rev-parse HEAD)" = "${SFL_COMMIT}" \
     && printf '%s\n' "${SFL_COMMIT}" > /opt/sfl/SOURCE_REVISION \
     && sed -i "s/1.0.0.dev\$\$DATE\$\$/${SFL_LOCAL_BUILD_VERSION}/" /opt/sfl/sfl/version.py \
     && sed -i "s/\$\$COMMIT_ID\$\$/${SFL_COMMIT}/" /opt/sfl/sfl/version.py \
-    && python3 -m pip install --no-cache-dir /opt/sfl
+    && PIP_INDEX_URL="${PIP_INDEX_URL}" python3 -m pip install \
+      --no-cache-dir --no-deps /opt/sfl
 COPY providers/sfl/hfl_fedavg_logreg.py providers/sfl/sfl-engine-check.py runner/topic4_sfl_smoke.py /opt/topic4/bin/
 RUN python3 /opt/topic4/bin/hfl_fedavg_logreg.py --self-test
 COPY runner/topic4_privacy_runner.py /opt/topic4/bin/topic4_privacy_runner.py
