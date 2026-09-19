@@ -96,6 +96,17 @@ def model_builder():
     return model
 
 
+def normalized_global_metrics(history):
+    if not isinstance(history, dict) or not isinstance(history.get("global_history"), dict):
+        raise RuntimeError("SFL returned an unsupported training history")
+    metrics = {}
+    for key, values in history["global_history"].items():
+        if not isinstance(key, str) or not isinstance(values, (list, tuple)):
+            raise RuntimeError("SFL returned an unsupported global metric series")
+        metrics[key] = [float(item) for item in values]
+    return metrics
+
+
 def validated_context():
     path = Path(os.getenv("TOPIC4_KUSCIA_CONTEXT_FILE", "/var/run/topic4-kuscia/context.json"))
     context = json.loads(path.read_text(encoding="utf-8"))
@@ -241,10 +252,7 @@ def execute(request, work_dir, context, local_party, epochs):
         }
         fed_model.save_model(paths)
         model_digest, model_bytes, model_files = tree_digest(local_model)
-        metrics = {
-            key: [float(item) for item in values]
-            for key, values in history.global_history.items()
-        }
+        metrics = normalized_global_metrics(history)
         return metrics, {
             "modelReference": "runtime://%s/models/%s/%s/logreg" % (
                 local_party, request["jobId"], request["attemptId"]),

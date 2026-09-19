@@ -990,11 +990,22 @@ class AdapterPolicyTest(unittest.TestCase):
                 os.environ["TOPIC4_PARTY_ID"] = old_party
 
     def test_sfl_model_uses_named_inputs_matching_the_csv_loader(self):
-        source = (ROOT / "providers/sfl/hfl_fedavg_logreg.py").read_text(encoding="utf-8")
+        adapter = ROOT / "providers/sfl/hfl_fedavg_logreg.py"
+        source = adapter.read_text(encoding="utf-8")
         self.assertIn('"x1": keras.Input(shape=(1,), name="x1")', source)
         self.assertIn('"x2": keras.Input(shape=(1,), name="x2")', source)
         self.assertIn('keras.Model(inputs=inputs, outputs=prediction)', source)
         self.assertIn('prediction = model({', source)
+
+        spec = importlib.util.spec_from_file_location("topic4_sfl_history_adapter", adapter)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.normalized_global_metrics({
+            "global_history": {"loss": [1, 0.5], "accuracy": [0.25, 0.75]},
+            "local_history": {"A": {}},
+        }), {"loss": [1.0, 0.5], "accuracy": [0.25, 0.75]})
+        with self.assertRaises(RuntimeError):
+            module.normalized_global_metrics(object())
 
     def test_kuscia_context_derives_fixed_psi_fed_and_spu_endpoints(self):
         entry = ROOT / "runner/kuscia-runtime-entry.py"
