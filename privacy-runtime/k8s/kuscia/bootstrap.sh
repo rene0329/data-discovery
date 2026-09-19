@@ -110,12 +110,17 @@ kubectl -n kuscia-master create secret generic kuscia-config \
 kubectl apply -f "$here/deployments.yaml"
 kubectl -n kuscia-master rollout restart deploy/kuscia-master
 kubectl -n kuscia-master rollout status deploy/kuscia-master --timeout="$rollout_timeout"
+master_pod="$(kubectl -n kuscia-master get pods -l app=kuscia-master \
+  --field-selector=status.phase=Running --sort-by=.metadata.creationTimestamp \
+  -o name | tail -n 1)"
+test -n "$master_pod"
+kubectl -n kuscia-master wait --for=condition=Ready "$master_pod" --timeout="$rollout_timeout"
 
 for letter in a b c; do
   namespace="kuscia-${letter}"
   domain="domain-${letter}"
   domain_key > "$work/${letter}.key"
-  kubectl -n kuscia-master exec deploy/kuscia-master -- \
+  kubectl -n kuscia-master exec "$master_pod" -- \
     scripts/deploy/add_domain_lite.sh "$domain" "$master_domain" \
     > "$work/${letter}.token"
   test -s "$work/${letter}.token"
@@ -140,7 +145,7 @@ done
 for source in a b c; do
   for destination in a b c; do
     [[ "$source" == "$destination" ]] && continue
-    kubectl -n kuscia-master exec deploy/kuscia-master -- \
+    kubectl -n kuscia-master exec "$master_pod" -- \
       scripts/deploy/create_cluster_domain_route.sh \
       "domain-${source}" "domain-${destination}" \
       "https://kuscia-lite.kuscia-${destination}.svc.cluster.local:1080"
@@ -151,11 +156,11 @@ for source in a b c; do
   for destination in a b c; do
     [[ "$source" == "$destination" ]] && continue
     route="domain-${source}-domain-${destination}"
-    kubectl -n kuscia-master exec deploy/kuscia-master -- \
+    kubectl -n kuscia-master exec "$master_pod" -- \
       kubectl wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' \
       "clusterdomainroute/${route}" --timeout="$rollout_timeout"
   done
 done
 
-kubectl -n kuscia-master exec deploy/kuscia-master -- kubectl get clusterdomainroutes \
+kubectl -n kuscia-master exec "$master_pod" -- kubectl get clusterdomainroutes \
   -o custom-columns=NAME:.metadata.name,READY:'.status.conditions[?(@.type=="Ready")].status'
