@@ -11,8 +11,11 @@ COPY providers/sfl/runtime-requirements.txt /tmp/sfl-runtime-requirements.txt
 RUN python3 -m pip install --no-cache-dir \
       --index-url "${PIP_INDEX_URL}" \
       --requirement /tmp/sfl-runtime-requirements.txt
-RUN git clone https://github.com/secretflow/sfl.git /opt/sfl \
-    && git -C /opt/sfl checkout --detach "${SFL_COMMIT}" \
+RUN mkdir /opt/sfl \
+    && git -C /opt/sfl init \
+    && git -C /opt/sfl remote add origin https://github.com/secretflow/sfl.git \
+    && git -C /opt/sfl fetch --depth=1 origin "${SFL_COMMIT}" \
+    && git -C /opt/sfl checkout --detach FETCH_HEAD \
     && test "$(git -C /opt/sfl rev-parse HEAD)" = "${SFL_COMMIT}" \
     && printf '%s\n' "${SFL_COMMIT}" > /opt/sfl/SOURCE_REVISION \
     && sed -i "s|^__version__ = .*|__version__ = \\"${SFL_LOCAL_BUILD_VERSION}\\"|" /opt/sfl/sfl/version.py \
