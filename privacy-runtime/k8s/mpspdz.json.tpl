@@ -1175,6 +1175,40 @@
                 ]
               }
             ],
+            "initContainers": [
+              {
+                "command": [
+                  "sh",
+                  "-c",
+                  "chown 10001:10001 /state && chmod 0700 /state"
+                ],
+                "image": "__MPSPDZ_IMAGE__@__MPSPDZ_IMAGE_DIGEST__",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "prepare-private-state",
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "add": [
+                      "CHOWN",
+                      "DAC_OVERRIDE",
+                      "FOWNER"
+                    ],
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsGroup": 0,
+                  "runAsNonRoot": false,
+                  "runAsUser": 0
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/state",
+                    "name": "state"
+                  }
+                ]
+              }
+            ],
             "securityContext": {
               "fsGroup": 10001,
               "runAsNonRoot": true,

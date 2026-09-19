@@ -130,6 +130,20 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
         dep = deployment(gateway_items, "topic4-privacy-mpspdz-gateway")
         pod = dep["spec"]["template"]["spec"]
         container = pod["containers"][0]
+        prepare = named(pod["initContainers"])["prepare-private-state"]
+        self.assertEqual(
+            prepare["image"],
+            "__MPSPDZ_IMAGE__@__MPSPDZ_IMAGE_DIGEST__")
+        self.assertEqual(
+            prepare["volumeMounts"],
+            [{"name": "state", "mountPath": "/state"}])
+        self.assertEqual(
+            prepare["command"][-1],
+            "chown 10001:10001 /state && chmod 0700 /state")
+        self.assertFalse(prepare["securityContext"]["runAsNonRoot"])
+        self.assertEqual(
+            prepare["securityContext"]["capabilities"]["add"],
+            ["CHOWN", "DAC_OVERRIDE", "FOWNER"])
         self.assertEqual(container["image"],
                          "__MPSPDZ_IMAGE__@__MPSPDZ_IMAGE_DIGEST__")
         env = {item["name"]: item["value"] for item in container["env"]
