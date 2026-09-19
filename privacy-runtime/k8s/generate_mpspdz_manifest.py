@@ -62,6 +62,29 @@ def party(letter, index):
                     "spec": {
                         "affinity": affinity("__NODE_%s__" % letter),
                         "securityContext": {"runAsNonRoot": True, "runAsUser": 10001, "fsGroup": 10001},
+                        "initContainers": [{
+                            "name": "prepare-private-directories",
+                            "image": "__MPSPDZ_IMAGE__",
+                            "imagePullPolicy": "IfNotPresent",
+                            "command": [
+                                "sh", "-c",
+                                "chown 10001:10001 /state /inputs /work"
+                                " && chmod 0700 /state /inputs /work",
+                            ],
+                            "securityContext": {
+                                "runAsUser": 0, "runAsGroup": 0,
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {
+                                    "drop": ["ALL"],
+                                    "add": ["CHOWN", "DAC_OVERRIDE"],
+                                },
+                            },
+                            "volumeMounts": [
+                                {"name": "state", "mountPath": "/state"},
+                                {"name": "inputs", "mountPath": "/inputs"},
+                                {"name": "work", "mountPath": "/work"},
+                            ],
+                        }],
                         "containers": [{
                             "name": "party", "image": "__MPSPDZ_IMAGE__", "imagePullPolicy": "IfNotPresent",
                             "ports": [

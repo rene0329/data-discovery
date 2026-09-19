@@ -102,9 +102,19 @@ class DeploymentAuthIsolationTest(unittest.TestCase):
             party_items = module.party(party, index)
             items.extend(party_items)
             dep = deployment(party_items, "topic4-mpspdz")
-            volumes = named(dep["spec"]["template"]["spec"]["volumes"])
+            pod = dep["spec"]["template"]["spec"]
+            volumes = named(pod["volumes"])
             self.assertEqual(volumes["auth"]["secret"]["secretName"],
                              "privacy-mpspdz-runner-auth")
+            prepare = named(pod["initContainers"])["prepare-private-directories"]
+            self.assertEqual(prepare["image"], "__MPSPDZ_IMAGE__")
+            self.assertEqual(
+                {item["name"]: item["mountPath"] for item in prepare["volumeMounts"]},
+                {"state": "/state", "inputs": "/inputs", "work": "/work"})
+            self.assertIn("chown 10001:10001 /state /inputs /work",
+                          prepare["command"][-1])
+            self.assertEqual(prepare["securityContext"]["capabilities"]["add"],
+                             ["CHOWN", "DAC_OVERRIDE"])
         gateway_items = module.gateway()
         items.extend(gateway_items)
         dep = deployment(gateway_items, "topic4-privacy-mpspdz-gateway")

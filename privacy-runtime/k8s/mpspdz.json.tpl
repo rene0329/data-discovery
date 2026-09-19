@@ -241,6 +241,46 @@
                 ]
               }
             ],
+            "initContainers": [
+              {
+                "command": [
+                  "sh",
+                  "-c",
+                  "chown 10001:10001 /state /inputs /work && chmod 0700 /state /inputs /work"
+                ],
+                "image": "__MPSPDZ_IMAGE__",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "prepare-private-directories",
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "add": [
+                      "CHOWN",
+                      "DAC_OVERRIDE"
+                    ],
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsGroup": 0,
+                  "runAsUser": 0
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/state",
+                    "name": "state"
+                  },
+                  {
+                    "mountPath": "/inputs",
+                    "name": "inputs"
+                  },
+                  {
+                    "mountPath": "/work",
+                    "name": "work"
+                  }
+                ]
+              }
+            ],
             "securityContext": {
               "fsGroup": 10001,
               "runAsNonRoot": true,
@@ -524,6 +564,46 @@
                 ]
               }
             ],
+            "initContainers": [
+              {
+                "command": [
+                  "sh",
+                  "-c",
+                  "chown 10001:10001 /state /inputs /work && chmod 0700 /state /inputs /work"
+                ],
+                "image": "__MPSPDZ_IMAGE__",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "prepare-private-directories",
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "add": [
+                      "CHOWN",
+                      "DAC_OVERRIDE"
+                    ],
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsGroup": 0,
+                  "runAsUser": 0
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/state",
+                    "name": "state"
+                  },
+                  {
+                    "mountPath": "/inputs",
+                    "name": "inputs"
+                  },
+                  {
+                    "mountPath": "/work",
+                    "name": "work"
+                  }
+                ]
+              }
+            ],
             "securityContext": {
               "fsGroup": 10001,
               "runAsNonRoot": true,
@@ -803,6 +883,46 @@
                     "mountPath": "/run/secrets/topic4-mpspdz",
                     "name": "tls",
                     "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "initContainers": [
+              {
+                "command": [
+                  "sh",
+                  "-c",
+                  "chown 10001:10001 /state /inputs /work && chmod 0700 /state /inputs /work"
+                ],
+                "image": "__MPSPDZ_IMAGE__",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "prepare-private-directories",
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "add": [
+                      "CHOWN",
+                      "DAC_OVERRIDE"
+                    ],
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsGroup": 0,
+                  "runAsUser": 0
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/state",
+                    "name": "state"
+                  },
+                  {
+                    "mountPath": "/inputs",
+                    "name": "inputs"
+                  },
+                  {
+                    "mountPath": "/work",
+                    "name": "work"
                   }
                 ]
               }
