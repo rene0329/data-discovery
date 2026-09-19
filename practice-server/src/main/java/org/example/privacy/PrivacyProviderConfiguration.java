@@ -25,7 +25,7 @@ public class PrivacyProviderConfiguration {
     PrivacyComputeProvider secretFlowPrivacyProvider(Environment env, ObjectMapper mapper) {
         return http(ProviderType.KUSCIA_SECRETFLOW, "Kuscia / SecretFlow", "secretflow", false,
                 Arrays.asList("SEMI_HONEST", "SEMI_HONEST_HE"),
-                Arrays.asList("PSI_2P", "PSI_3P"), env, mapper);
+                Arrays.asList("PSI_2P", "PSI_3P", "HE_PAILLIER", "VFL_SECUREBOOST"), env, mapper);
     }
 
     @Bean

@@ -6,8 +6,11 @@ import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeDatasetAccessAuditMapper;
+import org.example.mapper.NodeDatasetAccessTokenConsumptionMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.service.DatasetReplicaAvailabilityService;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -36,6 +39,9 @@ public class DatasetAccessScopeVerifier {
 
     @Autowired(required = false)
     private NodeDatasetAccessAuditMapper auditMapper;
+
+    @Autowired(required = false)
+    private NodeDatasetAccessTokenConsumptionMapper tokenConsumptionMapper;
 
     @Autowired
     public DatasetAccessScopeVerifier(ObjectMapper objectMapper,
@@ -151,6 +157,25 @@ public class DatasetAccessScopeVerifier {
 
     private void consumeIfSingleUse(NodeAccessTokenClaims claims) {
         if (claims == null || !claims.isSingleUse()) return;
+        if (tokenConsumptionMapper != null) {
+            try {
+                tokenConsumptionMapper.deleteExpired();
+                tokenConsumptionMapper.consume(claims.getJti(), nodeName, claims.getAction(),
+                        LocalDateTime.ofInstant(
+                                Instant.ofEpochSecond(claims.getExpiresAtEpochSeconds()), ZoneOffset.UTC));
+                return;
+            } catch (DuplicateKeyException ex) {
+                throw new TokenVerificationException("TOKEN_REPLAYED",
+                        "single-use scoped access token was already consumed");
+            } catch (DataAccessException ex) {
+                throw new TokenVerificationException("TOKEN_REPLAY_STATE_UNAVAILABLE",
+                        "single-use token replay ledger is unavailable");
+            }
+        }
+
+        // Unit tests and deliberately database-free local profiles retain an
+        // in-process fail-closed ledger. Cluster deployments always inject the
+        // durable mapper above so a Pod restart cannot make a token reusable.
         long now = Instant.now().getEpochSecond();
         for (Map.Entry<String, Long> item : consumedSingleUseJtis.entrySet()) {
             Long expiresAt = item.getValue();

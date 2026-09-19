@@ -16,6 +16,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.net.URI;
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,9 +76,19 @@ public class HttpPrivacyComputeProvider implements PrivacyComputeProvider {
                 capability.setReason("runtime health is missing UP status, exact version, or immutable imageDigest");
                 return capability;
             }
+            List<String> runtimeOperations = stringList(body.get("controlPlaneOperations"));
+            List<String> runtimeProfiles = stringList(body.get("securityProfiles"));
+            if (!runtimeOperations.containsAll(operations)
+                    || !runtimeProfiles.containsAll(securityProfiles)) {
+                capability.setStatus(CapabilityStatus.UNAVAILABLE);
+                capability.setReason("runtime health does not expose every configured operation and security profile");
+                return capability;
+            }
             capability.setStatus(CapabilityStatus.AVAILABLE);
             capability.setVersion(version);
             capability.setImageDigest(digest.toLowerCase());
+            capability.setOperations(runtimeOperations);
+            capability.setSecurityProfiles(runtimeProfiles);
             return capability;
         } catch (RestClientException | IllegalArgumentException ex) {
             capability.setStatus(CapabilityStatus.UNAVAILABLE);
@@ -171,6 +182,15 @@ public class HttpPrivacyComputeProvider implements PrivacyComputeProvider {
     private String text(Map<String, Object> map, String key) {
         if (map == null || map.get(key) == null) return null;
         return String.valueOf(map.get(key));
+    }
+
+    private List<String> stringList(Object raw) {
+        if (!(raw instanceof List)) return Collections.emptyList();
+        List<String> values = new ArrayList<>();
+        for (Object item : (List<?>) raw) {
+            if (item instanceof String && !blank((String) item)) values.add((String) item);
+        }
+        return values;
     }
 
     private static String trimTrailingSlash(String value) {

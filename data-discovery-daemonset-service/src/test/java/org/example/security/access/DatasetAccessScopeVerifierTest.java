@@ -5,11 +5,14 @@ import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
 import org.example.mapper.DatasetRegistrationMapper;
+import org.example.mapper.NodeDatasetAccessTokenConsumptionMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.service.DatasetReplicaAvailabilityService;
 import org.example.service.ReplicaAvailability;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -150,6 +153,30 @@ class DatasetAccessScopeVerifierTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void durableLedgerRejectsReplayAfterVerifierRestart() throws Exception {
+        NodeDatasetAccessTokenConsumptionMapper ledger =
+                mock(NodeDatasetAccessTokenConsumptionMapper.class);
+        when(ledger.consume(org.mockito.ArgumentMatchers.eq("test-jti"),
+                org.mockito.ArgumentMatchers.eq("master-88"),
+                org.mockito.ArgumentMatchers.eq("READ"),
+                org.mockito.ArgumentMatchers.any())).thenReturn(1)
+                .thenThrow(new DuplicateKeyException("duplicate jti"));
+        ReflectionTestUtils.setField(verifier, "tokenConsumptionMapper", ledger);
+        String token = token("1", "v1", "/dataset/a.bin", "READ", "master-88",
+                Instant.now().plusSeconds(60).getEpochSecond(), true);
+
+        verifier.verifyPathAction("Bearer " + token, "/dataset/a.bin", "READ");
+
+        DatasetAccessScopeVerifier restarted = new DatasetAccessScopeVerifier(
+                objectMapper, properties, "master-88", datasets, nodes, availability);
+        ReflectionTestUtils.setField(restarted, "tokenConsumptionMapper", ledger);
+        assertEquals("TOKEN_REPLAYED", assertThrows(
+                DatasetAccessScopeVerifier.TokenVerificationException.class,
+                () -> restarted.verifyPathAction("Bearer " + token, "/dataset/a.bin", "READ"))
+                .getErrorCode());
     }
 
     private String token(String datasetId, String version, String path, String action,

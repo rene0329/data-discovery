@@ -32,6 +32,22 @@ class PrivacyTemplateCatalogTest {
         assertFalse(find(catalog, "vfl-secureboost-2p-v1").isAvailable());
     }
 
+    @Test
+    void advertisesHeAndVflOnlyWhenTheCombinedSecretFlowRuntimeExposesThem() {
+        PrivacyProviderRegistry registry = mock(PrivacyProviderRegistry.class);
+        ProviderCapability capability = new ProviderCapability();
+        capability.setProvider(ProviderType.KUSCIA_SECRETFLOW);
+        capability.setStatus(CapabilityStatus.AVAILABLE);
+        capability.setOperations(Arrays.asList("PSI_2P", "PSI_3P", "HE_PAILLIER", "VFL_SECUREBOOST"));
+        capability.setImageDigest("sha256:" + repeat('b', 64));
+        when(registry.capabilities()).thenReturn(Collections.singletonList(capability));
+
+        PrivacyTemplateCatalog catalog = new PrivacyTemplateCatalog(registry);
+
+        assertTrue(find(catalog, "he-paillier-2p-v1").isAvailable());
+        assertTrue(find(catalog, "vfl-secureboost-2p-v1").isAvailable());
+    }
+
     private TemplateDefinition find(PrivacyTemplateCatalog catalog, String id) {
         for (TemplateDefinition item : catalog.list()) {
             if (id.equals(item.getTemplateId())) return item;
