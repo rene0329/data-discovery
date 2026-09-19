@@ -15,8 +15,8 @@ RUN git clone https://github.com/secretflow/sfl.git /opt/sfl \
     && git -C /opt/sfl checkout --detach "${SFL_COMMIT}" \
     && test "$(git -C /opt/sfl rev-parse HEAD)" = "${SFL_COMMIT}" \
     && printf '%s\n' "${SFL_COMMIT}" > /opt/sfl/SOURCE_REVISION \
-    && sed -i "s/1.0.0.dev\$\$DATE\$\$/${SFL_LOCAL_BUILD_VERSION}/" /opt/sfl/sfl/version.py \
-    && sed -i "s/\$\$COMMIT_ID\$\$/${SFL_COMMIT}/" /opt/sfl/sfl/version.py \
+    && sed -i "s|^__version__ = .*|__version__ = \\"${SFL_LOCAL_BUILD_VERSION}\\"|" /opt/sfl/sfl/version.py \
+    && sed -i "s|^__commit_id__ = .*|__commit_id__ = \\"${SFL_COMMIT}\\"|" /opt/sfl/sfl/version.py \
     && PIP_INDEX_URL="${PIP_INDEX_URL}" python3 -m pip install \
       --no-cache-dir --no-deps /opt/sfl
 COPY providers/sfl/hfl_fedavg_logreg.py providers/sfl/sfl-engine-check.py runner/topic4_sfl_smoke.py /opt/topic4/bin/

@@ -1072,7 +1072,7 @@ class ArtifactTest(unittest.TestCase):
         self.assertEqual(requirements, {
             "secretflow-lite==1.13.0b0",
             "secretflow-rayfed==0.2.1a2",
-            "ray==2.52.0",
+            "ray[tune]==2.52.0",
             "tensorflow==2.12.0",
             "dp-accounting==0.4.4",
         })
