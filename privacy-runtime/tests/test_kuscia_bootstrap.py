@@ -97,11 +97,13 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
     def test_explicit_rotation_clears_old_domain_trust_before_new_tokens(self):
         script = BOOTSTRAP.read_text(encoding="utf-8")
         rotation = script.index('if [[ "$rotate_domain_credentials" == 1 ]]')
+        scale_down = script.index("scale deploy/kuscia-lite --replicas=0", rotation)
         delete_routes = script.index("kubectl delete clusterdomainroutes", rotation)
         delete_domain_routes = script.index("delete domainroutes --all", delete_routes)
         delete_domains = script.index("kubectl delete domains domain-a domain-b domain-c",
                                       delete_domain_routes)
         mint_tokens = script.index("for letter in a b c; do", delete_domains)
+        self.assertLess(scale_down, delete_routes)
         self.assertLess(delete_routes, delete_domain_routes)
         self.assertLess(delete_domain_routes, delete_domains)
         self.assertLess(delete_domains, mint_tokens)
@@ -111,6 +113,8 @@ class KusciaBootstrapGatewayCleanupTest(unittest.TestCase):
                       script[delete_routes:delete_domains])
         self.assertIn("--ignore-not-found=true --wait=true",
                       script[delete_routes:mint_tokens])
+        scale_up = script.index("scale deploy/kuscia-lite --replicas=1", mint_tokens)
+        self.assertGreater(scale_up, mint_tokens)
 
     def test_bootstrap_waits_for_lite_master_routes_before_cross_routes(self):
         script = BOOTSTRAP.read_text(encoding="utf-8")

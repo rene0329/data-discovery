@@ -133,6 +133,14 @@ bash "$here/cleanup-stale-master-gateways.sh" "$master_pod" "$master_domain"
 # its database, AppImages and KusciaDeployments; the fixed domain namespaces
 # are recreated by the controllers after enrollment.
 if [[ "$rotate_domain_credentials" == 1 ]]; then
+  # Stop every Lite agent before deleting token state.  A running Lite agent
+  # immediately recreates its namespaced DomainRoute with the old Pod as the
+  # revision initializer, racing the cleanup below.
+  for letter in a b c; do
+    kubectl -n "kuscia-${letter}" scale deploy/kuscia-lite --replicas=0
+    kubectl -n "kuscia-${letter}" rollout status deploy/kuscia-lite \
+      --timeout="$rollout_timeout"
+  done
   route_names=()
   for source in a b c; do
     route_names+=("domain-${source}-${master_domain}")
@@ -180,6 +188,9 @@ done
 
 for letter in a b c; do
   kubectl -n "kuscia-${letter}" rollout restart deploy/kuscia-lite
+  if [[ "$rotate_domain_credentials" == 1 ]]; then
+    kubectl -n "kuscia-${letter}" scale deploy/kuscia-lite --replicas=1
+  fi
   kubectl -n "kuscia-${letter}" rollout status deploy/kuscia-lite --timeout="$rollout_timeout"
 done
 
