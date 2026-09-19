@@ -2,7 +2,7 @@ ARG PYTHON_BASE=ghcr.io/rene0329/data-discovery-practice-server:privacy-python-3
 FROM ${PYTHON_BASE}
 ARG SFL_COMMIT=c383e40f665063d7f7d87e437a73e015f87c435c
 ARG SFL_LOCAL_BUILD_VERSION=1.0.0.dev0+c383e40f
-ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 # Git and the CA bundle are part of the digest-pinned Python base.  Keeping the
 # build off mutable Debian indexes makes the fixed SFL source build repeatable.
 RUN command -v git \
