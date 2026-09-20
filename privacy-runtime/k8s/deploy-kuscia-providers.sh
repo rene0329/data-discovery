@@ -49,6 +49,12 @@ apply_file_secret() {
   local namespace="$1" name="$2" token_file="$3"
   kubectl -n "$namespace" create secret generic "$name" \
     --from-file=bearer-token="$token_file" --dry-run=client -o yaml | kubectl apply -f -
+  # kubectl apply stores the complete Secret manifest in this annotation,
+  # including base64-encoded credentials.  The Secret data is authoritative;
+  # never retain a second credential copy in metadata that routine inventory
+  # commands may print.
+  kubectl -n "$namespace" annotate secret "$name" \
+    kubectl.kubernetes.io/last-applied-configuration- >/dev/null
 }
 
 provision_provider_auth() {

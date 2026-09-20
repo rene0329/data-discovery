@@ -32,6 +32,8 @@ apply_file_secret() {
   local namespace="$1" name="$2" token_file="$3"
   kubectl -n "$namespace" create secret generic "$name" \
     --from-file=bearer-token="$token_file" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "$namespace" annotate secret "$name" \
+    kubectl.kubernetes.io/last-applied-configuration- >/dev/null
 }
 
 provision_gateway_auth() {
@@ -75,6 +77,9 @@ for letter in A B C; do
     --from-file=P2.pem="$work/P2.pem" \
     --from-file="P${index}.key=$work/P${index}.key" \
     --dry-run=client -o yaml | kubectl apply -f -
+  # Do not retain the generated private key a second time in apply metadata.
+  kubectl -n "$namespace" annotate secret topic4-mpspdz-tls \
+    kubectl.kubernetes.io/last-applied-configuration- >/dev/null
   case "$letter" in
     A)
       agent_url="$AGENT_URL_A"

@@ -109,6 +109,10 @@ domain_key > "$work/master.key"
 write_master_config "$work/master.key" "$work/master.yaml"
 kubectl -n kuscia-master create secret generic kuscia-config \
   --from-file=kuscia.yaml="$work/master.yaml" --dry-run=client -o yaml | kubectl apply -f -
+# The applied manifest contains the RSA key and datastore credential.  Keep
+# those only in Secret.data, not in kubectl's last-applied metadata copy.
+kubectl -n kuscia-master annotate secret kuscia-config \
+  kubectl.kubernetes.io/last-applied-configuration- >/dev/null
 
 # Lite Deployments are accepted before their Secrets exist and start only after
 # the Master has minted the one-use deployment tokens below.
@@ -222,6 +226,8 @@ for letter in a b c; do
     "$work/${letter}.token" "$dns_ip" "$node" "$work/${letter}.yaml"
   kubectl -n "$namespace" create secret generic kuscia-config \
     --from-file=kuscia.yaml="$work/${letter}.yaml" --dry-run=client -o yaml | kubectl apply -f -
+  kubectl -n "$namespace" annotate secret kuscia-config \
+    kubectl.kubernetes.io/last-applied-configuration- >/dev/null
 done
 
 for letter in a b c; do
