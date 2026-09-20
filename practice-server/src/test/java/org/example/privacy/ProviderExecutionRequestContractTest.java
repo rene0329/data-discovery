@@ -34,7 +34,7 @@ class ProviderExecutionRequestContractTest {
         Map<String, Object> column = new LinkedHashMap<>();
         column.put("name", "value");
         column.put("type", "integer");
-        request.setParticipants(new ArrayList<ParticipantSpec>());
+        ArrayList<ParticipantSpec> participants = new ArrayList<>();
         request.setStaging(new ArrayList<StagingInput>());
         int index = 0;
         for (String party : Arrays.asList("A", "B", "C")) {
@@ -44,7 +44,7 @@ class ProviderExecutionRequestContractTest {
             participant.setDatasetId(String.valueOf(42 + index));
             participant.setDatasetVersion("v1");
             participant.setFields(Collections.singletonList("value"));
-            request.getParticipants().add(participant);
+            participants.add(participant);
 
             StagingInput staging = new StagingInput();
             staging.setPartyId(party);
@@ -63,6 +63,7 @@ class ProviderExecutionRequestContractTest {
             request.getStaging().add(staging);
             index++;
         }
+        request.setParticipants(participants);
 
         JsonNode json = new ObjectMapper().findAndRegisterModules().readTree(
                 new ObjectMapper().findAndRegisterModules().writeValueAsBytes(request));
@@ -82,6 +83,31 @@ class ProviderExecutionRequestContractTest {
         assertTrue(input.path("expectedSchema").isArray());
         assertEquals("value", input.path("expectedSchema").get(0).path("name").asText());
         assertEquals("sha256:" + repeat('d', 64), input.path("expectedSchemaDigest").asText());
+    }
+
+    @Test
+    void stripsControlPlaneOwnershipFieldsFromProviderParticipants() throws Exception {
+        ParticipantSpec source = new ParticipantSpec();
+        source.setSlotId("P0");
+        source.setPartyId("A");
+        source.setRole("RECEIVER");
+        source.setOwnerUserId(12L);
+        source.setOwnerUsername("owner-a");
+        source.setOwnerDomainId(34L);
+        source.setOwnerDomainCode("domain-a");
+        source.setDatasetId("34");
+        source.setDatasetVersion("v1");
+
+        ProviderExecutionRequest request = new ProviderExecutionRequest();
+        request.setParticipants(Collections.singletonList(source));
+        JsonNode participant = new ObjectMapper().valueToTree(request).path("participants").get(0);
+
+        assertEquals("A", participant.path("partyId").asText());
+        assertFalse(participant.has("slotId"));
+        assertFalse(participant.has("ownerUserId"));
+        assertFalse(participant.has("ownerUsername"));
+        assertFalse(participant.has("ownerDomainId"));
+        assertFalse(participant.has("ownerDomainCode"));
     }
 
     private String repeat(char value, int count) {
