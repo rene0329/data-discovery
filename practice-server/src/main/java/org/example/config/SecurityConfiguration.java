@@ -74,8 +74,8 @@ public class SecurityConfiguration {
                     objectMapper.writeValue(response.getOutputStream(),
                             ApiV1Response.error(403, "FORBIDDEN", "permission denied"));
                 });
-        http.addFilterBefore(internalAgentFilter, JwtAuthenticationFilter.class);
         http.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+        http.addFilterBefore(internalAgentFilter, JwtAuthenticationFilter.class);
         return http.build();
     }
 }
