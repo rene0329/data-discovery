@@ -12,6 +12,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -44,6 +47,9 @@ public class NetworkProbeService {
     // 中央服务接收指标的 URL
     @Value("${central.metrics.url:http://my-core-backend-central-service:8080/api/network/metrics/batch}")
     private String centralMetricsUrl;
+
+    @Value("${central.auth-token:}")
+    private String centralAuthToken;
 
     // 本地节点名称（通过 Downward API 注入）
     @Value("${local.node.name}")
@@ -309,9 +315,12 @@ public class NetworkProbeService {
      */
     private void pushMetricsToCentral(List<NetworkMetricDto> metricsList) {
         try {
-            ResponseEntity<String> response = restTemplate.postForEntity(
-                    centralMetricsUrl, metricsList, String.class
-            );
+            HttpHeaders headers = new HttpHeaders();
+            if (centralAuthToken != null && !centralAuthToken.trim().isEmpty()) {
+                headers.setBearerAuth(centralAuthToken.trim());
+            }
+            ResponseEntity<String> response = restTemplate.exchange(centralMetricsUrl, HttpMethod.POST,
+                    new HttpEntity<>(metricsList, headers), String.class);
             if (response.getStatusCode().is2xxSuccessful()) {
                 log.info("成功推送 {} 条网络指标到中央服务", metricsList.size());
             } else {

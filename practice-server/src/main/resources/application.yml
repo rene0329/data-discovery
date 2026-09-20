@@ -132,14 +132,6 @@ privacy-computing:
       node-name: ${PRIVACY_PARTY_B_NODE_NAME:}
     c:
       node-name: ${PRIVACY_PARTY_C_NODE_NAME:}
-  auth:
-    parties:
-      a:
-        secret: ${PRIVACY_PARTY_A_SECRET:}
-      b:
-        secret: ${PRIVACY_PARTY_B_SECRET:}
-      c:
-        secret: ${PRIVACY_PARTY_C_SECRET:}
   providers:
     mp-spdz:
       base-url: ${PRIVACY_MP_SPDZ_BASE_URL:}
@@ -182,6 +174,18 @@ alioss:
 
 # 任务编排执行控制参数
 app:
+  auth:
+    internal-agent-token: ${APP_AUTH_INTERNAL_AGENT_TOKEN:}
+    jwt:
+      # Must be injected as a Kubernetes Secret. At least 32 random characters are required.
+      signing-key: ${APP_AUTH_JWT_SIGNING_KEY:}
+      ttl-seconds: ${APP_AUTH_JWT_TTL_SECONDS:28800}
+    bootstrap-admin:
+      # The bootstrap is skipped unless both username and password are supplied.
+      username: ${APP_AUTH_BOOTSTRAP_ADMIN_USERNAME:}
+      password: ${APP_AUTH_BOOTSTRAP_ADMIN_PASSWORD:}
+      display-name: ${APP_AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME:System Administrator}
+
   network-topology:
     # Daily bounded bandwidth probes: allow two hours for scheduling, retries and reporting.
     # Failed probes still mark links inactive immediately; node health is checked separately.

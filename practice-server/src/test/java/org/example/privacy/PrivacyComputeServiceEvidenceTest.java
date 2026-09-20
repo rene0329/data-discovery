@@ -26,8 +26,9 @@ class PrivacyComputeServiceEvidenceTest {
     void setUp() {
         service = new PrivacyComputeService(mock(PrivacyComputeMapper.class),
                 mock(PrivacyTemplateCatalog.class), mock(PrivacyProviderRegistry.class),
-                mock(PrivacyJobSpecResolver.class), mock(PrivacyPartyAuthenticator.class),
-                mock(PrivacyInputStagingService.class), objectMapper, Runnable::run);
+                mock(PrivacyJobSpecResolver.class),
+                mock(PrivacyInputStagingService.class), mock(PrivacyApprovalSigner.class),
+                objectMapper, Runnable::run);
     }
 
     @Test

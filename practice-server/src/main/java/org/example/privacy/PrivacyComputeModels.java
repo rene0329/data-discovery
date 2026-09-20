@@ -90,6 +90,7 @@ public final class PrivacyComputeModels {
         private String securityProfile;
         private int participantCount;
         private Map<String, String> requiredRoles = new LinkedHashMap<>();
+        private List<ParticipantSlot> participantSlots = new ArrayList<>();
         private boolean available;
         private boolean experimental;
         private String leakageDisclosure;
@@ -113,6 +114,8 @@ public final class PrivacyComputeModels {
         public void setParticipantCount(int participantCount) { this.participantCount = participantCount; }
         public Map<String, String> getRequiredRoles() { return requiredRoles; }
         public void setRequiredRoles(Map<String, String> requiredRoles) { this.requiredRoles = requiredRoles; }
+        public List<ParticipantSlot> getParticipantSlots() { return participantSlots; }
+        public void setParticipantSlots(List<ParticipantSlot> participantSlots) { this.participantSlots = participantSlots; }
         public boolean isAvailable() { return available; }
         public void setAvailable(boolean available) { this.available = available; }
         public boolean isExperimental() { return experimental; }
@@ -131,9 +134,52 @@ public final class PrivacyComputeModels {
         public void setUnavailableReason(String unavailableReason) { this.unavailableReason = unavailableReason; }
     }
 
+    public static class ParticipantSlot {
+        private String slotId;
+        private String role;
+        private String label;
+        public ParticipantSlot() { }
+        public ParticipantSlot(String slotId, String role, String label) {
+            this.slotId = slotId;
+            this.role = role;
+            this.label = label;
+        }
+        public String getSlotId() { return slotId; }
+        public void setSlotId(String slotId) { this.slotId = slotId; }
+        public String getRole() { return role; }
+        public void setRole(String role) { this.role = role; }
+        public String getLabel() { return label; }
+        public void setLabel(String label) { this.label = label; }
+    }
+
+    /** Caller supplied dataset binding. Party/runtime identities are resolved by the server. */
+    public static class InputSpec {
+        private String slotId;
+        private Long datasetId;
+        private String datasetVersion;
+        private List<String> fields = new ArrayList<>();
+        public String getSlotId() { return slotId; }
+        public void setSlotId(String slotId) { this.slotId = slotId; }
+        public Long getDatasetId() { return datasetId; }
+        public void setDatasetId(Long datasetId) { this.datasetId = datasetId; }
+        public String getDatasetVersion() { return datasetVersion; }
+        public void setDatasetVersion(String datasetVersion) { this.datasetVersion = datasetVersion; }
+        public List<String> getFields() { return fields; }
+        public void setFields(List<String> fields) { this.fields = fields; }
+        @JsonAnySetter
+        public void rejectUnknownField(String name, Object ignored) {
+            throw new IllegalArgumentException("unsupported input field: " + name);
+        }
+    }
+
     public static class ParticipantSpec {
+        private String slotId;
         private String partyId;
         private String role;
+        private Long ownerUserId;
+        private String ownerUsername;
+        private Long ownerDomainId;
+        private String ownerDomainCode;
         private String datasetId;
         private String datasetVersion;
         private String datasetSha256;
@@ -142,10 +188,20 @@ public final class PrivacyComputeModels {
         private List<Map<String, Object>> frozenSchema = new ArrayList<>();
         private List<String> fields = new ArrayList<>();
 
+        public String getSlotId() { return slotId; }
+        public void setSlotId(String slotId) { this.slotId = slotId; }
         public String getPartyId() { return partyId; }
         public void setPartyId(String partyId) { this.partyId = partyId; }
         public String getRole() { return role; }
         public void setRole(String role) { this.role = role; }
+        public Long getOwnerUserId() { return ownerUserId; }
+        public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
+        public String getOwnerUsername() { return ownerUsername; }
+        public void setOwnerUsername(String ownerUsername) { this.ownerUsername = ownerUsername; }
+        public Long getOwnerDomainId() { return ownerDomainId; }
+        public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
+        public String getOwnerDomainCode() { return ownerDomainCode; }
+        public void setOwnerDomainCode(String ownerDomainCode) { this.ownerDomainCode = ownerDomainCode; }
         public String getDatasetId() { return datasetId; }
         public void setDatasetId(String datasetId) { this.datasetId = datasetId; }
         public String getDatasetVersion() { return datasetVersion; }
@@ -169,6 +225,7 @@ public final class PrivacyComputeModels {
     public static class JobSpec {
         private String templateId;
         private String securityProfile;
+        private List<InputSpec> inputs = new ArrayList<>();
         private List<ParticipantSpec> participants = new ArrayList<>();
         private List<String> resultRecipients = new ArrayList<>();
         private Integer timeoutSeconds;
@@ -178,6 +235,8 @@ public final class PrivacyComputeModels {
         public void setTemplateId(String templateId) { this.templateId = templateId; }
         public String getSecurityProfile() { return securityProfile; }
         public void setSecurityProfile(String securityProfile) { this.securityProfile = securityProfile; }
+        public List<InputSpec> getInputs() { return inputs; }
+        public void setInputs(List<InputSpec> inputs) { this.inputs = inputs; }
         public List<ParticipantSpec> getParticipants() { return participants; }
         public void setParticipants(List<ParticipantSpec> participants) { this.participants = participants; }
         public List<String> getResultRecipients() { return resultRecipients; }
@@ -223,6 +282,7 @@ public final class PrivacyComputeModels {
         private String securityProfile;
         private String status;
         private String initiator;
+        private Long initiatorUserId;
         private String resultRecipientsJson;
         private Integer timeoutSeconds;
         private String enginePolicyJson;
@@ -256,6 +316,8 @@ public final class PrivacyComputeModels {
         public void setStatus(String status) { this.status = status; }
         public String getInitiator() { return initiator; }
         public void setInitiator(String initiator) { this.initiator = initiator; }
+        public Long getInitiatorUserId() { return initiatorUserId; }
+        public void setInitiatorUserId(Long initiatorUserId) { this.initiatorUserId = initiatorUserId; }
         public String getResultRecipientsJson() { return resultRecipientsJson; }
         public void setResultRecipientsJson(String resultRecipientsJson) { this.resultRecipientsJson = resultRecipientsJson; }
         public Integer getTimeoutSeconds() { return timeoutSeconds; }
@@ -297,6 +359,7 @@ public final class PrivacyComputeModels {
         private String securityProfile;
         private JobStatus status;
         private String initiator;
+        private Long initiatorUserId;
         private List<ParticipantSpec> participants = new ArrayList<>();
         private List<ApprovalView> approvals = new ArrayList<>();
         private List<String> resultRecipients = new ArrayList<>();
@@ -330,6 +393,8 @@ public final class PrivacyComputeModels {
         public void setStatus(JobStatus status) { this.status = status; }
         public String getInitiator() { return initiator; }
         public void setInitiator(String initiator) { this.initiator = initiator; }
+        public Long getInitiatorUserId() { return initiatorUserId; }
+        public void setInitiatorUserId(Long initiatorUserId) { this.initiatorUserId = initiatorUserId; }
         public List<ParticipantSpec> getParticipants() { return participants; }
         public void setParticipants(List<ParticipantSpec> participants) { this.participants = participants; }
         public List<ApprovalView> getApprovals() { return approvals; }
@@ -361,10 +426,7 @@ public final class PrivacyComputeModels {
     }
 
     public static class DecisionRequest {
-        private String participantId;
         private String reason;
-        public String getParticipantId() { return participantId; }
-        public void setParticipantId(String participantId) { this.participantId = participantId; }
         public String getReason() { return reason; }
         public void setReason(String reason) { this.reason = reason; }
     }
@@ -415,6 +477,9 @@ public final class PrivacyComputeModels {
         private String jobId;
         private String attemptId;
         private String participantId;
+        private Long approverUserId;
+        private String approverUsername;
+        private String inputSnapshotDigest;
         private String decision;
         private String reason;
         private String decisionSignature;
@@ -425,6 +490,12 @@ public final class PrivacyComputeModels {
         public void setAttemptId(String attemptId) { this.attemptId = attemptId; }
         public String getParticipantId() { return participantId; }
         public void setParticipantId(String participantId) { this.participantId = participantId; }
+        public Long getApproverUserId() { return approverUserId; }
+        public void setApproverUserId(Long approverUserId) { this.approverUserId = approverUserId; }
+        public String getApproverUsername() { return approverUsername; }
+        public void setApproverUsername(String approverUsername) { this.approverUsername = approverUsername; }
+        public String getInputSnapshotDigest() { return inputSnapshotDigest; }
+        public void setInputSnapshotDigest(String inputSnapshotDigest) { this.inputSnapshotDigest = inputSnapshotDigest; }
         public String getDecision() { return decision; }
         public void setDecision(String decision) { this.decision = decision; }
         public String getReason() { return reason; }
@@ -437,11 +508,20 @@ public final class PrivacyComputeModels {
 
     public static class ApprovalView {
         private String participantId;
+        private Long approverUserId;
+        private String approverUsername;
+        private String inputSnapshotDigest;
         private String decision;
         private String reason;
         private LocalDateTime decidedAt;
         public String getParticipantId() { return participantId; }
         public void setParticipantId(String participantId) { this.participantId = participantId; }
+        public Long getApproverUserId() { return approverUserId; }
+        public void setApproverUserId(Long approverUserId) { this.approverUserId = approverUserId; }
+        public String getApproverUsername() { return approverUsername; }
+        public void setApproverUsername(String approverUsername) { this.approverUsername = approverUsername; }
+        public String getInputSnapshotDigest() { return inputSnapshotDigest; }
+        public void setInputSnapshotDigest(String inputSnapshotDigest) { this.inputSnapshotDigest = inputSnapshotDigest; }
         public String getDecision() { return decision; }
         public void setDecision(String decision) { this.decision = decision; }
         public String getReason() { return reason; }
@@ -454,6 +534,9 @@ public final class PrivacyComputeModels {
         private Long snapshotId;
         private String jobId;
         private String partyId;
+        private String slotId;
+        private Long ownerUserId;
+        private Long ownerDomainId;
         private Long datasetId;
         private String datasetCode;
         private String datasetVersion;
@@ -469,6 +552,12 @@ public final class PrivacyComputeModels {
         public void setJobId(String jobId) { this.jobId = jobId; }
         public String getPartyId() { return partyId; }
         public void setPartyId(String partyId) { this.partyId = partyId; }
+        public String getSlotId() { return slotId; }
+        public void setSlotId(String slotId) { this.slotId = slotId; }
+        public Long getOwnerUserId() { return ownerUserId; }
+        public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
+        public Long getOwnerDomainId() { return ownerDomainId; }
+        public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
         public Long getDatasetId() { return datasetId; }
         public void setDatasetId(Long datasetId) { this.datasetId = datasetId; }
         public String getDatasetCode() { return datasetCode; }
@@ -487,6 +576,30 @@ public final class PrivacyComputeModels {
         public void setSchemaDigest(String schemaDigest) { this.schemaDigest = schemaDigest; }
         public String getFieldsJson() { return fieldsJson; }
         public void setFieldsJson(String fieldsJson) { this.fieldsJson = fieldsJson; }
+    }
+
+    public static class DatasetOwnershipRecord {
+        private Long datasetId;
+        private Long ownerUserId;
+        private String ownerUsername;
+        private Boolean ownerEnabled;
+        private Long ownerDomainId;
+        private String ownerDomainCode;
+        private Boolean domainEnabled;
+        public Long getDatasetId() { return datasetId; }
+        public void setDatasetId(Long datasetId) { this.datasetId = datasetId; }
+        public Long getOwnerUserId() { return ownerUserId; }
+        public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
+        public String getOwnerUsername() { return ownerUsername; }
+        public void setOwnerUsername(String ownerUsername) { this.ownerUsername = ownerUsername; }
+        public Boolean getOwnerEnabled() { return ownerEnabled; }
+        public void setOwnerEnabled(Boolean ownerEnabled) { this.ownerEnabled = ownerEnabled; }
+        public Long getOwnerDomainId() { return ownerDomainId; }
+        public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
+        public String getOwnerDomainCode() { return ownerDomainCode; }
+        public void setOwnerDomainCode(String ownerDomainCode) { this.ownerDomainCode = ownerDomainCode; }
+        public Boolean getDomainEnabled() { return domainEnabled; }
+        public void setDomainEnabled(Boolean domainEnabled) { this.domainEnabled = domainEnabled; }
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

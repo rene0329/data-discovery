@@ -1,5 +1,6 @@
 package org.example.handler;
 
+import org.example.auth.AuthException;
 import org.example.exception.RegistrationException;
 import org.example.vo.ApiV1Response;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,12 @@ import org.springframework.web.multipart.support.MissingServletRequestPartExcept
         "org.example.security.aggregation.coordinator"})
 @Slf4j
 public class RegistrationExceptionHandler {
+
+    @ExceptionHandler(AuthException.class)
+    public ResponseEntity<ApiV1Response<Object>> handleAuthException(AuthException ex) {
+        return ResponseEntity.status(ex.getStatus())
+                .body(ApiV1Response.error(ex.getStatus().value(), ex.getErrorCode(), ex.getMessage()));
+    }
 
     @ExceptionHandler(RegistrationException.class)
     public ResponseEntity<ApiV1Response<Object>> handleRegistrationException(RegistrationException ex) {

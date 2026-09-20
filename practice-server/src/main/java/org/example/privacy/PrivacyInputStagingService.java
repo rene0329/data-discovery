@@ -92,12 +92,12 @@ public class PrivacyInputStagingService {
     }
 
     /**
-     * Verifies that every participant can stage the frozen dataset version from
-     * the Agent node assigned to its logical privacy domain. This check is run
-     * during preflight and job creation, then repeated by {@link #prepare} at
-     * dispatch time so replica changes cannot cause a cross-domain fallback.
+     * Verifies that every runtime slot can stage the frozen dataset version from
+     * a strongly verified replica. Business domains are mapped to A/B/C per job,
+     * so a slot is not permanently coupled to one storage node. The former fixed
+     * node remains a locality preference when that replica is available.
      */
-    public void validateFixedNodeReplicas(JobSpec spec) {
+    public void validateAvailableReplicas(JobSpec spec) {
         if (spec == null || spec.getParticipants() == null) {
             throw RegistrationException.invalid("PRIVACY_PARTICIPANTS_REQUIRED",
                     "privacy job participants are required");
@@ -114,32 +114,34 @@ public class PrivacyInputStagingService {
         }
     }
 
+    /** Compatibility alias for callers compiled against the fixed-domain API. */
+    @Deprecated
+    public void validateFixedNodeReplicas(JobSpec spec) {
+        validateAvailableReplicas(spec);
+    }
+
     private DatasetReplica select(long datasetId, ParticipantSpec participant) {
         String party = participant.getPartyId() == null
                 ? "" : participant.getPartyId().trim().toUpperCase(Locale.ROOT);
         String requiredNodeName = partyNodeNames.get(party);
-        if (blank(requiredNodeName)) {
-            throw RegistrationException.conflict("PRIVACY_PARTY_NODE_NOT_CONFIGURED",
-                    "fixed privacy input node is not configured for party " + participant.getPartyId());
-        }
         List<DatasetReplica> replicas = datasets.listReplicas(datasetId);
         if (replicas == null) replicas = new ArrayList<>();
         return replicas.stream()
                 .filter(item -> availability.evaluate(item).isUsable())
                 .filter(item -> participant.getDatasetSha256().equals(normalize(item.getChecksum())))
                 .filter(item -> participant.getAuthoritativeSizeBytes().equals(item.getSizeBytes()))
-                .filter(item -> replicaBelongsTo(item, requiredNodeName))
-                .sorted(Comparator.comparing(DatasetReplica::getNodeId)
+                .sorted(Comparator.comparing((DatasetReplica item) ->
+                                replicaBelongsTo(item, requiredNodeName) ? 0 : 1)
+                        .thenComparing(DatasetReplica::getNodeId)
                         .thenComparing(DatasetReplica::getFilePath))
                 .findFirst()
                 .orElseThrow(() -> RegistrationException.conflict(
-                        "PRIVACY_FIXED_NODE_REPLICA_UNAVAILABLE",
-                        "party " + party + " has no usable frozen-version replica on fixed node "
-                                + requiredNodeName));
+                        "PRIVACY_INPUT_REPLICA_UNAVAILABLE",
+                        "runtime slot " + party + " has no usable replica for the frozen dataset version"));
     }
 
     private boolean replicaBelongsTo(DatasetReplica replica, String requiredNodeName) {
-        if (replica == null || replica.getNodeId() == null) return false;
+        if (blank(requiredNodeName) || replica == null || replica.getNodeId() == null) return false;
         NodeManagement node = nodes.getNodeById(replica.getNodeId());
         return node != null && requiredNodeName.equals(normalizeNodeName(node.getNodeName()));
     }

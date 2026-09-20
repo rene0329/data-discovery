@@ -36,6 +36,12 @@
         <result property="requiredMemoryGi" column="required_memory_gi"/>
         <result property="requiredGpu" column="required_gpu"/>
         <result property="status" column="status"/>
+        <result property="ownerUserId" column="owner_user_id"/>
+        <result property="ownerDomainId" column="owner_domain_id"/>
+        <result property="ownerUsername" column="owner_username"/>
+        <result property="ownerDisplayName" column="owner_display_name"/>
+        <result property="ownerDomainCode" column="owner_domain_code"/>
+        <result property="ownerDomainName" column="owner_domain_name"/>
         <result property="dataHeat" column="data_heat"/>
         <result property="heatUpdatedAt" column="heat_updated_at"/>
         <result property="defaultRuntimeImageId" column="default_runtime_image_id"/>
@@ -156,12 +162,13 @@
             useGeneratedKeys="true" keyProperty="datasetId">
         INSERT INTO registered_dataset (
             legacy_data_id, dataset_code, name, dataset_version, description, data_type, category, data_format,
-            labels_json, required_cpu, required_memory_gi, required_gpu, status,
+            labels_json, required_cpu, required_memory_gi, required_gpu, status, owner_user_id, owner_domain_id,
             default_runtime_image_id, data_heat, heat_updated_at
         ) VALUES (
             #{legacyDataId}, #{datasetCode}, #{name}, #{datasetVersion}, #{description}, #{dataType},
             #{category}, #{dataFormat},
             #{labelsJson}, #{requiredCpu}, #{requiredMemoryGi}, #{requiredGpu}, #{status},
+            #{ownerUserId}, #{ownerDomainId},
             #{defaultRuntimeImageId}, COALESCE(#{dataHeat}, 10), UTC_TIMESTAMP(3)
         )
     </insert>
@@ -186,23 +193,31 @@
         WHERE dataset_id = #{datasetId} AND deleted_at IS NULL AND status = 'ACTIVE'
     </update>
 
+    <sql id="datasetWithOwner">
+        SELECT rd.*, u.username owner_username, u.display_name owner_display_name,
+               d.domain_code owner_domain_code, d.name owner_domain_name
+        FROM registered_dataset rd
+        LEFT JOIN app_user u ON u.user_id=rd.owner_user_id
+        LEFT JOIN collaboration_domain d ON d.domain_id=rd.owner_domain_id
+    </sql>
+
     <select id="findDatasetById" resultMap="RegisteredDatasetMap">
-        SELECT * FROM registered_dataset WHERE dataset_id = #{datasetId} AND deleted_at IS NULL
+        <include refid="datasetWithOwner"/> WHERE rd.dataset_id = #{datasetId} AND rd.deleted_at IS NULL
     </select>
 
     <select id="findDatasetByCodeAndVersion" resultMap="RegisteredDatasetMap">
-        SELECT * FROM registered_dataset
-        WHERE dataset_code = #{datasetCode} AND dataset_version = #{datasetVersion} AND deleted_at IS NULL
+        <include refid="datasetWithOwner"/>
+        WHERE rd.dataset_code = #{datasetCode} AND rd.dataset_version = #{datasetVersion} AND rd.deleted_at IS NULL
     </select>
 
     <select id="listDatasets" resultMap="RegisteredDatasetMap">
-        SELECT * FROM registered_dataset
-        WHERE deleted_at IS NULL
-        <if test="status != null and status != ''">AND status = #{status}</if>
+        <include refid="datasetWithOwner"/>
+        WHERE rd.deleted_at IS NULL
+        <if test="status != null and status != ''">AND rd.status = #{status}</if>
         <if test="query != null and query != ''">
-            AND (dataset_code LIKE CONCAT('%', #{query}, '%') OR name LIKE CONCAT('%', #{query}, '%'))
+            AND (rd.dataset_code LIKE CONCAT('%', #{query}, '%') OR rd.name LIKE CONCAT('%', #{query}, '%'))
         </if>
-        ORDER BY updated_at DESC, dataset_id DESC
+        ORDER BY rd.updated_at DESC, rd.dataset_id DESC
     </select>
 
     <update id="updateDataset" parameterType="org.example.entity.RegisteredDataset">

@@ -43,6 +43,46 @@ spec:
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS
               value: "-Duser.timezone=UTC"
+            - name: APP_AUTH_JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-auth-secrets
+                  key: jwt-signing-key
+            - name: APP_AUTH_INTERNAL_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-auth-secrets
+                  key: internal-agent-token
+            - name: APP_AUTH_BOOTSTRAP_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-auth-secrets
+                  key: bootstrap-admin-username
+            - name: APP_AUTH_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-auth-secrets
+                  key: bootstrap-admin-password
+            - name: APP_AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME
+              value: "System Administrator"
+            - name: PRIVACY_LEGACY_A_DATASET_ID
+              value: "28"
+            - name: PRIVACY_LEGACY_A_DATASET_VERSION
+              value: "v1"
+            - name: PRIVACY_LEGACY_A_FIELDS
+              value: "value"
+            - name: PRIVACY_LEGACY_B_DATASET_ID
+              value: "29"
+            - name: PRIVACY_LEGACY_B_DATASET_VERSION
+              value: "v1"
+            - name: PRIVACY_LEGACY_B_FIELDS
+              value: "value"
+            - name: PRIVACY_LEGACY_C_DATASET_ID
+              value: "30"
+            - name: PRIVACY_LEGACY_C_DATASET_VERSION
+              value: "v1"
+            - name: PRIVACY_LEGACY_C_FIELDS
+              value: "value"
             - name: APP_RUNTIME_IMAGE_VERIFY_NAMESPACE
               value: "topic4-1"
             # Match the daily bounded network probe plus a two-hour reporting allowance.
@@ -72,21 +112,6 @@ spec:
                   name: topic4-acceptance-secrets
                   key: aggregation-worker-auth
                   optional: true
-            - name: PRIVACY_PARTY_A_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: topic4-acceptance-secrets
-                  key: privacy-party-a-secret
-            - name: PRIVACY_PARTY_B_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: topic4-acceptance-secrets
-                  key: privacy-party-b-secret
-            - name: PRIVACY_PARTY_C_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: topic4-acceptance-secrets
-                  key: privacy-party-c-secret
             - name: PRIVACY_PARTY_A_NODE_NAME
               value: "alibj"
             - name: PRIVACY_PARTY_B_NODE_NAME

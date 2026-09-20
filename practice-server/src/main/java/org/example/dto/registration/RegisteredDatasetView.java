@@ -16,6 +16,12 @@ public class RegisteredDatasetView {
     private String category;
     private String format;
     private String status;
+    private Long ownerUserId;
+    private String ownerUsername;
+    private String ownerDisplayName;
+    private Long ownerDomainId;
+    private String ownerDomainCode;
+    private String ownerDomainName;
     private Double dataHeat;
     @com.fasterxml.jackson.annotation.JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private java.time.LocalDateTime heatUpdatedAt;
@@ -45,6 +51,12 @@ public class RegisteredDatasetView {
         view.category = entity.getCategory();
         view.format = entity.getDataFormat();
         view.status = entity.getStatus();
+        view.ownerUserId = entity.getOwnerUserId();
+        view.ownerUsername = entity.getOwnerUsername();
+        view.ownerDisplayName = entity.getOwnerDisplayName();
+        view.ownerDomainId = entity.getOwnerDomainId();
+        view.ownerDomainCode = entity.getOwnerDomainCode();
+        view.ownerDomainName = entity.getOwnerDomainName();
         view.dataHeat = entity.getDataHeat();
         view.heatUpdatedAt = entity.getHeatUpdatedAt();
         view.labels = labels;
@@ -68,6 +80,12 @@ public class RegisteredDatasetView {
     public String getCategory() { return category; }
     public String getFormat() { return format; }
     public String getStatus() { return status; }
+    public Long getOwnerUserId() { return ownerUserId; }
+    public String getOwnerUsername() { return ownerUsername; }
+    public String getOwnerDisplayName() { return ownerDisplayName; }
+    public Long getOwnerDomainId() { return ownerDomainId; }
+    public String getOwnerDomainCode() { return ownerDomainCode; }
+    public String getOwnerDomainName() { return ownerDomainName; }
     public Double getDataHeat() { return dataHeat; }
     public java.time.LocalDateTime getHeatUpdatedAt() { return heatUpdatedAt; }
     public Map<String, String> getLabels() { return labels; }

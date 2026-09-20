@@ -4,6 +4,7 @@ import org.example.privacy.PrivacyComputeModels.CapabilityStatus;
 import org.example.privacy.PrivacyComputeModels.ProviderCapability;
 import org.example.privacy.PrivacyComputeModels.ProviderType;
 import org.example.privacy.PrivacyComputeModels.TemplateDefinition;
+import org.example.privacy.PrivacyComputeModels.ParticipantSlot;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -104,12 +105,32 @@ public class PrivacyTemplateCatalog {
         value.setSecurityProfile(security);
         value.setParticipantCount(roles.size());
         value.setRequiredRoles(roles);
+        List<ParticipantSlot> slots = new ArrayList<>();
+        int slotIndex = 0;
+        for (String role : roles.values()) {
+            String slotId = "P" + slotIndex++;
+            slots.add(new ParticipantSlot(slotId, role, slotLabel(role, slotId)));
+        }
+        value.setParticipantSlots(slots);
         value.setSupportedResults(results);
         value.setMaxTimeoutSeconds(timeout);
         value.setProtocolVersion(protocol);
         value.setExperimental(experimental);
         value.setLeakageDisclosure(leakage);
         return value;
+    }
+
+    private String slotLabel(String role, String slotId) {
+        if ("RECEIVER".equals(role)) return "结果接收方";
+        if ("PROVIDER".equals(role)) return "数据提供方";
+        if ("CLIENT".equals(role)) return "查询方";
+        if ("SERVER".equals(role)) return "服务方";
+        if ("KEY_HOLDER".equals(role)) return "密钥持有方";
+        if ("DATA_HOLDER".equals(role)) return "数据持有方";
+        if ("ACTIVE".equals(role)) return "主动方";
+        if ("PASSIVE".equals(role)) return "协作方";
+        if ("TRAINER".equals(role)) return "训练参与方";
+        return "参与方 " + slotId.substring(1);
     }
 
     private Map<String, String> roles(String... values) {

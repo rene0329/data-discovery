@@ -1,11 +1,14 @@
 package org.example.privacy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.auth.AuthenticatedUser;
+import org.example.auth.CurrentUserService;
 import org.example.exception.RegistrationException;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
 import org.example.privacy.PrivacyComputeModels.JobStatus;
 import org.example.privacy.PrivacyComputeModels.JobView;
 import org.example.privacy.PrivacyComputeModels.ParticipantSpec;
+import org.example.privacy.PrivacyComputeModels.InputSpec;
 import org.example.privacy.PrivacyComputeModels.ResultView;
 import org.example.security.aggregation.coordinator.SecureAggregationMessageEvent;
 import org.example.security.aggregation.coordinator.SecureAggregationRun;
@@ -14,7 +17,6 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -24,25 +26,25 @@ import java.util.UUID;
 @Component
 public class LegacySecureAggregationBridge {
     private final PrivacyComputeService service;
-    private final PrivacyPartyAuthenticator authenticator;
+    private final CurrentUserService currentUsers;
     private final ApiIdempotencyService idempotency;
     private final ObjectMapper objectMapper;
     private final Environment environment;
 
     public LegacySecureAggregationBridge(PrivacyComputeService service,
-                                         PrivacyPartyAuthenticator authenticator,
+                                         CurrentUserService currentUsers,
                                          ApiIdempotencyService idempotency,
                                          ObjectMapper objectMapper,
                                          Environment environment) {
         this.service = service;
-        this.authenticator = authenticator;
+        this.currentUsers = currentUsers;
         this.idempotency = idempotency;
         this.objectMapper = objectMapper;
         this.environment = environment;
     }
 
-    public SecureAggregationRun start(String authorization, String suppliedRequestId, JobSpec suppliedSpec) {
-        String principal = authenticator.authenticate(authorization);
+    public SecureAggregationRun start(String suppliedRequestId, JobSpec suppliedSpec) {
+        AuthenticatedUser principal = currentUsers.require();
         String requestId = suppliedRequestId == null || suppliedRequestId.trim().isEmpty()
                 ? UUID.randomUUID().toString() : suppliedRequestId.trim();
         JobSpec spec = suppliedSpec == null ? configuredSpec(principal) : suppliedSpec;
@@ -51,18 +53,19 @@ public class LegacySecureAggregationBridge {
                     "legacy secure-aggregation endpoint accepts only secure-sum-3p-v1");
         }
         JobView result = idempotency.execute("PRIVACY_JOB", "LEGACY_SECURE_SUM_CREATE", requestId,
-                principal, spec, JobView.class, () -> service.create(spec, requestId, principal),
+                String.valueOf(principal.getUserId()), spec, JobView.class,
+                () -> service.create(spec, requestId, principal),
                 JobView::getJobId);
         return toLegacy(result, principal);
     }
 
-    public SecureAggregationRun get(String runId, String authorization) {
-        String principal = authenticator.authenticate(authorization);
+    public SecureAggregationRun get(String runId) {
+        AuthenticatedUser principal = currentUsers.require();
         return toLegacy(service.getAuthorized(runId, principal), principal);
     }
 
-    public List<SecureAggregationMessageEvent> events(String runId, String authorization) {
-        String principal = authenticator.authenticate(authorization);
+    public List<SecureAggregationMessageEvent> events(String runId) {
+        AuthenticatedUser principal = currentUsers.require();
         service.getAuthorized(runId, principal);
         List<SecureAggregationMessageEvent> result = new ArrayList<>();
         for (PrivacyComputeModels.EventRecord event : service.eventsAuthorized(runId, principal)) {
@@ -82,7 +85,7 @@ public class LegacySecureAggregationBridge {
         return result;
     }
 
-    private SecureAggregationRun toLegacy(JobView job, String principal) {
+    private SecureAggregationRun toLegacy(JobView job, AuthenticatedUser principal) {
         SecureAggregationRun result = new SecureAggregationRun();
         result.setRunId(job.getJobId());
         result.setRequestId(job.getRequestId());
@@ -95,9 +98,10 @@ public class LegacySecureAggregationBridge {
         result.setCreatedAt(job.getCreatedAt());
         result.setStartedAt(job.getStartedAt());
         result.setCompletedAt(job.getCompletedAt());
-        if (job.getStatus() == JobStatus.SUCCEEDED && job.getResultRecipients().contains(principal)) {
+        if (job.getStatus() == JobStatus.SUCCEEDED
+                && principal.getUserId().equals(job.getInitiatorUserId())) {
             ResultView fetched = service.result(job.getJobId(), principal);
-            result.setFinalValue(extractSum(fetched.getResult(), principal));
+            result.setFinalValue(extractSum(fetched.getResult(), principal.getUsername()));
         }
         return result;
     }
@@ -128,12 +132,12 @@ public class LegacySecureAggregationBridge {
         return null;
     }
 
-    private JobSpec configuredSpec(String principal) {
+    private JobSpec configuredSpec(AuthenticatedUser principal) {
         JobSpec spec = new JobSpec();
         spec.setTemplateId("secure-sum-3p-v1");
         spec.setSecurityProfile("MALICIOUS_3PC_HONEST_MAJORITY");
-        spec.setResultRecipients(Collections.singletonList(principal));
-        for (String party : Arrays.asList("A", "B", "C")) {
+        int index = 0;
+        for (String party : new String[]{"A", "B", "C"}) {
             String prefix = "privacy-computing.legacy-secure-sum.parties."
                     + party.toLowerCase();
             String datasetId = environment.getProperty(prefix + ".dataset-id", "").trim();
@@ -143,17 +147,21 @@ public class LegacySecureAggregationBridge {
                 throw RegistrationException.conflict("LEGACY_MAPPING_NOT_CONFIGURED",
                         "legacy secure sum requires dataset-id, dataset-version and fields for A, B and C");
             }
-            ParticipantSpec participant = new ParticipantSpec();
-            participant.setPartyId(party);
-            participant.setRole("PARTY");
-            participant.setDatasetId(datasetId);
-            participant.setDatasetVersion(version);
+            InputSpec input = new InputSpec();
+            input.setSlotId("P" + index++);
+            try {
+                input.setDatasetId(Long.valueOf(datasetId));
+            } catch (NumberFormatException ex) {
+                throw RegistrationException.conflict("LEGACY_MAPPING_INVALID",
+                        "legacy secure sum dataset-id must be numeric");
+            }
+            input.setDatasetVersion(version);
             List<String> fieldList = new ArrayList<>();
             for (String field : fields.split(",")) {
                 if (!field.trim().isEmpty()) fieldList.add(field.trim());
             }
-            participant.setFields(fieldList);
-            spec.getParticipants().add(participant);
+            input.setFields(fieldList);
+            spec.getInputs().add(input);
         }
         return spec;
     }

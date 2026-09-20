@@ -1,6 +1,7 @@
 package org.example.privacy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.auth.AuthenticatedUser;
 import org.example.exception.RegistrationException;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
 import org.example.privacy.PrivacyComputeModels.PreflightResult;
@@ -11,6 +12,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -32,6 +35,7 @@ class PrivacyComputeServiceFixedNodeReplicaTest {
     private PrivacyComputeService service;
     private JobSpec request;
     private JobSpec resolvedSpec;
+    private AuthenticatedUser user;
 
     @BeforeEach
     void setUp() {
@@ -42,7 +46,9 @@ class PrivacyComputeServiceFixedNodeReplicaTest {
         provider = mock(PrivacyComputeProvider.class);
         staging = mock(PrivacyInputStagingService.class);
         service = new PrivacyComputeService(mapper, catalog, providers, resolver,
-                mock(PrivacyPartyAuthenticator.class), staging, new ObjectMapper(), Runnable::run);
+                staging, mock(PrivacyApprovalSigner.class), new ObjectMapper(), Runnable::run);
+        user = new AuthenticatedUser(1L, "owner-a", "Owner A",
+                new LinkedHashSet<>(Arrays.asList("DATA_OWNER")), 1L, "A", "A");
 
         request = new JobSpec();
         request.setTemplateId("secure-sum-3p-v1");
@@ -55,31 +61,31 @@ class PrivacyComputeServiceFixedNodeReplicaTest {
         template.setAvailable(true);
         when(catalog.find("secure-sum-3p-v1")).thenReturn(template);
         when(providers.require(ProviderType.MP_SPDZ)).thenReturn(provider);
-        when(resolver.resolve(request, template, "A")).thenReturn(new ResolvedSpec(
+        when(resolver.resolve(request, template, user)).thenReturn(new ResolvedSpec(
                 resolvedSpec, Collections.emptyList(), "{}", repeat('d', 64)));
 
-        doThrow(RegistrationException.conflict("PRIVACY_FIXED_NODE_REPLICA_UNAVAILABLE",
-                "party A has no usable frozen-version replica on fixed node alibj"))
-                .when(staging).validateFixedNodeReplicas(resolvedSpec);
+        doThrow(RegistrationException.conflict("PRIVACY_INPUT_REPLICA_UNAVAILABLE",
+                "runtime slot A has no usable replica for the frozen dataset version"))
+                .when(staging).validateAvailableReplicas(resolvedSpec);
     }
 
     @Test
-    void preflightReportsMissingReplicaOnFixedPartyNode() {
-        PreflightResult result = service.preflight(request, "A");
+    void preflightReportsMissingVerifiedReplica() {
+        PreflightResult result = service.preflight(request, user);
 
         assertFalse(result.isValid());
         assertEquals(Collections.singletonList(
-                "party A has no usable frozen-version replica on fixed node alibj"), result.getErrors());
-        verify(staging).validateFixedNodeReplicas(resolvedSpec);
+                "runtime slot A has no usable replica for the frozen dataset version"), result.getErrors());
+        verify(staging).validateAvailableReplicas(resolvedSpec);
     }
 
     @Test
-    void createRejectsBeforePersistingWhenFixedPartyNodeHasNoReplica() {
+    void createRejectsBeforePersistingWhenNoVerifiedReplicaExists() {
         RegistrationException error = assertThrows(RegistrationException.class,
-                () -> service.create(request, "request-1", "A"));
+                () -> service.create(request, "request-1", user));
 
-        assertEquals("PRIVACY_FIXED_NODE_REPLICA_UNAVAILABLE", error.getErrorCode());
-        verify(staging).validateFixedNodeReplicas(resolvedSpec);
+        assertEquals("PRIVACY_INPUT_REPLICA_UNAVAILABLE", error.getErrorCode());
+        verify(staging).validateAvailableReplicas(resolvedSpec);
         verify(provider, never()).capability();
         verify(mapper, never()).insertJob(any());
     }

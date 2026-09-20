@@ -30,25 +30,22 @@ public class SecureAggregationController {
     @PostMapping
     public ResponseEntity<ApiV1Response<SecureAggregationRun>> start(
             @RequestHeader(value = "Idempotency-Key", required = false) String requestId,
-            @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestBody(required = false) JobSpec request) {
-        SecureAggregationRun run = privacyBridge.start(authorization, requestId, request);
+        SecureAggregationRun run = privacyBridge.start(requestId, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(run));
     }
 
     @GetMapping("/{runId}")
     public ApiV1Response<SecureAggregationRun> get(
-            @PathVariable String runId,
-            @RequestHeader(value = "Authorization", required = false) String authorization) {
+            @PathVariable String runId) {
         return ApiV1Response.ok(runId.startsWith("pcj-")
-                ? privacyBridge.get(runId, authorization) : service.get(runId));
+                ? privacyBridge.get(runId) : service.get(runId));
     }
 
     @GetMapping("/{runId}/events")
     public ApiV1Response<List<SecureAggregationMessageEvent>> events(
-            @PathVariable String runId,
-            @RequestHeader(value = "Authorization", required = false) String authorization) {
+            @PathVariable String runId) {
         return ApiV1Response.ok(runId.startsWith("pcj-")
-                ? privacyBridge.events(runId, authorization) : service.events(runId));
+                ? privacyBridge.events(runId) : service.events(runId));
     }
 }

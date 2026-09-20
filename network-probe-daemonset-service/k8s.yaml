@@ -62,6 +62,11 @@ spec:
               value: in-cluster-default
             - name: CENTRAL_PUBLIC_IP_URL
               value: http://practice-server-svc.topic4-1.svc.cluster.local:8080/api/network/nodes/public-ip
+            - name: CENTRAL_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-auth-secrets
+                  key: internal-agent-token
             - name: PUBLIC_IP_LOOKUP_URL
               value: https://api-ipv4.ip.sb/ip
             - name: PUBLIC_IP_INTERVAL_MS

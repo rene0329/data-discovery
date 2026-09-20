@@ -14,9 +14,12 @@ POLL_INTERVAL=${TOPIC4_POLL_INTERVAL_SECONDS:-5}
 NEGATIVE_POLL_SECONDS=${TOPIC4_NEGATIVE_POLL_SECONDS:-120}
 NEGATIVE_CASES=${TOPIC4_NEGATIVE_CASES:-}
 
-SECRET_A=${TOPIC4_PARTY_A_SECRET:-}
-SECRET_B=${TOPIC4_PARTY_B_SECRET:-}
-SECRET_C=${TOPIC4_PARTY_C_SECRET:-}
+USER_A_USERNAME=${TOPIC4_USER_A_USERNAME:-}
+USER_A_PASSWORD=${TOPIC4_USER_A_PASSWORD:-}
+USER_B_USERNAME=${TOPIC4_USER_B_USERNAME:-}
+USER_B_PASSWORD=${TOPIC4_USER_B_PASSWORD:-}
+USER_C_USERNAME=${TOPIC4_USER_C_USERNAME:-}
+USER_C_PASSWORD=${TOPIC4_USER_C_PASSWORD:-}
 
 die() {
   printf 'run-privacy-acceptance: %s\n' "$*" >&2
@@ -57,11 +60,11 @@ jq -e '.contractVersion == "topic4.privacy.raw-baseline/v1"
   and ([.. | objects | keys[] | ascii_downcase] | all(. != "pass" and . != "fail"))' \
   "$BASELINE_FILE" >/dev/null || die "raw baseline has an unsupported shape"
 
-for required in SECRET_A SECRET_B SECRET_C; do
+for required in USER_A_USERNAME USER_A_PASSWORD USER_B_USERNAME USER_B_PASSWORD USER_C_USERNAME USER_C_PASSWORD; do
   value=${!required}
-  [ -n "$value" ] || die "TOPIC4_PARTY_${required#SECRET_}_SECRET is required"
+  [ -n "$value" ] || die "TOPIC4_${required} is required"
   case "$value" in
-    *$'\n'*|*$'\r'*) die "party credentials must not contain line breaks" ;;
+    *$'\n'*|*$'\r'*) die "user credentials must not contain line breaks" ;;
   esac
 done
 
@@ -75,19 +78,6 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 chmod 700 "$TEMP_DIR"
-
-make_auth_header() {
-  local party=$1
-  local secret=$2
-  local path="$TEMP_DIR/auth-$party.header"
-  printf 'Authorization: Basic ' >"$path"
-  printf '%s' "$party:$secret" | base64 | tr -d '\r\n' >>"$path"
-  printf '\n' >>"$path"
-  chmod 600 "$path"
-}
-make_auth_header A "$SECRET_A"
-make_auth_header B "$SECRET_B"
-make_auth_header C "$SECRET_C"
 
 auth_header_for() {
   case "$1" in
@@ -136,6 +126,60 @@ json_body() {
   jq -n "$@" >"$target"
 }
 
+login_principal() {
+  local principal=$1
+  local username=$2
+  local password=$3
+  local login_body="$TEMP_DIR/login-$principal.request.json"
+  local login_response="$TEMP_DIR/login-$principal.response.json"
+  local auth_header="$TEMP_DIR/auth-$principal.header"
+  local status token
+  mkdir -p -- "$OUTPUT_DIR/auth"
+  json_body "$login_body" --arg username "$username" --arg password "$password" \
+    '{username:$username,password:$password}'
+  chmod 600 "$login_body"
+  if ! status=$(curl --silent --show-error --connect-timeout 10 --max-time 60 \
+      --request POST --header 'Content-Type: application/json' --data-binary "@$login_body" \
+      --output "$login_response" --write-out '%{http_code}' "$API_BASE_URL/api/v1/auth/login"); then
+    status=000
+  fi
+  [ ! -e "$login_response" ] || chmod 600 "$login_response"
+  printf '%s\n' "$status" >"$OUTPUT_DIR/auth/$principal-login.http-status"
+  token=$(jq -er '.data.token | select(type == "string" and length > 0)' "$login_response" 2>/dev/null) ||
+    die "login failed for configured user $username (HTTP $status)"
+  printf 'Authorization: Bearer %s\n' "$token" >"$auth_header"
+  chmod 600 "$auth_header"
+  jq '{code,message,data:{tokenIssued:(.data.token | type == "string" and length > 0)}}' \
+    "$login_response" >"$OUTPUT_DIR/auth/$principal-login.json"
+  api_request "$principal" GET /api/v1/auth/me "$OUTPUT_DIR/auth/$principal-me.json"
+  jq -e --arg username "$username" \
+    '.code == 0 and .data.username == $username and (.data.roles | index("DATA_OWNER") != null)
+      and .data.domain != null' "$OUTPUT_DIR/auth/$principal-me.json" >/dev/null ||
+    die "configured user $username must be an enabled DATA_OWNER bound to a domain"
+}
+
+login_principal A "$USER_A_USERNAME" "$USER_A_PASSWORD"
+login_principal B "$USER_B_USERNAME" "$USER_B_PASSWORD"
+login_principal C "$USER_C_USERNAME" "$USER_C_PASSWORD"
+
+jq -s -e '([.[].data.id] | unique | length) == 3
+  and ([.[].data.domain.id] | unique | length) == 3' \
+  "$OUTPUT_DIR/auth/A-me.json" "$OUTPUT_DIR/auth/B-me.json" "$OUTPUT_DIR/auth/C-me.json" >/dev/null ||
+  die "A/B/C acceptance users must be three distinct users in three distinct enabled domains"
+
+principal_for_username() {
+  local username=$1
+  local principal configured
+  for principal in A B C; do
+    configured=$(jq -r '.data.username // empty' "$OUTPUT_DIR/auth/$principal-me.json")
+    if [ "$configured" = "$username" ]; then
+      printf '%s\n' "$principal"
+      return
+    fi
+  done
+  die "job requires owner $username, but no matching TOPIC4_USER_A/B/C account was configured"
+}
+
 api_request A GET /api/v1/privacy-computing/capabilities "$OUTPUT_DIR/capabilities.json"
 api_request A GET /api/v1/privacy-computing/templates "$OUTPUT_DIR/templates.json"
 jq -e '.code == 0 and (.data | type == "array")' "$OUTPUT_DIR/capabilities.json" >/dev/null ||
@@ -152,24 +196,23 @@ dataset_record() {
     die "fixture mapping is missing $family/$source_party"
 }
 
-participant() {
-  local logical_party=$1
-  local role=$2
-  local family=$3
-  local source_party=$4
-  local fields=$5
+input_binding() {
+  local slot_id=$1
+  local family=$2
+  local source_party=$3
+  local fields=$4
   local dataset
   dataset=$(dataset_record "$family" "$source_party")
-  jq -cn --arg party "$logical_party" --arg role "$role" \
+  jq -cn --arg slotId "$slot_id" \
     --argjson dataset "$dataset" --argjson fields "$fields" \
-    '{partyId:$party,role:$role,datasetId:($dataset.datasetId|tostring),
-      datasetVersion:$dataset.version,datasetSha256:$dataset.sha256,fields:$fields}'
+    '{slotId:$slotId,datasetId:($dataset.datasetId|tonumber),
+      datasetVersion:$dataset.version,fields:$fields}'
 }
 
 build_spec() {
   local template_id=$1
   local destination=$2
-  local security timeout a b c policy participants
+  local security timeout a b c policy inputs
   security=$(jq -er --arg id "$template_id" '.data[] | select(.templateId == $id) | .securityProfile' \
     "$OUTPUT_DIR/templates.json") || die "template is absent from catalog: $template_id"
   timeout=$(jq -er --arg id "$template_id" '.data[] | select(.templateId == $id) | .maxTimeoutSeconds' \
@@ -177,10 +220,10 @@ build_spec() {
 
   case "$template_id" in
     secure-sum-3p-v1|private-threshold-3p-v1)
-      a=$(participant A PARTY secure-sum A '["value"]')
-      b=$(participant B PARTY secure-sum B '["value"]')
-      c=$(participant C PARTY secure-sum C '["value"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
+      a=$(input_binding P0 secure-sum A '["value"]')
+      b=$(input_binding P1 secure-sum B '["value"]')
+      c=$(input_binding P2 secure-sum C '["value"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
       if [ "$template_id" = private-threshold-3p-v1 ]; then
         policy='{"programId":"topic4_private_threshold_100","threshold":100,"scale":1}'
       else
@@ -188,58 +231,58 @@ build_spec() {
       fi
       ;;
     private-stats-3p-v1)
-      a=$(participant A PARTY private-stats A '["v1","v2"]')
-      b=$(participant B PARTY private-stats B '["v1","v2"]')
-      c=$(participant C PARTY private-stats C '["v1","v2"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
+      a=$(input_binding P0 private-stats A '["v1","v2"]')
+      b=$(input_binding P1 private-stats B '["v1","v2"]')
+      c=$(input_binding P2 private-stats C '["v1","v2"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
       policy='{"scale":1}'
       ;;
     psi-2p-v1)
-      a=$(participant A RECEIVER psi A '["id"]')
-      b=$(participant B PROVIDER psi B '["id"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
+      a=$(input_binding P0 psi A '["id"]')
+      b=$(input_binding P1 psi B '["id"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
       policy='{"keyColumns":["id"],"outputMode":"RECEIVER_ONLY"}'
       ;;
     psi-3p-v1)
-      a=$(participant A PARTY psi A '["id"]')
-      b=$(participant B PARTY psi B '["id"]')
-      c=$(participant C PARTY psi C '["id"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
+      a=$(input_binding P0 psi A '["id"]')
+      b=$(input_binding P1 psi B '["id"]')
+      c=$(input_binding P2 psi C '["id"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
       policy='{"keyColumns":["id"],"outputMode":"RECEIVER_ONLY"}'
       ;;
     pir-keyword-2p-v1)
-      a=$(participant A CLIENT pir A '["key"]')
-      b=$(participant B SERVER pir B '["key","value"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
+      a=$(input_binding P0 pir A '["key"]')
+      b=$(input_binding P1 pir B '["key","value"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
       policy='{"queryColumn":"key","valueColumns":["value"]}'
       ;;
     he-paillier-2p-v1)
-      a=$(participant A KEY_HOLDER he A '["value"]')
-      b=$(participant B DATA_HOLDER he B '["value"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
+      a=$(input_binding P0 he A '["value"]')
+      b=$(input_binding P1 he B '["value"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
       policy='{"operation":"ADD","scale":1}'
       ;;
     hfl-fedavg-logreg-3p-v1)
-      a=$(participant A TRAINER hfl A '["x1","x2","label"]')
-      b=$(participant B TRAINER hfl B '["x1","x2","label"]')
-      c=$(participant C TRAINER hfl C '["x1","x2","label"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
+      a=$(input_binding P0 hfl A '["x1","x2","label"]')
+      b=$(input_binding P1 hfl B '["x1","x2","label"]')
+      c=$(input_binding P2 hfl C '["x1","x2","label"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" --argjson c "$c" '[$a,$b,$c]')
       policy='{"labelColumn":"label","featureColumns":["x1","x2"],"epochs":1,"learningRate":0.05,"seed":20260919}'
       ;;
     vfl-secureboost-2p-v1)
-      a=$(participant A ACTIVE vfl A '["id","x2","label"]')
-      b=$(participant B PASSIVE vfl B '["id","x1"]')
-      participants=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
+      a=$(input_binding P0 vfl A '["id","x2","label"]')
+      b=$(input_binding P1 vfl B '["id","x1"]')
+      inputs=$(jq -cn --argjson a "$a" --argjson b "$b" '[$a,$b]')
       policy='{"labelColumn":"label","featureColumns":["x1","x2"],"epochs":1,"learningRate":0.1,"seed":20260919}'
       ;;
     *) die "no acceptance request is declared for template $template_id" ;;
   esac
 
   jq -n --arg templateId "$template_id" --arg securityProfile "$security" \
-    --argjson participants "$participants" --argjson timeout "$timeout" \
+    --argjson inputs "$inputs" --argjson timeout "$timeout" \
     --argjson policy "$policy" \
-    '{templateId:$templateId,securityProfile:$securityProfile,participants:$participants,
-      resultRecipients:["A"],timeoutSeconds:$timeout,enginePolicy:$policy}' >"$destination"
+    '{templateId:$templateId,securityProfile:$securityProfile,inputs:$inputs,
+      timeoutSeconds:$timeout,enginePolicy:$policy}' >"$destination"
 }
 
 INDEX_NDJSON="$TEMP_DIR/index.ndjson"
@@ -270,6 +313,24 @@ terminal_status() {
   esac
 }
 
+approve_pending_from_view() {
+  local job_id=$1
+  local view_file=$2
+  local directory=$3
+  local reason=$4
+  local approver_username principal body
+  mkdir -p -- "$directory"
+  jq -r '.data.approvals[]? | select(.decision == "PENDING") | .approverUsername' "$view_file" |
+    while IFS= read -r approver_username; do
+      [ -n "$approver_username" ] || continue
+      principal=$(principal_for_username "$approver_username")
+      body="$TEMP_DIR/approve-$job_id-$principal.json"
+      json_body "$body" --arg reason "$reason" '{reason:$reason}'
+      api_request "$principal" POST "/api/v1/privacy-computing/jobs/$job_id/approve" \
+        "$directory/approve-$principal.json" "$body"
+    done
+}
+
 run_template() {
   local template_id=$1
   local directory="$OUTPUT_DIR/jobs/$template_id"
@@ -290,15 +351,15 @@ run_template() {
   fi
   printf '%s\n' "$job_id" >"$directory/job-id.txt"
 
-  local participant_id decision_file
-  jq -r '.data.participants[]?.partyId' "$directory/create.json" | while IFS= read -r participant_id; do
-    case "$participant_id" in A|B|C) ;; *) continue ;; esac
-    decision_file="$TEMP_DIR/approve-$template_id-$participant_id.json"
-    json_body "$decision_file" --arg party "$participant_id" \
-      '{participantId:$party,reason:"raw acceptance execution"}'
-    api_request "$participant_id" POST "/api/v1/privacy-computing/jobs/$job_id/approve" \
-      "$directory/approve-$participant_id.json" "$decision_file"
-  done
+  mkdir -p -- "$directory/pending-approvals"
+  api_request A GET /api/v1/privacy-computing/approvals/pending \
+    "$directory/pending-approvals/A.json"
+  api_request B GET /api/v1/privacy-computing/approvals/pending \
+    "$directory/pending-approvals/B.json"
+  api_request C GET /api/v1/privacy-computing/approvals/pending \
+    "$directory/pending-approvals/C.json"
+  approve_pending_from_view "$job_id" "$directory/create.json" "$directory/approvals" \
+    "raw acceptance execution"
 
   local started elapsed poll_no observed_status latest_job image_digest
   started=$(date +%s)
@@ -331,10 +392,13 @@ run_template() {
     "$latest_job" >"$directory/participants.json" 2>/dev/null ||
     jq -n '{jobId:null,attemptId:null,participants:[]}' >"$directory/participants.json"
 
-  jq -r '.data.participants[]?.partyId' "$latest_job" 2>/dev/null | while IFS= read -r participant_id; do
-    case "$participant_id" in A|B|C) ;; *) continue ;; esac
-    api_request "$participant_id" GET "/api/v1/privacy-computing/jobs/$job_id" \
-      "$directory/participant-jobs/$participant_id.json"
+  local owner_username principal
+  jq -r '.data.participants[]?.ownerUsername // empty' "$latest_job" 2>/dev/null |
+    sort -u | while IFS= read -r owner_username; do
+    [ -n "$owner_username" ] || continue
+    principal=$(principal_for_username "$owner_username")
+    api_request "$principal" GET "/api/v1/privacy-computing/jobs/$job_id" \
+      "$directory/participant-jobs/$principal.json"
   done
   api_request A GET "/api/v1/privacy-computing/jobs/$job_id/events" "$directory/events.json"
   api_request A GET "/api/v1/privacy-computing/jobs/$job_id/result" "$directory/result.json"
@@ -373,6 +437,18 @@ negative_preflight() {
     "$directory/preflight.json" "$directory/spec.json"
 }
 
+negative_digest_change() {
+  local directory="$OUTPUT_DIR/negative/digest-mismatch"
+  mkdir -p -- "$directory"
+  build_spec secure-sum-3p-v1 "$directory/spec.json"
+  jq -n '{operation:"create the job, then change one registered dataset version bytes before the last owner approves",
+    expectedEvidence:["the server-frozen SHA-256","the runtime revalidation event","the terminal job record","absence of a published result"],
+    note:"dataset digests are server-managed and therefore cannot be supplied or forged in the public JobSpec"}' \
+    >"$directory/manual-input.json"
+  api_request A POST /api/v1/privacy-computing/jobs/preflight \
+    "$directory/preflight.json" "$directory/spec.json"
+}
+
 create_control_job() {
   local case_name=$1
   local directory="$OUTPUT_DIR/negative/$case_name"
@@ -392,23 +468,6 @@ record_control_job() {
   api_request A GET "/api/v1/privacy-computing/jobs/$job_id" "$directory/job.json"
   api_request A GET "/api/v1/privacy-computing/jobs/$job_id/events" "$directory/events.json"
   api_request A GET "/api/v1/privacy-computing/jobs/$job_id/evidence" "$directory/evidence.json"
-}
-
-approve_all_from_view() {
-  local job_id=$1
-  local view_file=$2
-  local directory=$3
-  local reason=$4
-  local participant_id body
-  mkdir -p -- "$directory"
-  jq -r '.data.participants[]?.partyId' "$view_file" | while IFS= read -r participant_id; do
-    case "$participant_id" in A|B|C) ;; *) continue ;; esac
-    body="$TEMP_DIR/negative-approve-$participant_id-$$.json"
-    json_body "$body" --arg party "$participant_id" --arg reason "$reason" \
-      '{participantId:$party,reason:$reason}'
-    api_request "$participant_id" POST "/api/v1/privacy-computing/jobs/$job_id/approve" \
-      "$directory/approve-$participant_id.json" "$body"
-  done
 }
 
 poll_control_job() {
@@ -468,7 +527,7 @@ run_negative_spec_job() {
     "$directory/spec.json" "privacy-negative-$RUN_ID-$case_name"
   job_id=$(jq -r '.data.jobId // empty' "$directory/create.json" 2>/dev/null || true)
   [ -n "$job_id" ] || return
-  approve_all_from_view "$job_id" "$directory/create.json" "$directory/approvals" \
+  approve_pending_from_view "$job_id" "$directory/create.json" "$directory/approvals" \
     "negative input execution"
   poll_control_job "$directory" "$job_id"
   api_request A GET "/api/v1/privacy-computing/jobs/$job_id/events" "$directory/events.json"
@@ -486,9 +545,8 @@ negative_malformed_input() {
   build_spec "$template_id" "$base"
   malformed=$(dataset_record "$fixture_family" A)
   jq --argjson dataset "$malformed" \
-    '(.participants[] | select(.partyId == "A")) |=
-      (.datasetId=($dataset.datasetId|tostring)
-       | .datasetVersion=$dataset.version | .datasetSha256=$dataset.sha256)' \
+    '(.inputs[] | select(.slotId == "P0")) |=
+      (.datasetId=($dataset.datasetId|tonumber) | .datasetVersion=$dataset.version)' \
     "$base" >"$spec"
   run_negative_spec_job "$case_name" "$spec"
 }
@@ -497,11 +555,8 @@ negative_approval_reject() {
   local directory="$OUTPUT_DIR/negative/approval-reject" job_id body
   job_id=$(create_control_job approval-reject)
   [ -n "$job_id" ] || return
-  body="$TEMP_DIR/negative-approve-a.json"
-  json_body "$body" --arg party A '{participantId:$party,reason:"negative case approval before rejection"}'
-  api_request A POST "/api/v1/privacy-computing/jobs/$job_id/approve" "$directory/approve-A.json" "$body"
   body="$TEMP_DIR/negative-reject-b.json"
-  json_body "$body" --arg party B '{participantId:$party,reason:"negative case participant rejection"}'
+  json_body "$body" '{reason:"negative case data owner rejection"}'
   api_request B POST "/api/v1/privacy-computing/jobs/$job_id/reject" "$directory/reject-B.json" "$body"
   record_control_job "$directory" "$job_id"
 }
@@ -521,13 +576,13 @@ negative_retry() {
   job_id=$(create_control_job retry-dispatch)
   [ -n "$job_id" ] || return
   body="$TEMP_DIR/retry-dispatch-reject.json"
-  json_body "$body" --arg party B '{participantId:$party,reason:"prepare a fresh dispatched attempt"}'
+  json_body "$body" '{reason:"prepare a fresh dispatched attempt"}'
   api_request B POST "/api/v1/privacy-computing/jobs/$job_id/reject" "$directory/reject-attempt-1.json" "$body"
   capture_attempt_evidence "$directory/attempt-1" "$job_id"
 
   api_request A POST "/api/v1/privacy-computing/jobs/$job_id/retry" "$directory/retry-to-attempt-2.json" '' \
     "privacy-negative-retry-dispatch-$RUN_ID"
-  approve_all_from_view "$job_id" "$directory/retry-to-attempt-2.json" "$directory/attempt-2/approvals" \
+  approve_pending_from_view "$job_id" "$directory/retry-to-attempt-2.json" "$directory/attempt-2/approvals" \
     "fresh retry approval and dispatch"
   poll_control_job "$directory/attempt-2" "$job_id"
   capture_attempt_evidence "$directory/attempt-2" "$job_id"
@@ -551,8 +606,8 @@ negative_retry_limit() {
   while [ "$attempt" -le 3 ]; do
     mkdir -p -- "$directory/attempt-$attempt"
     body="$TEMP_DIR/retry-limit-reject-$attempt.json"
-    json_body "$body" --arg party B --argjson attempt "$attempt" \
-      '{participantId:$party,reason:("retry limit observation attempt " + ($attempt|tostring))}'
+    json_body "$body" --argjson attempt "$attempt" \
+      '{reason:("retry limit observation attempt " + ($attempt|tostring))}'
     api_request B POST "/api/v1/privacy-computing/jobs/$job_id/reject" \
       "$directory/attempt-$attempt/reject-B.json" "$body"
     capture_attempt_evidence "$directory/attempt-$attempt" "$job_id"
@@ -593,20 +648,19 @@ negative_unauthorized_data() {
   local directory="$OUTPUT_DIR/negative/unauthorized-data"
   local dataset_id=${TOPIC4_UNAUTHORIZED_DATASET_ID:-}
   local dataset_version=${TOPIC4_UNAUTHORIZED_DATASET_VERSION:-}
-  local dataset_sha=${TOPIC4_UNAUTHORIZED_DATASET_SHA256:-}
   local spec="$TEMP_DIR/unauthorized-data-base.json"
   mkdir -p -- "$directory"
-  if [ -z "$dataset_id" ] || [ -z "$dataset_version" ] || [ -z "$dataset_sha" ]; then
+  if [ -z "$dataset_id" ] || [ -z "$dataset_version" ]; then
     jq -n '{requiredEnvironment:["TOPIC4_UNAUTHORIZED_DATASET_ID",
-      "TOPIC4_UNAUTHORIZED_DATASET_VERSION","TOPIC4_UNAUTHORIZED_DATASET_SHA256"],
-      operation:"rerun with an ACTIVE catalog version that party A is not authorized to read"}' \
+      "TOPIC4_UNAUTHORIZED_DATASET_VERSION"],
+      operation:"rerun with an ACTIVE catalog version whose owner is not one of the configured acceptance users"}' \
       >"$directory/manual-input.json"
     return
   fi
   build_spec secure-sum-3p-v1 "$spec"
-  jq --arg id "$dataset_id" --arg version "$dataset_version" --arg sha "$dataset_sha" \
-    '(.participants[] | select(.partyId == "A")) |=
-      (.datasetId=$id | .datasetVersion=$version | .datasetSha256=$sha)' \
+  jq --argjson id "$dataset_id" --arg version "$dataset_version" \
+    '(.inputs[] | select(.slotId == "P0")) |=
+      (.datasetId=$id | .datasetVersion=$version)' \
     "$spec" >"$directory/spec.json"
   api_request A POST /api/v1/privacy-computing/jobs/preflight \
     "$directory/preflight.json" "$directory/spec.json"
@@ -620,9 +674,10 @@ negative_non_recipient_result() {
   source_job=
   for candidate in "$OUTPUT_DIR"/jobs/*/job.json; do
     [ -f "$candidate" ] || continue
-    if jq -e '.data.status == "SUCCEEDED"
-      and ((.data.resultRecipients // []) | index("B") | not)
-      and ((.data.participants // []) | map(.partyId) | index("B") != null)' "$candidate" >/dev/null; then
+    if jq -e --arg username "$USER_B_USERNAME" '.data.status == "SUCCEEDED"
+      and .data.initiator != $username
+      and ((.data.participants // []) | map(.ownerUsername) | index($username) != null)' \
+      "$candidate" >/dev/null; then
       source_job=$candidate
       break
     fi
@@ -659,11 +714,10 @@ if [ -n "$NEGATIVE_CASES" ]; then
   for negative_case in "$@"; do
     case "$negative_case" in
       digest-mismatch)
-        negative_preflight digest-mismatch \
-          '(.participants[0].datasetSha256) = "0000000000000000000000000000000000000000000000000000000000000000"'
+        negative_digest_change
         ;;
       unknown-field)
-        negative_preflight unknown-field '(.participants[0].fields) = ["__missing__"]'
+        negative_preflight unknown-field '(.inputs[0].fields) = ["__missing__"]'
         ;;
       psi-duplicate) negative_malformed_input psi-duplicate psi-2p-v1 psi-duplicate ;;
       psi-empty) negative_malformed_input psi-empty psi-2p-v1 psi-empty ;;

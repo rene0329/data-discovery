@@ -55,6 +55,9 @@ public interface DatasetRegistrationMapper {
                                        @Param("legacyDataId") Integer legacyDataId);
     int countActiveSchedulingReferences(@Param("datasetId") Long datasetId);
 
+    @org.apache.ibatis.annotations.Select("SELECT COUNT(*) FROM privacy_compute_input_snapshot WHERE dataset_id=#{datasetId}")
+    int countPrivacyComputeReferences(@Param("datasetId") Long datasetId);
+
     Long lockDataset(Long datasetId);
     Integer lockStorageNode(Integer nodeId);
     int countActiveTaskReferences(@Param("datasetId") Long datasetId, @Param("datasetName") String datasetName);

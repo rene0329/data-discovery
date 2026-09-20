@@ -25,7 +25,7 @@ public class DatasetAccessSecurityController {
 
     @PostMapping("/authorizations")
     public ResponseEntity<ApiV1Response<AccessAuthorizationResult>> authorize(
-            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-Reviewer-Authorization", required = false) String authorization,
             @RequestHeader(value = "X-Request-Id", required = false) String requestId,
             @RequestHeader(value = "X-Run-Id", required = false) String runId,
             @RequestBody AccessScope scope,
@@ -42,7 +42,7 @@ public class DatasetAccessSecurityController {
 
     @PostMapping("/verifications")
     public ResponseEntity<ApiV1Response<AccessTokenClaims>> verify(
-            @RequestHeader(value = "Authorization", required = false) String token,
+            @RequestHeader(value = "X-Dataset-Authorization", required = false) String token,
             @RequestHeader(value = "X-Request-Id", required = false) String requestId,
             @RequestHeader(value = "X-Run-Id", required = false) String runId,
             @RequestBody AccessScope expected,

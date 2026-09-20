@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.example.auth.AuthenticatedUser;
+import org.example.auth.CurrentUserService;
 import org.example.dto.registration.RegisterDatasetRequest;
 import org.example.dto.registration.OperationResult;
 import org.example.dto.registration.RegisteredDatasetView;
@@ -22,8 +24,10 @@ import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
 import org.example.model.FileIntegrityResult;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -65,6 +69,8 @@ public class DatasetRegistrationService {
     private final NodeAvailabilityService nodeAvailabilityService;
     private final String dataDirectory;
     private final TransactionTemplate transactionTemplate;
+    @Autowired(required = false)
+    private CurrentUserService currentUsers;
 
     public DatasetRegistrationService(DatasetRegistrationMapper mapper,
                                       NodeManagementMapper nodeMapper,
@@ -173,6 +179,7 @@ public class DatasetRegistrationService {
                 metadataDigest(metadataJson), null, request.getVersion(), requestId);
 
         ResourceRequirements resources = request.getRequiredResources();
+        AuthenticatedUser owner = registrationOwner();
         RegisteredDataset dataset = RegisteredDataset.builder()
                 .datasetCode(request.getDatasetCode())
                 .name(request.getName())
@@ -186,6 +193,8 @@ public class DatasetRegistrationService {
                 .requiredMemoryGi(resources == null ? null : resources.getMemoryGi())
                 .requiredGpu(resources == null ? null : resources.getGpu())
                 .status("DRAFT")
+                .ownerUserId(owner == null ? null : owner.getUserId())
+                .ownerDomainId(owner == null ? null : owner.getDomainId())
                 .rowVersion(0)
                 .build();
         mapper.insertDataset(dataset);
@@ -294,6 +303,7 @@ public class DatasetRegistrationService {
             throw RegistrationException.invalid("rowVersion is required");
         }
         RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
         dataset.setName(request.getName() == null ? dataset.getName() : request.getName());
         dataset.setDescription(request.getDescription() == null ? dataset.getDescription() : request.getDescription());
         dataset.setDataType(request.getDataType() == null ? dataset.getDataType() : request.getDataType());
@@ -315,6 +325,7 @@ public class DatasetRegistrationService {
     @Transactional(noRollbackFor = RegistrationException.class)
     public RegisteredDatasetView verify(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
         mapper.updateDatasetStatus(datasetId, "VERIFYING", null, false);
         DatasetMetadata metadata = mapper.findDatasetMetadata(datasetId);
         String authoritativeDigest = metadata == null ? null : normalizeSha256(metadata.getDigestValue());
@@ -390,6 +401,7 @@ public class DatasetRegistrationService {
     @Transactional
     public RegisteredDatasetView activate(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
         if (dataset.getVerifiedAt() == null || countUsableReplicas(datasetId) == 0) {
             throw RegistrationException.conflict("DATASET_NO_USABLE_REPLICA",
                     "dataset must have a verified replica on an available node");
@@ -401,7 +413,8 @@ public class DatasetRegistrationService {
 
     @Transactional
     public RegisteredDatasetView disable(Long datasetId, String requestId) {
-        requireDataset(datasetId);
+        RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
         mapper.updateDatasetStatus(datasetId, "DISABLED", null, false);
         audit("DATASET", String.valueOf(datasetId), "DISABLE", requestId, null);
         return getDataset(datasetId);
@@ -410,6 +423,7 @@ public class DatasetRegistrationService {
     @Transactional
     public DatasetReplica addReplica(Long datasetId, Long candidateId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
         DatasetDiscoveryCandidate candidate = mapper.findCandidateById(candidateId);
         if (candidate == null) throw RegistrationException.notFound("dataset candidate not found");
         if (candidate.getRegisteredDatasetId() != null
@@ -468,7 +482,8 @@ public class DatasetRegistrationService {
 
     @Transactional
     public RegisteredDatasetView bindRuntimeImage(Long datasetId, Long runtimeImageId, String requestId) {
-        requireDataset(datasetId);
+        RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
         RuntimeImage image = runtimeImageMapper.findById(runtimeImageId);
         if (image == null) throw RegistrationException.notFound("runtime image not found");
         if (!"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())) {
@@ -482,6 +497,7 @@ public class DatasetRegistrationService {
     @Transactional
     public void unregister(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
         int taskReferences = mapper.countTaskReferences(datasetId, dataset.getName());
         if (taskReferences > 0) {
             throw RegistrationException.conflict("DATASET_IN_USE",
@@ -490,6 +506,10 @@ public class DatasetRegistrationService {
         if (mapper.countActiveMigrationReferences(datasetId, dataset.getLegacyDataId()) > 0
                 || mapper.countActiveSchedulingReferences(datasetId) > 0) {
             throw RegistrationException.conflict("DATASET_IN_USE", "数据集存在进行中的迁移或调度，无法删除");
+        }
+        if (mapper.countPrivacyComputeReferences(datasetId) > 0) {
+            throw RegistrationException.conflict("DATASET_IN_USE",
+                    "数据集已被隐私计算任务引用，只能停用，不能删除");
         }
         mapper.softDeleteDataset(datasetId);
         audit("DATASET", String.valueOf(datasetId), "UNREGISTER", requestId, null);
@@ -526,6 +546,21 @@ public class DatasetRegistrationService {
                 "DISABLED").contains(normalized)) {
             throw RegistrationException.invalid("unsupported dataset status: " + status);
         }
+    }
+
+    private AuthenticatedUser registrationOwner() {
+        if (currentUsers == null) return null;
+        AuthenticatedUser user = currentUsers.currentUser();
+        return user.hasRole("DATA_OWNER") && user.getDomainId() != null ? user : null;
+    }
+
+    private void requireDatasetMutation(RegisteredDataset dataset) {
+        if (currentUsers == null) return;
+        AuthenticatedUser user = currentUsers.currentUser();
+        if (user.hasRole("ADMIN")) return;
+        if (user.hasRole("DATA_OWNER") && user.getUserId().equals(dataset.getOwnerUserId())) return;
+        throw new RegistrationException(HttpStatus.FORBIDDEN, "DATASET_OWNER_REQUIRED",
+                "only the assigned data owner or an administrator can modify this dataset");
     }
 
     private RegisteredDatasetView toView(RegisteredDataset dataset) {

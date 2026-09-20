@@ -2,7 +2,6 @@ package org.example.privacy;
 
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
-import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
@@ -22,7 +21,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -82,7 +80,7 @@ class PrivacyInputStagingServiceTest {
     }
 
     @Test
-    void rejectsHealthyReplicaFromAnotherDomainWhenFixedNodeHasNoUsableReplica() {
+    void acceptsVerifiedReplicaOutsideFormerFixedSlotNode() {
         DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
         NodeManagementMapper nodes = mock(NodeManagementMapper.class);
         DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
@@ -104,16 +102,12 @@ class PrivacyInputStagingServiceTest {
                 "alibj", "alihz", "alish");
         JobSpec spec = spec("A", digest);
 
-        RegistrationException error = assertThrows(RegistrationException.class,
-                () -> service.validateFixedNodeReplicas(spec));
-
-        assertEquals("PRIVACY_FIXED_NODE_REPLICA_UNAVAILABLE", error.getErrorCode());
-        assertEquals("party A has no usable frozen-version replica on fixed node alibj", error.getMessage());
+        service.validateAvailableReplicas(spec);
         verify(access, never()).issueInternalOneTime(any(), any());
     }
 
     @Test
-    void validatesAllPartiesAgainstTheirOwnFixedNodes() {
+    void validatesAllRuntimeSlotsAgainstAvailableVerifiedReplicas() {
         DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
         NodeManagementMapper nodes = mock(NodeManagementMapper.class);
         DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
@@ -135,7 +129,7 @@ class PrivacyInputStagingServiceTest {
         spec.setParticipants(java.util.Arrays.asList(
                 participant("A", digest), participant("B", digest), participant("C", digest)));
 
-        service.validateFixedNodeReplicas(spec);
+        service.validateAvailableReplicas(spec);
 
         verify(access, never()).issueInternalOneTime(any(), any());
     }

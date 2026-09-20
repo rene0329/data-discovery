@@ -1,212 +1,328 @@
 package org.example.privacy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.auth.AuthenticatedUser;
 import org.example.exception.RegistrationException;
 import org.example.privacy.PrivacyComputeModels.ApprovalRecord;
+import org.example.privacy.PrivacyComputeModels.CapabilityStatus;
 import org.example.privacy.PrivacyComputeModels.DecisionRequest;
+import org.example.privacy.PrivacyComputeModels.InputSnapshotRecord;
 import org.example.privacy.PrivacyComputeModels.JobRecord;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
 import org.example.privacy.PrivacyComputeModels.JobStatus;
-import org.example.privacy.PrivacyComputeModels.JobView;
 import org.example.privacy.PrivacyComputeModels.ParticipantSpec;
+import org.example.privacy.PrivacyComputeModels.ProviderCapability;
+import org.example.privacy.PrivacyComputeModels.ProviderType;
+import org.example.privacy.PrivacyComputeModels.TemplateDefinition;
+import org.example.privacy.PrivacyJobSpecResolver.ResolvedSpec;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.springframework.mock.env.MockEnvironment;
+import org.springframework.http.HttpStatus;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.concurrent.Executor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class PrivacyComputeServiceApprovalTest {
     private PrivacyComputeMapper mapper;
+    private PrivacyTemplateCatalog catalog;
+    private PrivacyProviderRegistry providers;
+    private PrivacyJobSpecResolver resolver;
+    private PrivacyComputeProvider provider;
+    private PrivacyInputStagingService staging;
+    private PrivacyApprovalSigner approvalSigner;
     private PrivacyComputeService service;
+    private ObjectMapper json;
+    private List<Runnable> submitted;
     private JobRecord job;
     private List<ApprovalRecord> approvals;
-    private List<Runnable> submitted;
-    private ObjectMapper objectMapper;
+    private List<ParticipantSpec> participants;
+    private List<InputSnapshotRecord> snapshots;
 
     @BeforeEach
     void setUp() throws Exception {
         mapper = mock(PrivacyComputeMapper.class);
-        PrivacyTemplateCatalog catalog = mock(PrivacyTemplateCatalog.class);
-        PrivacyProviderRegistry providers = mock(PrivacyProviderRegistry.class);
-        PrivacyJobSpecResolver resolver = mock(PrivacyJobSpecResolver.class);
-        PrivacyInputStagingService staging = mock(PrivacyInputStagingService.class);
-        objectMapper = new ObjectMapper();
+        catalog = mock(PrivacyTemplateCatalog.class);
+        providers = mock(PrivacyProviderRegistry.class);
+        resolver = mock(PrivacyJobSpecResolver.class);
+        provider = mock(PrivacyComputeProvider.class);
+        staging = mock(PrivacyInputStagingService.class);
+        approvalSigner = mock(PrivacyApprovalSigner.class);
+        json = new ObjectMapper();
         submitted = new ArrayList<>();
         Executor executor = submitted::add;
-        PrivacyPartyAuthenticator authenticator = new PrivacyPartyAuthenticator(new MockEnvironment()
-                .withProperty("privacy-computing.auth.parties.a.secret", "secret-a-123456")
-                .withProperty("privacy-computing.auth.parties.b.secret", "secret-b-123456")
-                .withProperty("privacy-computing.auth.parties.c.secret", "secret-c-123456"));
-        service = new PrivacyComputeService(mapper, catalog, providers, resolver, authenticator,
-                staging, objectMapper, executor);
+        service = new PrivacyComputeService(mapper, catalog, providers, resolver, staging,
+                approvalSigner, json, executor);
 
-        JobSpec spec = new JobSpec();
-        spec.setResultRecipients(Collections.singletonList("A"));
-        for (String party : Arrays.asList("A", "B", "C")) {
-            ParticipantSpec participant = new ParticipantSpec();
-            participant.setPartyId(party);
-            participant.setRole("PARTY");
-            spec.getParticipants().add(participant);
-        }
-        job = new JobRecord();
-        job.setJobId("pcj-1");
-        job.setRequestId("request-0001");
-        job.setCurrentAttemptId("pca-1");
-        job.setCurrentAttemptNo(1);
-        job.setTemplateId("secure-sum-3p-v1");
-        job.setProvider("MP_SPDZ");
-        job.setSecurityProfile("MALICIOUS_3PC_HONEST_MAJORITY");
-        job.setStatus(JobStatus.AWAITING_APPROVAL.name());
-        job.setInitiator("A");
-        job.setSpecJson(objectMapper.writeValueAsString(spec));
-        job.setSpecDigest(repeat('d', 64));
-        job.setProtocolVersion("mp-spdz-0.4.3/malicious-rep-ring");
-        job.setImageDigest("sha256:" + repeat('e', 64));
-        job.setTimeoutSeconds(1800);
-        job.setResultRecipientsJson("[\"A\"]");
+        participants = Arrays.asList(participant("A", 1L, "alice", 11L),
+                participant("B", 2L, "bob", 22L));
+        snapshots = Arrays.asList(snapshot("A", 101L), snapshot("B", 202L));
         approvals = new ArrayList<>();
-        for (String party : Arrays.asList("A", "B", "C")) {
-            ApprovalRecord item = new ApprovalRecord();
-            item.setJobId(job.getJobId());
-            item.setAttemptId(job.getCurrentAttemptId());
-            item.setParticipantId(party);
-            item.setDecision("PENDING");
-            approvals.add(item);
-        }
+        approvals.add(approval("A", 1L, "APPROVED"));
+        approvals.add(approval("B", 2L, "PENDING"));
+        job = job(JobStatus.AWAITING_APPROVAL, "pca-1", 1);
+
         when(mapper.findJob("pcj-1")).thenAnswer(ignored -> job);
-        when(mapper.findParticipantIds("pcj-1")).thenReturn(Arrays.asList("A", "B", "C"));
-        when(mapper.findApprovals("pcj-1", "pca-1")).thenAnswer(ignored -> approvals);
-        when(mapper.decide(anyString(), anyString(), anyString(), anyString(), any(), anyString()))
+        when(mapper.findParticipants("pcj-1")).thenReturn(participants);
+        when(mapper.findInputSnapshots("pcj-1")).thenReturn(snapshots);
+        when(mapper.findApprovals(anyString(), anyString())).thenAnswer(ignored -> approvals);
+        when(mapper.findParticipantForOwner("pcj-1", 1L)).thenReturn(participants.get(0));
+        when(mapper.findParticipantForOwner("pcj-1", 2L)).thenReturn(participants.get(1));
+        when(mapper.countEnabledUser(anyLong())).thenReturn(1);
+        when(mapper.queueIfFullyApproved(anyString(), anyString())).thenAnswer(ignored -> {
+            boolean allApproved = !approvals.isEmpty() && approvals.stream()
+                    .allMatch(item -> "APPROVED".equals(item.getDecision()));
+            if (!JobStatus.AWAITING_APPROVAL.name().equals(job.getStatus()) || !allApproved) return 0;
+            job.setStatus(JobStatus.QUEUED.name());
+            return 1;
+        });
+        when(mapper.decide(anyString(), anyString(), anyString(), anyString(), any(), anyString(), anyLong(), anyString()))
                 .thenAnswer(invocation -> {
                     String party = invocation.getArgument(2);
                     String decision = invocation.getArgument(3);
-                    String signature = invocation.getArgument(5);
                     for (ApprovalRecord item : approvals) {
                         if (party.equals(item.getParticipantId()) && "PENDING".equals(item.getDecision())) {
                             item.setDecision(decision);
-                            item.setDecisionSignature(signature);
+                            item.setDecisionSignature(invocation.getArgument(5));
                             return 1;
                         }
                     }
                     return 0;
                 });
-        when(mapper.countApprovals("pcj-1", "pca-1")).thenReturn(3);
-        when(mapper.countApproved("pcj-1", "pca-1")).thenAnswer(ignored -> (int) approvals.stream()
-                .filter(item -> "APPROVED".equals(item.getDecision())).count());
         when(mapper.transition(anyString(), anyString(), anyString(), anyString())).thenAnswer(invocation -> {
             String from = invocation.getArgument(2);
-            String to = invocation.getArgument(3);
             if (!from.equals(job.getStatus())) return 0;
-            job.setStatus(to);
+            job.setStatus(invocation.getArgument(3));
+            return 1;
+        });
+        when(mapper.finish(anyString(), anyString(), anyString(), any(), any())).thenAnswer(invocation -> {
+            job.setStatus(invocation.getArgument(2));
             return 1;
         });
         when(mapper.updateAttemptStatus(anyString(), anyString())).thenReturn(1);
         when(mapper.insertEvent(any())).thenReturn(1);
+        when(resolver.sha256(anyString())).thenAnswer(invocation -> repeat('d', 64));
+        when(approvalSigner.sign(anyString())).thenReturn(repeat('e', 64));
     }
 
     @Test
-    void queuesOnlyAfterAllThreeAuthenticatedApprovalsAndStoresHmacSignatures() {
-        service.approve("pcj-1", "A", decision("A"));
-        assertEquals(JobStatus.AWAITING_APPROVAL.name(), job.getStatus());
-        assertEquals(0, submitted.size());
-        service.approve("pcj-1", "B", decision("B"));
-        assertEquals(JobStatus.AWAITING_APPROVAL.name(), job.getStatus());
-        assertEquals(0, submitted.size());
+    void createAutoApprovesInitiatorOwnedInputAndLeavesOtherOwnerPending() {
+        JobSpec request = new JobSpec();
+        request.setTemplateId("psi-2p-v1");
+        JobSpec resolved = runtimeSpec();
+        AuthenticatedUser initiator = user(1L, "alice");
+        TemplateDefinition template = template();
+        ProviderCapability capability = capability();
+        when(catalog.find("psi-2p-v1")).thenReturn(template);
+        when(providers.require(ProviderType.KUSCIA_SECRETFLOW)).thenReturn(provider);
+        when(provider.capability()).thenReturn(capability);
+        when(resolver.resolve(request, template, initiator)).thenReturn(
+                new ResolvedSpec(resolved, snapshots, "{}", repeat('c', 64)));
+        when(resolver.sha256(anyString())).thenReturn(repeat('d', 64));
+        when(mapper.insertJob(any())).thenAnswer(invocation -> {
+            job = invocation.getArgument(0);
+            return 1;
+        });
+        when(mapper.findJob(anyString())).thenAnswer(ignored -> job);
 
-        JobView result = service.approve("pcj-1", "C", decision("C"));
+        service.create(request, "request-create", initiator);
 
-        assertEquals(JobStatus.QUEUED, result.getStatus());
+        verify(mapper).insertPendingApproval(anyString(), anyString(), eq("A"), eq(1L), eq("alice"),
+                anyString(), eq("APPROVED"), anyString());
+        verify(mapper).insertPendingApproval(anyString(), anyString(), eq("B"), eq(2L), eq("bob"),
+                anyString(), eq("PENDING"), isNull());
+        verify(mapper).queueIfFullyApproved(anyString(), anyString());
+    }
+
+    @Test
+    void wrongUserCannotApprove() {
+        when(mapper.findParticipantForOwner("pcj-1", 3L)).thenReturn(null);
+        RegistrationException error = assertThrows(RegistrationException.class,
+                () -> service.approve("pcj-1", user(3L, "mallory"), new DecisionRequest()));
+        assertEquals(HttpStatus.FORBIDDEN, error.getStatus());
+        verify(mapper, never()).decide(anyString(), anyString(), anyString(), anyString(), any(),
+                anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    void finalOwnerApprovalQueuesAndSubmitsExactlyOnce() {
+        service.approve("pcj-1", user(2L, "bob"), new DecisionRequest());
+        assertEquals(JobStatus.QUEUED.name(), job.getStatus());
         assertEquals(1, submitted.size());
-        for (ApprovalRecord approval : approvals) {
-            assertEquals("APPROVED", approval.getDecision());
-            assertEquals(64, approval.getDecisionSignature().length());
-        }
+        assertThrows(RegistrationException.class,
+                () -> service.approve("pcj-1", user(2L, "bob"), new DecisionRequest()));
+        verify(mapper, times(1)).queueIfFullyApproved("pcj-1", "pca-1");
     }
 
     @Test
-    void cannotApproveForAnotherPartyOrReadUnauthorizedResult() {
-        assertThrows(RegistrationException.class,
-                () -> service.approve("pcj-1", "A", decision("B")));
-        verify(mapper, never()).decide(anyString(), anyString(), anyString(), anyString(), any(), anyString());
+    void ownerRejectionAbortsWithoutSubmission() {
+        service.reject("pcj-1", user(2L, "bob"), reason("not authorized"));
+        assertEquals(JobStatus.ABORTED.name(), job.getStatus());
+        assertEquals(0, submitted.size());
+        verify(mapper).finish("pcj-1", "pca-1", "ABORTED", "PARTICIPANT_REJECTED",
+                "participant B rejected this attempt");
+    }
+
+    @Test
+    void resultCanOnlyBeReadByInitiator() {
+        job.setStatus(JobStatus.SUCCEEDED.name());
+        RegistrationException error = assertThrows(RegistrationException.class,
+                () -> service.result("pcj-1", user(2L, "bob")));
+        assertEquals(HttpStatus.FORBIDDEN, error.getStatus());
+        verify(providers, never()).require(any());
+    }
+
+    @Test
+    void administratorCannotApproveOrReadResultEvenWhenIdentityMatches() {
+        AuthenticatedUser administrator = userWithRoles(1L, "alice", "ADMIN", "DATA_OWNER");
+        RegistrationException approvalError = assertThrows(RegistrationException.class,
+                () -> service.approve("pcj-1", administrator, new DecisionRequest()));
+        assertEquals("APPROVAL_ROLE_FORBIDDEN", approvalError.getErrorCode());
 
         job.setStatus(JobStatus.SUCCEEDED.name());
-        assertThrows(RegistrationException.class, () -> service.result("pcj-1", "B"));
+        RegistrationException resultError = assertThrows(RegistrationException.class,
+                () -> service.result("pcj-1", administrator));
+        assertEquals("RESULT_ACCESS_DENIED", resultError.getErrorCode());
+        verify(providers, never()).require(any());
     }
 
     @Test
-    void nonParticipantCannotReadDetailOrEventsAndListUsesParticipantFilter() {
-        when(mapper.findParticipantIds("pcj-1")).thenReturn(Arrays.asList("A", "B"));
+    void retryCreatesFreshOwnerApprovalsAndAutoApprovesInitiatorInput() {
+        job.setStatus(JobStatus.ABORTED.name());
+        TemplateDefinition template = template();
+        when(catalog.find("psi-2p-v1")).thenReturn(template);
+        when(providers.require(ProviderType.KUSCIA_SECRETFLOW)).thenReturn(provider);
+        when(provider.capability()).thenReturn(capability());
+        when(mapper.beginRetry(eq("pcj-1"), anyString(), eq(2), eq(1))).thenAnswer(invocation -> {
+            job.setCurrentAttemptId(invocation.getArgument(1));
+            job.setCurrentAttemptNo(2);
+            job.setStatus(JobStatus.AWAITING_APPROVAL.name());
+            approvals = new ArrayList<>();
+            return 1;
+        });
+        service.retry("pcj-1", user(1L, "alice"));
 
-        assertThrows(RegistrationException.class, () -> service.getAuthorized("pcj-1", "C"));
-        assertThrows(RegistrationException.class, () -> service.eventsAuthorized("pcj-1", "C"));
-
-        when(mapper.listJobsForParticipant("A", null, 50)).thenReturn(Collections.singletonList(job));
-        assertEquals(1, service.listAuthorized(null, null, "A").size());
-        verify(mapper).listJobsForParticipant("A", null, 50);
+        verify(mapper).insertPendingApproval(eq("pcj-1"), anyString(), eq("A"), eq(1L), eq("alice"),
+                anyString(), eq("APPROVED"), anyString());
+        verify(mapper).insertPendingApproval(eq("pcj-1"), anyString(), eq("B"), eq(2L), eq("bob"),
+                anyString(), eq("PENDING"), isNull());
+        assertEquals(2, job.getCurrentAttemptNo());
     }
 
-    @Test
-    void providerEvidenceSanitizerDropsTokensKeysAndRawPayloads() {
-        Map<String, Object> raw = new LinkedHashMap<>();
-        raw.put("status", "SUCCEEDED");
-        raw.put("imageDigest", "sha256:" + repeat('a', 64));
-        raw.put("token", "must-not-persist");
-        raw.put("privateKey", "must-not-persist");
-        raw.put("rawInput", Arrays.asList(1, 2, 3));
-        Map<String, Object> message = new LinkedHashMap<>();
-        message.put("messageDigest", repeat('b', 64));
-        message.put("payloadBytes", 128);
-        message.put("secret", "must-not-persist");
-        raw.put("messages", Collections.singletonList(message));
-        Map<String, Object> party = new LinkedHashMap<>();
-        party.put("protocol", "RR22");
-        party.put("rawInput", Arrays.asList("secret-row"));
-        Map<String, Object> parties = new LinkedHashMap<>();
-        parties.put("A", party);
-        Map<String, Object> engineEvidence = new LinkedHashMap<>();
-        engineEvidence.put("parties", parties);
-        raw.put("engineEvidence", engineEvidence);
-
-        Map<String, Object> sanitized = service.sanitizeProviderEvidence(raw);
-
-        assertEquals("SUCCEEDED", sanitized.get("status"));
-        org.junit.jupiter.api.Assertions.assertFalse(sanitized.containsKey("token"));
-        org.junit.jupiter.api.Assertions.assertFalse(sanitized.containsKey("privateKey"));
-        org.junit.jupiter.api.Assertions.assertFalse(sanitized.containsKey("rawInput"));
-        @SuppressWarnings("unchecked") Map<String, Object> sanitizedMessage =
-                (Map<String, Object>) ((List<?>) sanitized.get("messages")).get(0);
-        org.junit.jupiter.api.Assertions.assertFalse(sanitizedMessage.containsKey("secret"));
-        assertEquals(128, sanitizedMessage.get("payloadBytes"));
-        @SuppressWarnings("unchecked") Map<String, Object> safeEngine =
-                (Map<String, Object>) sanitized.get("engineEvidence");
-        @SuppressWarnings("unchecked") Map<String, Object> safeParties =
-                (Map<String, Object>) safeEngine.get("parties");
-        @SuppressWarnings("unchecked") Map<String, Object> safeParty =
-                (Map<String, Object>) safeParties.get("A");
-        assertEquals("RR22", safeParty.get("protocol"));
-        org.junit.jupiter.api.Assertions.assertFalse(safeParty.containsKey("rawInput"));
+    private JobRecord job(JobStatus status, String attemptId, int attemptNo) throws Exception {
+        JobRecord value = new JobRecord();
+        value.setJobId("pcj-1");
+        value.setRequestId("request-1");
+        value.setCurrentAttemptId(attemptId);
+        value.setCurrentAttemptNo(attemptNo);
+        value.setTemplateId("psi-2p-v1");
+        value.setProvider(ProviderType.KUSCIA_SECRETFLOW.name());
+        value.setSecurityProfile("SEMI_HONEST");
+        value.setStatus(status.name());
+        value.setInitiator("alice");
+        value.setInitiatorUserId(1L);
+        value.setSpecJson(json.writeValueAsString(runtimeSpec()));
+        value.setSpecDigest(repeat('c', 64));
+        value.setProtocolVersion("psi/rr22");
+        value.setImageDigest("sha256:" + repeat('e', 64));
+        value.setTimeoutSeconds(1800);
+        value.setResultRecipientsJson("[\"A\"]");
+        return value;
     }
 
-    private DecisionRequest decision(String party) {
-        DecisionRequest request = new DecisionRequest();
-        request.setParticipantId(party);
-        return request;
+    private JobSpec runtimeSpec() {
+        JobSpec value = new JobSpec();
+        value.setTemplateId("psi-2p-v1");
+        value.setSecurityProfile("SEMI_HONEST");
+        value.setTimeoutSeconds(1800);
+        value.setResultRecipients(Collections.singletonList("A"));
+        value.setParticipants(participants);
+        return value;
+    }
+
+    private ParticipantSpec participant(String party, Long ownerId, String owner, Long domainId) {
+        ParticipantSpec value = new ParticipantSpec();
+        value.setPartyId(party);
+        value.setSlotId("A".equals(party) ? "P0" : "P1");
+        value.setRole("A".equals(party) ? "RECEIVER" : "PROVIDER");
+        value.setOwnerUserId(ownerId);
+        value.setOwnerUsername(owner);
+        value.setOwnerDomainId(domainId);
+        value.setDatasetId("A".equals(party) ? "101" : "202");
+        return value;
+    }
+
+    private InputSnapshotRecord snapshot(String party, Long datasetId) {
+        InputSnapshotRecord value = new InputSnapshotRecord();
+        value.setPartyId(party);
+        value.setDatasetId(datasetId);
+        value.setDatasetVersion("v1");
+        value.setDigestValue(repeat('a', 64));
+        value.setSchemaDigest(repeat('b', 64));
+        value.setFieldsJson("[\"id\"]");
+        return value;
+    }
+
+    private ApprovalRecord approval(String party, Long userId, String decision) {
+        ApprovalRecord value = new ApprovalRecord();
+        value.setJobId("pcj-1");
+        value.setAttemptId("pca-1");
+        value.setParticipantId(party);
+        value.setApproverUserId(userId);
+        value.setInputSnapshotDigest(repeat('f', 64));
+        value.setDecision(decision);
+        return value;
+    }
+
+    private TemplateDefinition template() {
+        TemplateDefinition value = new TemplateDefinition();
+        value.setTemplateId("psi-2p-v1");
+        value.setProvider(ProviderType.KUSCIA_SECRETFLOW);
+        value.setSecurityProfile("SEMI_HONEST");
+        value.setAvailable(true);
+        value.setProtocolVersion("psi/rr22");
+        return value;
+    }
+
+    private ProviderCapability capability() {
+        ProviderCapability value = new ProviderCapability();
+        value.setProvider(ProviderType.KUSCIA_SECRETFLOW);
+        value.setStatus(CapabilityStatus.AVAILABLE);
+        value.setImageDigest("sha256:" + repeat('e', 64));
+        return value;
+    }
+
+    private AuthenticatedUser user(Long id, String username) {
+        return userWithRoles(id, username, "DATA_OWNER");
+    }
+
+    private AuthenticatedUser userWithRoles(Long id, String username, String... roles) {
+        return new AuthenticatedUser(id, username, username,
+                new LinkedHashSet<>(Arrays.asList(roles)), id, "D" + id, "D" + id);
+    }
+
+    private DecisionRequest reason(String reason) {
+        DecisionRequest value = new DecisionRequest();
+        value.setReason(reason);
+        return value;
     }
 
     private static String repeat(char value, int count) {

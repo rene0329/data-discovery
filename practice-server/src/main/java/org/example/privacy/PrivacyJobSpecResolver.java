@@ -5,11 +5,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import org.example.auth.AuthenticatedUser;
 import org.example.entity.DatasetMetadata;
 import org.example.entity.RegisteredDataset;
 import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.privacy.PrivacyComputeModels.InputSnapshotRecord;
+import org.example.privacy.PrivacyComputeModels.InputSpec;
+import org.example.privacy.PrivacyComputeModels.DatasetOwnershipRecord;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
 import org.example.privacy.PrivacyComputeModels.ParticipantSpec;
 import org.example.privacy.PrivacyComputeModels.TemplateDefinition;
@@ -32,11 +35,121 @@ import java.util.Set;
 @Component
 public class PrivacyJobSpecResolver {
     private final DatasetRegistrationMapper datasets;
+    private final PrivacyComputeMapper privacyMapper;
     private final ObjectMapper objectMapper;
 
-    public PrivacyJobSpecResolver(DatasetRegistrationMapper datasets, ObjectMapper objectMapper) {
+    public PrivacyJobSpecResolver(DatasetRegistrationMapper datasets, PrivacyComputeMapper privacyMapper,
+                                  ObjectMapper objectMapper) {
         this.datasets = datasets;
+        this.privacyMapper = privacyMapper;
         this.objectMapper = objectMapper;
+    }
+
+    /** Compatibility constructor used only by legacy unit tests and stored-spec utilities. */
+    PrivacyJobSpecResolver(DatasetRegistrationMapper datasets, ObjectMapper objectMapper) {
+        this(datasets, null, objectMapper);
+    }
+
+    public ResolvedSpec resolve(JobSpec request, TemplateDefinition template, AuthenticatedUser initiator) {
+        if (request == null) throw RegistrationException.invalid("PRIVACY_SPEC_REQUIRED", "request body is required");
+        if (template == null) throw RegistrationException.invalid("PRIVACY_TEMPLATE_UNKNOWN", "unknown privacy template");
+        if (initiator == null || initiator.getUserId() == null) {
+            throw RegistrationException.invalid("PRIVACY_PRINCIPAL_REQUIRED", "authenticated user is required");
+        }
+        if (request.getSecurityProfile() != null
+                && !template.getSecurityProfile().equals(request.getSecurityProfile())) {
+            throw RegistrationException.invalid("SECURITY_PROFILE_MISMATCH",
+                    "securityProfile must match the selected template; downgrade is forbidden");
+        }
+        if (request.getParticipants() != null && !request.getParticipants().isEmpty()) {
+            throw RegistrationException.invalid("PARTICIPANTS_SERVER_MANAGED",
+                    "participants and runtime parties are resolved from dataset ownership");
+        }
+        List<InputSpec> supplied = request.getInputs();
+        if (supplied == null || supplied.size() != template.getParticipantCount()) {
+            throw RegistrationException.invalid("INPUT_COUNT_MISMATCH",
+                    "template requires exactly " + template.getParticipantCount() + " dataset inputs");
+        }
+        Map<String, InputSpec> bySlot = new LinkedHashMap<>();
+        for (InputSpec input : supplied) {
+            if (input == null || blank(input.getSlotId()) || input.getDatasetId() == null) {
+                throw RegistrationException.invalid("INPUT_INVALID", "slotId and datasetId are required");
+            }
+            String slot = input.getSlotId().trim().toUpperCase();
+            if (bySlot.put(slot, input) != null) {
+                throw RegistrationException.invalid("INPUT_SLOT_DUPLICATE", "duplicate slotId: " + slot);
+            }
+        }
+        LinkedHashMap<String, String> runtimeRoles = new LinkedHashMap<>(template.getRequiredRoles());
+        List<String> runtimeParties = new ArrayList<>(runtimeRoles.keySet());
+        Set<String> expectedSlots = new LinkedHashSet<>();
+        for (int i = 0; i < runtimeParties.size(); i++) expectedSlots.add("P" + i);
+        if (!bySlot.keySet().equals(expectedSlots)) {
+            throw RegistrationException.invalid("INPUT_SLOTS_MISMATCH", "inputs must be exactly " + expectedSlots);
+        }
+
+        JobSpec normalized = new JobSpec();
+        normalized.setTemplateId(template.getTemplateId());
+        normalized.setSecurityProfile(template.getSecurityProfile());
+        normalized.setTimeoutSeconds(resolveTimeout(request.getTimeoutSeconds(), template));
+        // Providers operate on A/B/C runtime slots. The control plane alone releases the result to the initiator.
+        normalized.setResultRecipients(Collections.singletonList(runtimeParties.get(0)));
+        List<InputSnapshotRecord> snapshots = new ArrayList<>();
+        Set<Long> domains = new HashSet<>();
+        Set<Long> datasetsSeen = new HashSet<>();
+        for (int i = 0; i < runtimeParties.size(); i++) {
+            String slot = "P" + i;
+            String party = runtimeParties.get(i);
+            InputSpec input = bySlot.get(slot);
+            if (!datasetsSeen.add(input.getDatasetId())) {
+                throw RegistrationException.invalid("DATASET_DUPLICATE", "a dataset can be selected only once");
+            }
+            DatasetOwnershipRecord ownership = privacyMapper == null ? null
+                    : privacyMapper.findDatasetOwnership(input.getDatasetId());
+            validateOwnership(ownership, input.getDatasetId());
+            if (!domains.add(ownership.getOwnerDomainId())) {
+                throw RegistrationException.invalid("PARTICIPANT_DOMAIN_DUPLICATE",
+                        "each input must belong to a different collaboration domain");
+            }
+            ParticipantSpec source = new ParticipantSpec();
+            source.setDatasetId(String.valueOf(input.getDatasetId()));
+            source.setDatasetVersion(input.getDatasetVersion());
+            source.setFields(input.getFields());
+            ResolvedParticipant resolved = resolveParticipant(party, runtimeRoles.get(party), source);
+            resolved.participant.setSlotId(slot);
+            resolved.participant.setOwnerUserId(ownership.getOwnerUserId());
+            resolved.participant.setOwnerUsername(ownership.getOwnerUsername());
+            resolved.participant.setOwnerDomainId(ownership.getOwnerDomainId());
+            resolved.participant.setOwnerDomainCode(ownership.getOwnerDomainCode());
+            resolved.snapshot.setSlotId(slot);
+            resolved.snapshot.setOwnerUserId(ownership.getOwnerUserId());
+            resolved.snapshot.setOwnerDomainId(ownership.getOwnerDomainId());
+            normalized.getParticipants().add(resolved.participant);
+            snapshots.add(resolved.snapshot);
+            InputSpec frozenInput = new InputSpec();
+            frozenInput.setSlotId(slot);
+            frozenInput.setDatasetId(input.getDatasetId());
+            frozenInput.setDatasetVersion(resolved.participant.getDatasetVersion());
+            frozenInput.setFields(resolved.participant.getFields());
+            normalized.getInputs().add(frozenInput);
+        }
+        normalized.setEnginePolicy(resolveEnginePolicy(request.getEnginePolicy(), template,
+                normalized.getParticipants(), normalized.getResultRecipients()));
+        String specJson = canonicalJson(normalized);
+        return new ResolvedSpec(normalized, snapshots, specJson, sha256(specJson));
+    }
+
+    private void validateOwnership(DatasetOwnershipRecord ownership, Long datasetId) {
+        if (ownership == null || ownership.getOwnerUserId() == null || ownership.getOwnerDomainId() == null) {
+            throw RegistrationException.conflict("DATASET_OWNER_REQUIRED",
+                    "dataset " + datasetId + " has no assigned owner and collaboration domain");
+        }
+        if (!Boolean.TRUE.equals(ownership.getOwnerEnabled())) {
+            throw RegistrationException.conflict("DATASET_OWNER_DISABLED", "dataset owner is disabled");
+        }
+        if (!Boolean.TRUE.equals(ownership.getDomainEnabled())) {
+            throw RegistrationException.conflict("DATASET_DOMAIN_DISABLED", "dataset owner domain is disabled");
+        }
     }
 
     public ResolvedSpec resolve(JobSpec request, TemplateDefinition template, String initiator) {

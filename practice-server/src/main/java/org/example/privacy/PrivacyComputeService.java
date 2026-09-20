@@ -2,6 +2,7 @@ package org.example.privacy;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.auth.AuthenticatedUser;
 import org.example.exception.RegistrationException;
 import org.example.privacy.PrivacyComputeModels.ActionRequest;
 import org.example.privacy.PrivacyComputeModels.ApprovalRecord;
@@ -57,8 +58,8 @@ public class PrivacyComputeService {
     private final PrivacyTemplateCatalog catalog;
     private final PrivacyProviderRegistry providers;
     private final PrivacyJobSpecResolver resolver;
-    private final PrivacyPartyAuthenticator authenticator;
     private final PrivacyInputStagingService staging;
+    private final PrivacyApprovalSigner approvalSigner;
     private final ObjectMapper objectMapper;
     private final Executor executor;
     private final Map<ProviderType, Semaphore> providerLocks = new EnumMap<>(ProviderType.class);
@@ -67,16 +68,16 @@ public class PrivacyComputeService {
                                  PrivacyTemplateCatalog catalog,
                                  PrivacyProviderRegistry providers,
                                  PrivacyJobSpecResolver resolver,
-                                 PrivacyPartyAuthenticator authenticator,
                                  PrivacyInputStagingService staging,
+                                 PrivacyApprovalSigner approvalSigner,
                                  ObjectMapper objectMapper,
                                  @Qualifier("privacyComputeExecutor") Executor executor) {
         this.mapper = mapper;
         this.catalog = catalog;
         this.providers = providers;
         this.resolver = resolver;
-        this.authenticator = authenticator;
         this.staging = staging;
+        this.approvalSigner = approvalSigner;
         this.objectMapper = objectMapper;
         this.executor = executor;
         for (ProviderType type : ProviderType.values()) providerLocks.put(type, new Semaphore(1, true));
@@ -90,7 +91,8 @@ public class PrivacyComputeService {
         return catalog.list();
     }
 
-    public PreflightResult preflight(JobSpec request, String principal) {
+    public PreflightResult preflight(JobSpec request, AuthenticatedUser principal) {
+        requireComputeInitiator(principal);
         PreflightResult result = new PreflightResult();
         TemplateDefinition template = catalog.find(request == null ? null : request.getTemplateId());
         result.setTemplate(template);
@@ -105,7 +107,7 @@ public class PrivacyComputeService {
         try {
             ResolvedSpec resolved = resolver.resolve(request, template, principal);
             providers.require(template.getProvider()).validate(resolved.getSpec(), template);
-            staging.validateFixedNodeReplicas(resolved.getSpec());
+            staging.validateAvailableReplicas(resolved.getSpec());
             result.setSpecDigest(resolved.getSpecDigest());
             result.setValid(true);
             result.getWarnings().add(template.getLeakageDisclosure());
@@ -119,7 +121,8 @@ public class PrivacyComputeService {
     }
 
     @Transactional
-    public JobView create(JobSpec request, String requestId, String principal) {
+    public JobView create(JobSpec request, String requestId, AuthenticatedUser principal) {
+        requireComputeInitiator(principal);
         if (blank(requestId)) throw RegistrationException.invalid("IDEMPOTENCY_KEY_REQUIRED",
                 "Idempotency-Key is required");
         TemplateDefinition template = catalog.find(request == null ? null : request.getTemplateId());
@@ -131,7 +134,7 @@ public class PrivacyComputeService {
         ResolvedSpec resolved = resolver.resolve(request, template, principal);
         PrivacyComputeProvider provider = providers.require(template.getProvider());
         provider.validate(resolved.getSpec(), template);
-        staging.validateFixedNodeReplicas(resolved.getSpec());
+        staging.validateAvailableReplicas(resolved.getSpec());
         ProviderCapability capability = provider.capability();
         if (capability.getStatus() != CapabilityStatus.AVAILABLE || blank(capability.getImageDigest())) {
             throw RegistrationException.conflict("PRIVACY_PROVIDER_UNAVAILABLE",
@@ -149,7 +152,8 @@ public class PrivacyComputeService {
         job.setProvider(template.getProvider().name());
         job.setSecurityProfile(template.getSecurityProfile());
         job.setStatus(JobStatus.AWAITING_APPROVAL.name());
-        job.setInitiator(principal.trim().toUpperCase());
+        job.setInitiator(principal.getUsername());
+        job.setInitiatorUserId(principal.getUserId());
         job.setResultRecipientsJson(json(resolved.getSpec().getResultRecipients()));
         job.setTimeoutSeconds(resolved.getSpec().getTimeoutSeconds());
         job.setEnginePolicyJson(json(resolved.getSpec().getEnginePolicy()));
@@ -161,7 +165,18 @@ public class PrivacyComputeService {
         mapper.insertAttempt(attemptId, jobId, 1, UUID.randomUUID().toString());
         for (PrivacyComputeModels.ParticipantSpec participant : resolved.getSpec().getParticipants()) {
             mapper.insertParticipant(jobId, participant);
-            mapper.insertPendingApproval(jobId, attemptId, participant.getPartyId());
+            String snapshotDigest = snapshotDigest(resolved.getSnapshots(), participant.getPartyId());
+            boolean ownInput = principal.getUserId().equals(participant.getOwnerUserId());
+            String autoSignature = ownInput ? approvalSigner.sign(jobId + "\n" + attemptId + "\n"
+                    + participant.getPartyId() + "\n" + principal.getUserId() + "\nAPPROVED\n\n"
+                    + job.getSpecDigest() + "\n" + snapshotDigest) : null;
+            mapper.insertPendingApproval(jobId, attemptId, participant.getPartyId(),
+                    participant.getOwnerUserId(), participant.getOwnerUsername(), snapshotDigest,
+                    ownInput ? "APPROVED" : "PENDING", autoSignature);
+            if (ownInput) {
+                event(jobId, attemptId, participant.getPartyId(), "APPROVAL", "APPROVED",
+                        "INITIATOR_INPUT_AUTO_APPROVED", null, snapshotDigest, null);
+            }
         }
         for (InputSnapshotRecord snapshot : resolved.getSnapshots()) {
             snapshot.setJobId(jobId);
@@ -170,6 +185,7 @@ public class PrivacyComputeService {
         event(jobId, attemptId, null, "CREATED", "PENDING", "JOB_AWAITING_APPROVAL",
                 (long) resolved.getSpecJson().getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
                 resolved.getSpecDigest(), "all participants must approve this attempt");
+        queueWhenFullyApproved(job);
         return requireJob(jobId);
     }
 
@@ -177,7 +193,7 @@ public class PrivacyComputeService {
         return requireJob(jobId);
     }
 
-    public JobView getAuthorized(String jobId, String principal) {
+    public JobView getAuthorized(String jobId, AuthenticatedUser principal) {
         JobRecord job = requireRecord(jobId);
         requireParticipantOrInitiator(job, principal);
         return toView(job);
@@ -201,12 +217,24 @@ public class PrivacyComputeService {
         return result;
     }
 
-    public List<JobView> listAuthorized(String status, Integer requestedLimit, String principal) {
-        String actor = normalizePrincipal(principal);
+    public List<JobView> listAuthorized(String status, Integer requestedLimit, AuthenticatedUser principal) {
+        requireUser(principal);
         String normalized = normalizeStatus(status);
         int limit = normalizeLimit(requestedLimit);
         List<JobView> result = new ArrayList<>();
-        for (JobRecord row : mapper.listJobsForParticipant(actor, normalized, limit)) result.add(toView(row));
+        List<JobRecord> rows = canAuditAll(principal)
+                ? mapper.listJobs(normalized, limit)
+                : mapper.listJobsForParticipant(principal.getUserId(), normalized, limit);
+        for (JobRecord row : rows) result.add(toView(row));
+        return result;
+    }
+
+    public List<JobView> pendingApprovals(Integer requestedLimit, AuthenticatedUser principal) {
+        requireDataOwner(principal);
+        List<JobView> result = new ArrayList<>();
+        for (JobRecord row : mapper.listPendingApprovals(principal.getUserId(), normalizeLimit(requestedLimit))) {
+            result.add(toView(row));
+        }
         return result;
     }
 
@@ -215,32 +243,47 @@ public class PrivacyComputeService {
         return mapper.findEvents(jobId);
     }
 
-    public List<EventRecord> eventsAuthorized(String jobId, String principal) {
+    public List<EventRecord> eventsAuthorized(String jobId, AuthenticatedUser principal) {
         JobRecord job = requireRecord(jobId);
         requireParticipantOrInitiator(job, principal);
         return mapper.findEvents(jobId);
     }
 
     @Transactional
-    public JobView approve(String jobId, String principal, DecisionRequest request) {
+    public JobView approve(String jobId, AuthenticatedUser principal, DecisionRequest request) {
         return decide(jobId, principal, request, true);
     }
 
     @Transactional
-    public JobView reject(String jobId, String principal, DecisionRequest request) {
+    public JobView reject(String jobId, AuthenticatedUser principal, DecisionRequest request) {
         return decide(jobId, principal, request, false);
     }
 
-    private JobView decide(String jobId, String principal, DecisionRequest request, boolean approve) {
+    private JobView decide(String jobId, AuthenticatedUser principal, DecisionRequest request, boolean approve) {
         JobRecord job = requireRecord(jobId);
         requireAwaitingApproval(job);
-        String participant = requireParticipantPrincipal(job, principal, request == null ? null : request.getParticipantId());
+        requireApprovalOwner(principal);
+        PrivacyComputeModels.ParticipantSpec owned = mapper.findParticipantForOwner(jobId, principal.getUserId());
+        if (owned == null) {
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_OWNER_MISMATCH",
+                    "only the frozen dataset owner can decide this approval");
+        }
+        if (mapper.countEnabledUser(principal.getUserId()) != 1) {
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_OWNER_DISABLED",
+                    "disabled dataset owner cannot approve or reject");
+        }
+        String participant = owned.getPartyId();
         String reason = sanitizeReason(request == null ? null : request.getReason());
         String decision = approve ? "APPROVED" : "REJECTED";
+        ApprovalRecord pending = approvalFor(mapper.findApprovals(jobId, job.getCurrentAttemptId()), participant);
+        if (pending == null) throw RegistrationException.conflict("APPROVAL_NOT_FOUND", "approval was not found");
         String canonicalDecision = jobId + "\n" + job.getCurrentAttemptId() + "\n" + participant
-                + "\n" + decision + "\n" + (reason == null ? "" : reason) + "\n" + job.getSpecDigest();
-        String signature = authenticator.signApproval(participant, canonicalDecision);
-        int changed = mapper.decide(jobId, job.getCurrentAttemptId(), participant, decision, reason, signature);
+                + "\n" + principal.getUserId() + "\n" + decision + "\n"
+                + (reason == null ? "" : reason) + "\n" + job.getSpecDigest() + "\n"
+                + emptyDefault(pending.getInputSnapshotDigest(), "");
+        String signature = approvalSigner.sign(canonicalDecision);
+        int changed = mapper.decide(jobId, job.getCurrentAttemptId(), participant, decision, reason, signature,
+                principal.getUserId(), principal.getUsername());
         if (changed == 0) {
             for (ApprovalRecord existing : mapper.findApprovals(jobId, job.getCurrentAttemptId())) {
                 if (participant.equals(existing.getParticipantId()) && decision.equals(existing.getDecision())) {
@@ -259,23 +302,14 @@ public class PrivacyComputeService {
             return requireJob(jobId);
         }
 
-        int total = mapper.countApprovals(jobId, job.getCurrentAttemptId());
-        int approved = mapper.countApproved(jobId, job.getCurrentAttemptId());
-        if (total > 0 && approved == total
-                && mapper.transition(jobId, job.getCurrentAttemptId(), JobStatus.AWAITING_APPROVAL.name(),
-                JobStatus.QUEUED.name()) == 1) {
-            mapper.updateAttemptStatus(job.getCurrentAttemptId(), JobStatus.QUEUED.name());
-            event(jobId, job.getCurrentAttemptId(), null, "QUEUE", "QUEUED", "ALL_PARTICIPANTS_APPROVED",
-                    null, null, null);
-            afterCommit(() -> submit(jobId, job.getCurrentAttemptId()));
-        }
+        queueWhenFullyApproved(job);
         return requireJob(jobId);
     }
 
     @Transactional
-    public JobView cancel(String jobId, String principal, ActionRequest request) {
+    public JobView cancel(String jobId, AuthenticatedUser principal, ActionRequest request) {
         JobRecord job = requireRecord(jobId);
-        requireParticipantOrInitiator(job, principal);
+        requireInitiator(job, principal, "CANCEL_FORBIDDEN", "only the initiator can cancel a privacy job");
         JobStatus current = JobStatus.valueOf(job.getStatus());
         if (current.terminal()) throw RegistrationException.conflict("PRIVACY_JOB_TERMINAL",
                 "terminal job cannot be cancelled");
@@ -286,7 +320,7 @@ public class PrivacyComputeService {
         }
         mapper.finishAttempt(job.getCurrentAttemptId(), JobStatus.CANCELLED.name(),
                 "CANCELLED_BY_PARTICIPANT", reason);
-        event(jobId, job.getCurrentAttemptId(), principal.trim().toUpperCase(), "CANCEL", "CANCELLED",
+        event(jobId, job.getCurrentAttemptId(), principal.getUsername(), "CANCEL", "CANCELLED",
                 "JOB_CANCELLED", null, null, reason);
         if (!blank(job.getExternalJobId())) {
             afterCommit(() -> safeCancel(job, reason));
@@ -295,12 +329,9 @@ public class PrivacyComputeService {
     }
 
     @Transactional
-    public JobView retry(String jobId, String principal) {
+    public JobView retry(String jobId, AuthenticatedUser principal) {
         JobRecord job = requireRecord(jobId);
-        if (!job.getInitiator().equals(normalizePrincipal(principal))) {
-            throw new RegistrationException(HttpStatus.FORBIDDEN, "RETRY_FORBIDDEN",
-                    "only the initiator can retry a privacy job");
-        }
+        requireInitiator(job, principal, "RETRY_FORBIDDEN", "only the initiator can retry a privacy job");
         JobStatus status = JobStatus.valueOf(job.getStatus());
         if (!(status == JobStatus.FAILED || status == JobStatus.ABORTED || status == JobStatus.CANCELLED)) {
             throw RegistrationException.conflict("PRIVACY_RETRY_STATE_INVALID",
@@ -328,19 +359,27 @@ public class PrivacyComputeService {
         if (mapper.beginRetry(jobId, attemptId, next, current) != 1) {
             throw RegistrationException.conflict("PRIVACY_JOB_STATE_CHANGED", "job state changed; refresh and retry");
         }
-        for (String participant : mapper.findParticipantIds(jobId)) {
-            mapper.insertPendingApproval(jobId, attemptId, participant);
+        for (PrivacyComputeModels.ParticipantSpec participant : mapper.findParticipants(jobId)) {
+            String snapshotDigest = snapshotDigest(mapper.findInputSnapshots(jobId), participant.getPartyId());
+            boolean ownInput = principal.getUserId().equals(participant.getOwnerUserId());
+            String autoSignature = ownInput ? approvalSigner.sign(jobId + "\n" + attemptId + "\n"
+                    + participant.getPartyId() + "\n" + principal.getUserId() + "\nAPPROVED\n\n"
+                    + job.getSpecDigest() + "\n" + snapshotDigest) : null;
+            mapper.insertPendingApproval(jobId, attemptId, participant.getPartyId(),
+                    participant.getOwnerUserId(), participant.getOwnerUsername(), snapshotDigest,
+                    ownInput ? "APPROVED" : "PENDING", autoSignature);
         }
         event(jobId, attemptId, null, "RETRY", "PENDING", "FRESH_ATTEMPT_CREATED",
                 null, resolver.sha256(attemptId), "new approvals and protocol randomness are required");
+        JobRecord retried = requireRecord(jobId);
+        queueWhenFullyApproved(retried);
         return requireJob(jobId);
     }
 
-    public ResultView result(String jobId, String principal) {
+    public ResultView result(String jobId, AuthenticatedUser principal) {
         JobRecord job = requireRecord(jobId);
-        String actor = normalizePrincipal(principal);
-        List<String> recipients = readList(job.getResultRecipientsJson());
-        if (!recipients.contains(actor)) {
+        requireUser(principal);
+        if (canAuditAll(principal) || !principal.getUserId().equals(job.getInitiatorUserId())) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, "RESULT_ACCESS_DENIED",
                     "principal is not an authorized result recipient");
         }
@@ -373,7 +412,7 @@ public class PrivacyComputeService {
         return result;
     }
 
-    public Map<String, Object> evidence(String jobId, String principal) {
+    public Map<String, Object> evidence(String jobId, AuthenticatedUser principal) {
         JobRecord job = requireRecord(jobId);
         requireParticipantOrInitiator(job, principal);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -763,18 +802,22 @@ public class PrivacyComputeService {
         value.setSecurityProfile(row.getSecurityProfile());
         value.setStatus(JobStatus.valueOf(row.getStatus()));
         value.setInitiator(row.getInitiator());
+        value.setInitiatorUserId(row.getInitiatorUserId());
         value.setParticipants(spec.getParticipants());
         List<ApprovalView> approvalViews = new ArrayList<>();
         for (ApprovalRecord approval : mapper.findApprovals(row.getJobId(), row.getCurrentAttemptId())) {
             ApprovalView item = new ApprovalView();
             item.setParticipantId(approval.getParticipantId());
+            item.setApproverUserId(approval.getApproverUserId());
+            item.setApproverUsername(approval.getApproverUsername());
+            item.setInputSnapshotDigest(approval.getInputSnapshotDigest());
             item.setDecision(approval.getDecision());
             item.setReason(approval.getReason());
             item.setDecidedAt(approval.getDecidedAt());
             approvalViews.add(item);
         }
         value.setApprovals(approvalViews);
-        value.setResultRecipients(spec.getResultRecipients());
+        value.setResultRecipients(Collections.singletonList(row.getInitiator()));
         value.setTimeoutSeconds(row.getTimeoutSeconds());
         value.setEnginePolicy(spec.getEnginePolicy());
         value.setSpecDigest(row.getSpecDigest());
@@ -789,25 +832,14 @@ public class PrivacyComputeService {
         return value;
     }
 
-    private String requireParticipantPrincipal(JobRecord job, String principal, String requestedParticipant) {
-        String actor = normalizePrincipal(principal);
-        String participant = normalizePrincipal(requestedParticipant);
-        if (!actor.equals(participant)) {
-            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_PRINCIPAL_MISMATCH",
-                    "principal can decide only for itself");
-        }
-        if (!mapper.findParticipantIds(job.getJobId()).contains(participant)) {
-            throw new RegistrationException(HttpStatus.FORBIDDEN, "PRINCIPAL_NOT_PARTICIPANT",
-                    "principal is not a task participant");
-        }
-        return participant;
-    }
-
-    private void requireParticipantOrInitiator(JobRecord job, String principal) {
-        String actor = normalizePrincipal(principal);
-        if (!job.getInitiator().equals(actor) && !mapper.findParticipantIds(job.getJobId()).contains(actor)) {
+    private void requireParticipantOrInitiator(JobRecord job, AuthenticatedUser principal) {
+        requireUser(principal);
+        if (canAuditAll(principal)) return;
+        boolean initiator = principal.getUserId().equals(job.getInitiatorUserId());
+        boolean owner = mapper.findParticipantForOwner(job.getJobId(), principal.getUserId()) != null;
+        if (!initiator && !owner) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, "PRIVACY_JOB_ACCESS_DENIED",
-                    "principal is not a task participant");
+                    "user is neither the initiator nor a frozen dataset owner");
         }
     }
 
@@ -818,14 +850,74 @@ public class PrivacyComputeService {
         }
     }
 
-    private String normalizePrincipal(String value) {
-        if (blank(value)) throw RegistrationException.invalid("PRIVACY_PRINCIPAL_REQUIRED",
-                "authenticated privacy party is required");
-        String result = value.trim().toUpperCase();
-        if (!result.matches("[A-Z0-9_-]{1,32}")) {
-            throw RegistrationException.invalid("PRIVACY_PRINCIPAL_INVALID", "invalid privacy principal");
+    private void requireUser(AuthenticatedUser user) {
+        if (user == null || user.getUserId() == null) {
+            throw new RegistrationException(HttpStatus.UNAUTHORIZED, "AUTHENTICATION_REQUIRED",
+                    "authenticated user is required");
         }
-        return result;
+    }
+
+    private void requireDataOwner(AuthenticatedUser user) {
+        requireUser(user);
+        if (!user.hasRole("DATA_OWNER")) {
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "DATA_OWNER_REQUIRED",
+                    "only a data owner can approve privacy inputs");
+        }
+    }
+
+    private void requireComputeInitiator(AuthenticatedUser user) {
+        requireDataOwner(user);
+        if (canAuditAll(user)) {
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "PRIVACY_INITIATOR_ROLE_FORBIDDEN",
+                    "administrator and auditor accounts cannot initiate privacy computations");
+        }
+    }
+
+    private void requireApprovalOwner(AuthenticatedUser user) {
+        requireDataOwner(user);
+        if (canAuditAll(user)) {
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_ROLE_FORBIDDEN",
+                    "administrator and auditor accounts cannot approve privacy inputs");
+        }
+    }
+
+    private void requireInitiator(JobRecord job, AuthenticatedUser principal,
+                                  String errorCode, String message) {
+        requireUser(principal);
+        if (canAuditAll(principal) || !principal.getUserId().equals(job.getInitiatorUserId())) {
+            throw new RegistrationException(HttpStatus.FORBIDDEN, errorCode, message);
+        }
+    }
+
+    private boolean canAuditAll(AuthenticatedUser user) {
+        return user != null && (user.hasRole("ADMIN") || user.hasRole("AUDITOR"));
+    }
+
+    private void queueWhenFullyApproved(JobRecord job) {
+        if (mapper.queueIfFullyApproved(job.getJobId(), job.getCurrentAttemptId()) == 1) {
+            mapper.updateAttemptStatus(job.getCurrentAttemptId(), JobStatus.QUEUED.name());
+            event(job.getJobId(), job.getCurrentAttemptId(), null, "QUEUE", "QUEUED",
+                    "ALL_DATA_OWNERS_APPROVED", null, null, null);
+            afterCommit(() -> submit(job.getJobId(), job.getCurrentAttemptId()));
+        }
+    }
+
+    private ApprovalRecord approvalFor(List<ApprovalRecord> approvals, String participantId) {
+        if (approvals == null) return null;
+        for (ApprovalRecord item : approvals) {
+            if (participantId.equals(item.getParticipantId())) return item;
+        }
+        return null;
+    }
+
+    private String snapshotDigest(List<InputSnapshotRecord> snapshots, String participantId) {
+        if (snapshots != null) for (InputSnapshotRecord item : snapshots) {
+            if (participantId.equals(item.getPartyId())) {
+                return resolver.sha256(item.getDatasetId() + "\n" + item.getDatasetVersion() + "\n"
+                        + item.getDigestValue() + "\n" + item.getSchemaDigest() + "\n" + item.getFieldsJson());
+            }
+        }
+        throw new IllegalStateException("privacy input snapshot is missing for " + participantId);
     }
 
     private String normalizeStatus(String status) {

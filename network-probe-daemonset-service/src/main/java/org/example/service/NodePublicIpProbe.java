@@ -27,24 +27,32 @@ public class NodePublicIpProbe {
     private final String nodeName;
     private final String lookupUrl;
     private final String reportUrl;
+    private final String centralAuthToken;
 
     @Autowired
     public NodePublicIpProbe(KubernetesClient k8sClient,
             @Value("${local.cluster.id:in-cluster-default}") String clusterId,
             @Value("${local.node.name}") String nodeName,
             @Value("${probe.public-ip.url:https://api-ipv4.ip.sb/ip}") String lookupUrl,
-            @Value("${central.public-ip.url:http://practice-server-svc:8080/api/network/nodes/public-ip}") String reportUrl) {
-        this(k8sClient, directHttpClient(), clusterId, nodeName, lookupUrl, reportUrl);
+            @Value("${central.public-ip.url:http://practice-server-svc:8080/api/network/nodes/public-ip}") String reportUrl,
+            @Value("${central.auth-token:}") String centralAuthToken) {
+        this(k8sClient, directHttpClient(), clusterId, nodeName, lookupUrl, reportUrl, centralAuthToken);
     }
 
     NodePublicIpProbe(KubernetesClient k8sClient, RestTemplate http, String clusterId,
                       String nodeName, String lookupUrl, String reportUrl) {
+        this(k8sClient, http, clusterId, nodeName, lookupUrl, reportUrl, "");
+    }
+
+    NodePublicIpProbe(KubernetesClient k8sClient, RestTemplate http, String clusterId,
+                      String nodeName, String lookupUrl, String reportUrl, String centralAuthToken) {
         this.k8sClient = k8sClient;
         this.http = http;
         this.clusterId = clusterId;
         this.nodeName = nodeName;
         this.lookupUrl = lookupUrl;
         this.reportUrl = reportUrl;
+        this.centralAuthToken = centralAuthToken == null ? "" : centralAuthToken.trim();
     }
 
     private static RestTemplate directHttpClient() {
@@ -79,7 +87,10 @@ public class NodePublicIpProbe {
             report.setNodeName(nodeName);
             report.setK8sUid(node.getMetadata().getUid());
             report.setPublicIp(ip);
-            http.postForEntity(reportUrl, report, String.class);
+            HttpHeaders reportHeaders = new HttpHeaders();
+            if (!centralAuthToken.isEmpty()) reportHeaders.setBearerAuth(centralAuthToken);
+            http.exchange(reportUrl, HttpMethod.POST,
+                    new HttpEntity<>(report, reportHeaders), String.class);
             log.info("Reported public egress IPv4 for {}", nodeName);
         } catch (Exception failure) {
             // Do not publish null or turn an IP lookup failure into a node availability failure.

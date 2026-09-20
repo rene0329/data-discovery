@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.example.privacy.PrivacyComputeModels.ApprovalRecord;
 import org.example.privacy.PrivacyComputeModels.EventRecord;
+import org.example.privacy.PrivacyComputeModels.DatasetOwnershipRecord;
 import org.example.privacy.PrivacyComputeModels.EvidenceRecord;
 import org.example.privacy.PrivacyComputeModels.InputSnapshotRecord;
 import org.example.privacy.PrivacyComputeModels.JobRecord;
@@ -18,21 +19,23 @@ import java.util.List;
 @Mapper
 public interface PrivacyComputeMapper {
     @Insert("INSERT INTO privacy_compute_job (job_id,request_id,current_attempt_id,current_attempt_no," +
-            "template_id,provider,security_profile,status,initiator,result_recipients_json,timeout_seconds," +
+            "template_id,provider,security_profile,status,initiator,initiator_user_id,result_recipients_json,timeout_seconds," +
             "engine_policy_json,spec_json,spec_digest,protocol_version,image_digest,created_at) VALUES " +
             "(#{jobId},#{requestId},#{currentAttemptId},#{currentAttemptNo},#{templateId},#{provider}," +
-            "#{securityProfile},#{status},#{initiator},#{resultRecipientsJson},#{timeoutSeconds}," +
+            "#{securityProfile},#{status},#{initiator},#{initiatorUserId},#{resultRecipientsJson},#{timeoutSeconds}," +
             "#{enginePolicyJson},#{specJson},#{specDigest},#{protocolVersion},#{imageDigest},UTC_TIMESTAMP(3))")
     int insertJob(JobRecord job);
 
     @Insert("INSERT INTO privacy_compute_participant " +
-            "(job_id,party_id,role,created_at) VALUES (#{jobId},#{p.partyId},#{p.role},UTC_TIMESTAMP(3))")
+            "(job_id,party_id,slot_id,role,owner_user_id,owner_username,owner_domain_id,owner_domain_code,created_at) " +
+            "VALUES (#{jobId},#{p.partyId},#{p.slotId},#{p.role},#{p.ownerUserId},#{p.ownerUsername}," +
+            "#{p.ownerDomainId},#{p.ownerDomainCode},UTC_TIMESTAMP(3))")
     int insertParticipant(@Param("jobId") String jobId, @Param("p") ParticipantSpec participant);
 
     @Insert("INSERT INTO privacy_compute_input_snapshot " +
-            "(job_id,party_id,dataset_id,dataset_code,dataset_version,digest_algorithm,digest_value," +
+            "(job_id,party_id,slot_id,owner_user_id,owner_domain_id,dataset_id,dataset_code,dataset_version,digest_algorithm,digest_value," +
             "size_bytes,schema_json,schema_digest,fields_json,created_at) VALUES " +
-            "(#{jobId},#{partyId},#{datasetId},#{datasetCode},#{datasetVersion},#{digestAlgorithm}," +
+            "(#{jobId},#{partyId},#{slotId},#{ownerUserId},#{ownerDomainId},#{datasetId},#{datasetCode},#{datasetVersion},#{digestAlgorithm}," +
             "#{digestValue},#{sizeBytes},#{schemaJson},#{schemaDigest},#{fieldsJson},UTC_TIMESTAMP(3))")
     int insertInputSnapshot(InputSnapshotRecord snapshot);
 
@@ -43,10 +46,17 @@ public interface PrivacyComputeMapper {
                       @Param("attemptNo") int attemptNo, @Param("randomContextId") String randomContextId);
 
     @Insert("INSERT INTO privacy_compute_approval " +
-            "(job_id,attempt_id,participant_id,decision,created_at) VALUES " +
-            "(#{jobId},#{attemptId},#{participantId},'PENDING',UTC_TIMESTAMP(3))")
+            "(job_id,attempt_id,participant_id,approver_user_id,approver_username,input_snapshot_digest," +
+            "decision,decision_signature,created_at,decided_at) VALUES " +
+            "(#{jobId},#{attemptId},#{participantId},#{ownerUserId},#{ownerUsername},#{snapshotDigest},#{decision}," +
+            "#{decisionSignature},UTC_TIMESTAMP(3),CASE WHEN #{decision}='APPROVED' THEN UTC_TIMESTAMP(3) ELSE NULL END)")
     int insertPendingApproval(@Param("jobId") String jobId, @Param("attemptId") String attemptId,
-                              @Param("participantId") String participantId);
+                              @Param("participantId") String participantId,
+                              @Param("ownerUserId") Long ownerUserId,
+                              @Param("ownerUsername") String ownerUsername,
+                              @Param("snapshotDigest") String snapshotDigest,
+                              @Param("decision") String decision,
+                              @Param("decisionSignature") String decisionSignature);
 
     @Select("SELECT * FROM privacy_compute_job WHERE job_id=#{jobId}")
     JobRecord findJob(@Param("jobId") String jobId);
@@ -59,34 +69,53 @@ public interface PrivacyComputeMapper {
             "ORDER BY created_at DESC LIMIT #{limit}", "</script>"})
     List<JobRecord> listJobs(@Param("status") String status, @Param("limit") int limit);
 
-    @Select({"<script>", "SELECT j.* FROM privacy_compute_job j",
-            "JOIN privacy_compute_participant p ON p.job_id=j.job_id",
-            "WHERE p.party_id=#{partyId}",
+    @Select({"<script>", "SELECT DISTINCT j.* FROM privacy_compute_job j",
+            "LEFT JOIN privacy_compute_participant p ON p.job_id=j.job_id",
+            "WHERE (j.initiator_user_id=#{userId} OR p.owner_user_id=#{userId})",
             "<if test='status != null and status != \"\"'> AND j.status=#{status}</if>",
             "ORDER BY j.created_at DESC LIMIT #{limit}", "</script>"})
-    List<JobRecord> listJobsForParticipant(@Param("partyId") String partyId,
+    List<JobRecord> listJobsForParticipant(@Param("userId") Long userId,
                                            @Param("status") String status,
                                            @Param("limit") int limit);
 
     @Select("SELECT party_id FROM privacy_compute_participant WHERE job_id=#{jobId} ORDER BY party_id")
     List<String> findParticipantIds(@Param("jobId") String jobId);
 
+    @Select("SELECT * FROM privacy_compute_participant WHERE job_id=#{jobId} ORDER BY party_id")
+    List<ParticipantSpec> findParticipants(@Param("jobId") String jobId);
+
+    @Select("SELECT * FROM privacy_compute_participant WHERE job_id=#{jobId} AND owner_user_id=#{userId} LIMIT 1")
+    ParticipantSpec findParticipantForOwner(@Param("jobId") String jobId, @Param("userId") Long userId);
+
+    @Select("SELECT j.* FROM privacy_compute_job j JOIN privacy_compute_approval a " +
+            "ON a.job_id=j.job_id AND a.attempt_id=j.current_attempt_id " +
+            "WHERE a.approver_user_id=#{userId} AND a.decision='PENDING' AND j.status='AWAITING_APPROVAL' " +
+            "ORDER BY j.created_at DESC LIMIT #{limit}")
+    List<JobRecord> listPendingApprovals(@Param("userId") Long userId, @Param("limit") int limit);
+
+    @Select("SELECT d.dataset_id,d.owner_user_id,u.username owner_username," +
+            "u.enabled owner_enabled," +
+            "d.owner_domain_id,c.domain_code owner_domain_code," +
+            "c.enabled domain_enabled " +
+            "FROM registered_dataset d LEFT JOIN app_user u ON u.user_id=d.owner_user_id " +
+            "LEFT JOIN collaboration_domain c ON c.domain_id=d.owner_domain_id WHERE d.dataset_id=#{datasetId}")
+    DatasetOwnershipRecord findDatasetOwnership(@Param("datasetId") Long datasetId);
+
+    @Select("SELECT COUNT(*) FROM app_user WHERE user_id=#{userId} AND enabled=TRUE")
+    int countEnabledUser(@Param("userId") Long userId);
+
     @Select("SELECT * FROM privacy_compute_input_snapshot WHERE job_id=#{jobId} ORDER BY party_id")
     List<InputSnapshotRecord> findInputSnapshots(@Param("jobId") String jobId);
 
     @Update("UPDATE privacy_compute_approval SET decision=#{decision},reason=#{reason}," +
-            "decision_signature=#{decisionSignature},decided_at=UTC_TIMESTAMP(3) WHERE job_id=#{jobId} " +
-            "AND attempt_id=#{attemptId} AND participant_id=#{participantId} AND decision='PENDING'")
+            "decision_signature=#{decisionSignature},approver_username=#{approverUsername},decided_at=UTC_TIMESTAMP(3) " +
+            "WHERE job_id=#{jobId} AND attempt_id=#{attemptId} AND participant_id=#{participantId} " +
+            "AND approver_user_id=#{approverUserId} AND decision='PENDING'")
     int decide(@Param("jobId") String jobId, @Param("attemptId") String attemptId,
                @Param("participantId") String participantId, @Param("decision") String decision,
-               @Param("reason") String reason, @Param("decisionSignature") String decisionSignature);
-
-    @Select("SELECT COUNT(*) FROM privacy_compute_approval WHERE job_id=#{jobId} " +
-            "AND attempt_id=#{attemptId} AND decision='APPROVED'")
-    int countApproved(@Param("jobId") String jobId, @Param("attemptId") String attemptId);
-
-    @Select("SELECT COUNT(*) FROM privacy_compute_approval WHERE job_id=#{jobId} AND attempt_id=#{attemptId}")
-    int countApprovals(@Param("jobId") String jobId, @Param("attemptId") String attemptId);
+               @Param("reason") String reason, @Param("decisionSignature") String decisionSignature,
+               @Param("approverUserId") Long approverUserId,
+               @Param("approverUsername") String approverUsername);
 
     @Select("SELECT * FROM privacy_compute_approval WHERE job_id=#{jobId} " +
             "AND attempt_id=#{attemptId} ORDER BY participant_id")
@@ -101,6 +130,16 @@ public interface PrivacyComputeMapper {
             "AND current_attempt_id=#{attemptId} AND status=#{fromStatus}")
     int transition(@Param("jobId") String jobId, @Param("attemptId") String attemptId,
                    @Param("fromStatus") String fromStatus, @Param("toStatus") String toStatus);
+
+    @Update("UPDATE privacy_compute_job j SET j.status='QUEUED',j.queued_at=UTC_TIMESTAMP(3) " +
+            "WHERE j.job_id=#{jobId} AND j.current_attempt_id=#{attemptId} " +
+            "AND j.status='AWAITING_APPROVAL' " +
+            "AND EXISTS (SELECT 1 FROM privacy_compute_approval a " +
+            "WHERE a.job_id=j.job_id AND a.attempt_id=j.current_attempt_id) " +
+            "AND NOT EXISTS (SELECT 1 FROM privacy_compute_approval a " +
+            "WHERE a.job_id=j.job_id AND a.attempt_id=j.current_attempt_id " +
+            "AND a.decision!='APPROVED')")
+    int queueIfFullyApproved(@Param("jobId") String jobId, @Param("attemptId") String attemptId);
 
     @Update("UPDATE privacy_compute_attempt SET status=#{status}," +
             "queued_at=CASE WHEN #{status}='QUEUED' THEN UTC_TIMESTAMP(3) ELSE queued_at END," +

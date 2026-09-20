@@ -5,7 +5,6 @@ import org.example.access.DatasetAccessRequest;
 import org.example.access.DatasetAccessService;
 import org.example.vo.ApiV1Response;
 import org.example.security.access.AccessAuthorizationException;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,7 +27,7 @@ public class DatasetAccessController {
     @PostMapping("/datasets/{datasetId}/access-tests")
     public ResponseEntity<ApiV1Response<DatasetAccessEvent>> read(
             @PathVariable Long datasetId, @RequestBody DatasetAccessRequest request,
-            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestHeader(value = "X-Dataset-Authorization", required = false) String authorization,
             HttpServletRequest servletRequest) {
         try {
             return ResponseEntity.ok(ApiV1Response.ok(access.read(datasetId, request, authorization,
