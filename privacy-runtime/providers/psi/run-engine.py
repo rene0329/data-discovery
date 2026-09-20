@@ -56,6 +56,7 @@ def protocol_message_report(report):
     visit(report)
     summary = {
         "source": "SecretFlow PSI launcher Report byte counters",
+        "measurementScope": "ENGINE_REPORTED_PROTOCOL_BYTES",
         "observations": counters,
         "reportedBytes": sum(item["bytes"] for item in counters) if counters else None,
         "transcriptDigestAvailable": False,

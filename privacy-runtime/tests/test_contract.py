@@ -17,11 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from runner.topic4_privacy_runner import (
+    ARTIFACT_PAYLOAD_MEASUREMENT_SCOPE, ENGINE_COUNTER_MEASUREMENT_SCOPE,
     ContractError, ProviderConfig, Runtime, StageError, canonical_bytes,
 )
 from runner.topic4_privacy_gateway import (
     DownstreamError, Gateway, GatewayError, Handler as GatewayHandler,
-    canonical as gateway_canonical,
+    aggregate_protocol_message_reports, canonical as gateway_canonical,
 )
 
 DIGEST = "sha256:" + "a" * 64
@@ -341,6 +342,144 @@ class RunnerContractTest(unittest.TestCase):
             release.set()
             server.shutdown()
             server.server_close()
+
+    def test_runner_falls_back_to_hashed_engine_artifact_bytes_for_counterless_engines(self):
+        cases = {
+            "psi-pir": {"protocol": "APSI", "protocolMessages": {
+                "source": "SecretFlow PSI launcher Report byte counters",
+                "observations": [], "reportedBytes": None,
+            }},
+            "secretflow-he": {"framework": "SecretFlow", "device": "HEU/PHEU"},
+            "secretflow-vfl": {"framework": "SecretFlow", "trainer": "SecureBoost"},
+            "sfl": {"framework": "SFL", "aggregator": "SPUAggregator"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = Runtime(
+                ProviderConfig(ROOT / "providers/mpspdz/provider.json"), root / "state")
+            for index, (case, adapter_evidence) in enumerate(cases.items(), start=1):
+                with self.subTest(case=case):
+                    external_id = ("%032x" % index)
+                    job_dir = runtime.store.directory(external_id)
+                    job_dir.mkdir(parents=True)
+                    evidence_path = job_dir / "engine-evidence.json"
+                    result_path = job_dir / "engine-result.json"
+                    evidence_path.write_text(
+                        json.dumps(adapter_evidence, sort_keys=True) + "\n", encoding="utf-8")
+                    result_path.write_text(
+                        json.dumps({"released": True, "case": case}, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    log_path = Path(os.environ["TOPIC4_WORK_DIR"]) / external_id / "adapter.log"
+                    log_path.parent.mkdir(parents=True)
+                    log_path.write_bytes(("captured-%s\n" % case).encode("utf-8"))
+
+                    runtime._write_evidence(
+                        external_id, request(), "2026-09-19T00:00:00Z", 0, None)
+
+                    envelope = json.loads((job_dir / "evidence.json").read_text(encoding="utf-8"))
+                    report = envelope["engineEvidence"]["protocolMessages"]
+                    self.assertEqual(
+                        report["measurementScope"], ARTIFACT_PAYLOAD_MEASUREMENT_SCOPE)
+                    messages = {item["messageType"]: item for item in report["messages"]}
+                    expected = {
+                        "adapter.stdout+stderr": log_path,
+                        "engine-evidence.json": evidence_path,
+                        "engine-result.json": result_path,
+                    }
+                    self.assertEqual(set(messages), set(expected))
+                    for name, path in expected.items():
+                        self.assertEqual(messages[name]["payloadBytes"], path.stat().st_size)
+                        self.assertEqual(
+                            messages[name]["messageDigest"],
+                            "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                        )
+                    self.assertEqual(
+                        report["reportedBytes"], sum(path.stat().st_size for path in expected.values()))
+                    digest_input = dict(report)
+                    digest = digest_input.pop("summaryDigest")
+                    self.assertEqual(
+                        digest, "sha256:" + hashlib.sha256(
+                            canonical_bytes(digest_input)).hexdigest())
+
+    def test_runner_prefers_real_engine_protocol_counters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = Runtime(
+                ProviderConfig(ROOT / "providers/mpspdz/provider.json"), root / "state")
+            external_id = "f" * 32
+            job_dir = runtime.store.directory(external_id)
+            job_dir.mkdir(parents=True)
+            (job_dir / "engine-evidence.json").write_text(json.dumps({
+                "protocol": "malicious replicated ring",
+                "protocolMessages": {
+                    "source": "MP-SPDZ process-reported byte counters",
+                    "observations": [{"counter": "Global data sent", "bytes": 256}],
+                    "reportedBytes": 256,
+                    "transcriptDigestAvailable": False,
+                },
+            }), encoding="utf-8")
+            (job_dir / "engine-result.json").write_text(
+                json.dumps({"released": True}), encoding="utf-8")
+            log_path = Path(os.environ["TOPIC4_WORK_DIR"]) / external_id / "adapter.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_bytes(b"much-larger-artifact-that-must-not-replace-engine-counter")
+
+            runtime._write_evidence(
+                external_id, request(), "2026-09-19T00:00:00Z", 0, None)
+
+            envelope = json.loads((job_dir / "evidence.json").read_text(encoding="utf-8"))
+            report = envelope["engineEvidence"]["protocolMessages"]
+            self.assertEqual(report["measurementScope"], ENGINE_COUNTER_MEASUREMENT_SCOPE)
+            self.assertEqual(report["reportedBytes"], 256)
+            self.assertEqual(report["observations"], [
+                {"counter": "Global data sent", "bytes": 256},
+            ])
+
+    def test_gateway_sums_only_complete_same_scope_party_reports(self):
+        def party_report(scope, size):
+            return {"engineEvidence": {"protocolMessages": {
+                "measurementScope": scope, "reportedBytes": size,
+                "observations": [{"counter": "payload", "bytes": size}],
+            }}}
+
+        parties = {
+            party: party_report(ARTIFACT_PAYLOAD_MEASUREMENT_SCOPE, size)
+            for party, size in (("A", 10), ("B", 20), ("C", 30))
+        }
+        summary = aggregate_protocol_message_reports(parties, ["A", "B", "C"])
+        self.assertEqual(summary["reportedBytes"], 60)
+        self.assertEqual(
+            summary["measurementScope"],
+            "SUM_OF_PER_PARTY_REPORTS[%s]" % ARTIFACT_PAYLOAD_MEASUREMENT_SCOPE,
+        )
+        digest_input = dict(summary)
+        digest = digest_input.pop("summaryDigest")
+        self.assertEqual(
+            digest, "sha256:" + hashlib.sha256(gateway_canonical(digest_input)).hexdigest())
+
+        incomplete = aggregate_protocol_message_reports(
+            {"A": parties["A"], "B": parties["B"]}, ["A", "B", "C"])
+        self.assertIsNone(incomplete["reportedBytes"])
+        self.assertEqual(incomplete["measurementScope"], "INCOMPLETE_PER_PARTY_REPORTS")
+
+        mixed = dict(parties)
+        mixed["C"] = party_report(ENGINE_COUNTER_MEASUREMENT_SCOPE, 30)
+        mixed_summary = aggregate_protocol_message_reports(mixed, ["A", "B", "C"])
+        self.assertIsNone(mixed_summary["reportedBytes"])
+        self.assertEqual(
+            mixed_summary["measurementScope"], "MIXED_PER_PARTY_MEASUREMENT_SCOPES")
+
+        missing_scope = dict(parties)
+        missing_scope["C"] = party_report(ARTIFACT_PAYLOAD_MEASUREMENT_SCOPE, 30)
+        del missing_scope["C"]["engineEvidence"]["protocolMessages"]["measurementScope"]
+        missing_scope_summary = aggregate_protocol_message_reports(
+            missing_scope, ["A", "B", "C"])
+        self.assertIsNone(missing_scope_summary["reportedBytes"])
+        self.assertEqual(
+            missing_scope_summary["measurementScope"],
+            "MIXED_PER_PARTY_MEASUREMENT_SCOPES",
+        )
 
     def test_runner_restart_fails_job_and_purges_all_staged_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -863,6 +1002,32 @@ class AdapterPolicyTest(unittest.TestCase):
                 env=complete_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 check=False, text=True,
             )
+
+    def test_mp_spdz_and_psi_reports_label_real_engine_counters(self):
+        adapters = {}
+        for name, relative in (
+                ("mpspdz", "providers/mpspdz/run-engine.py"),
+                ("psi", "providers/psi/run-engine.py")):
+            spec = importlib.util.spec_from_file_location(
+                "topic4_%s_protocol_report" % name, ROOT / relative)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            adapters[name] = module
+
+        mp_report = adapters["mpspdz"].protocol_message_report(
+            "Data sent = 1 KB\nGlobal data sent = 2 KB\n")
+        self.assertEqual(mp_report["measurementScope"], ENGINE_COUNTER_MEASUREMENT_SCOPE)
+        self.assertEqual(mp_report["reportedBytes"], 2000)
+        self.assertEqual(len(mp_report["observations"]), 2)
+
+        psi_report = adapters["psi"].protocol_message_report({
+            "network": {"sent_bytes": 1024, "received_bytes": 512},
+        })
+        self.assertEqual(psi_report["measurementScope"], ENGINE_COUNTER_MEASUREMENT_SCOPE)
+        self.assertEqual(psi_report["reportedBytes"], 1536)
+        counterless = adapters["psi"].protocol_message_report({"status": "ok"})
+        self.assertEqual(counterless["measurementScope"], ENGINE_COUNTER_MEASUREMENT_SCOPE)
+        self.assertIsNone(counterless["reportedBytes"])
 
     def test_mpspdz_public_policy_is_accepted_before_missing_tls(self):
         value = request()

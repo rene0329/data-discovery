@@ -50,6 +50,7 @@ def protocol_message_report(output):
         })
     report = {
         "source": "MP-SPDZ process-reported byte counters",
+        "measurementScope": "ENGINE_REPORTED_PROTOCOL_BYTES",
         "observations": observations,
         "reportedBytes": max((item["bytes"] for item in observations), default=None),
         "transcriptDigestAvailable": False,

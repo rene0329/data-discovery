@@ -37,6 +37,10 @@ FORBIDDEN_POLICY_KEYS = {
 }
 TERMINAL = {"SUCCEEDED", "FAILED", "ABORTED", "CANCELLED"}
 PRIVATE_JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+ENGINE_COUNTER_MEASUREMENT_SCOPE = "ENGINE_REPORTED_PROTOCOL_BYTES"
+ARTIFACT_PAYLOAD_MEASUREMENT_SCOPE = (
+    "ENGINE_EVIDENCE_CHAIN_ARTIFACT_BYTES_NOT_NETWORK_TRAFFIC"
+)
 
 
 def now() -> str:
@@ -74,6 +78,58 @@ def atomic_json(path: Path, value: Any) -> None:
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(str(temporary), str(path))
+
+
+def _protocol_report_digest(report: Dict[str, Any]) -> str:
+    value = dict(report)
+    value.pop("summaryDigest", None)
+    return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
+
+
+def _usable_engine_protocol_report(value: Any) -> Optional[Dict[str, Any]]:
+    """Return a normalized real engine counter report, or None if none exists."""
+    if not isinstance(value, dict):
+        return None
+    reported = value.get("reportedBytes")
+    observations = value.get("observations")
+    if (not isinstance(reported, int) or isinstance(reported, bool) or reported < 0
+            or not isinstance(observations, list) or not observations):
+        return None
+    normalized = dict(value)
+    normalized["measurementScope"] = (
+        value.get("measurementScope")
+        if isinstance(value.get("measurementScope"), str) and value["measurementScope"]
+        else ENGINE_COUNTER_MEASUREMENT_SCOPE
+    )
+    normalized["summaryDigest"] = _protocol_report_digest(normalized)
+    return normalized
+
+
+def evidence_chain_artifact_report(paths: List[Tuple[str, Path]]) -> Dict[str, Any]:
+    """Measure fixed engine artifacts without presenting them as network traffic."""
+    messages: List[Dict[str, Any]] = []
+    for name, path in paths:
+        if path.is_symlink() or not path.is_file():
+            continue
+        messages.append({
+            "messageType": name,
+            "payloadBytes": path.stat().st_size,
+            "messageDigest": sha256_file(path),
+        })
+    report: Dict[str, Any] = {
+        "source": (
+            "runner-observed engine artifact payloads included in the evidence hash chain; "
+            "not network traffic"
+        ),
+        "measurementScope": ARTIFACT_PAYLOAD_MEASUREMENT_SCOPE,
+        "messages": messages,
+        "reportedBytes": (
+            sum(item["payloadBytes"] for item in messages) if messages else None
+        ),
+        "transcriptDigestAvailable": False,
+    }
+    report["summaryDigest"] = _protocol_report_digest(report)
+    return report
 
 
 def nested_forbidden_keys(value: Any) -> List[str]:
@@ -1028,6 +1084,19 @@ class Runtime:
             except (OSError, ValueError):
                 engine_evidence = {"invalidEngineEvidence": True}
         log_path = self._job_private_path(self.work_root, external_id) / "adapter.log"
+        if not isinstance(engine_evidence, dict):
+            engine_evidence = {}
+        else:
+            engine_evidence = dict(engine_evidence)
+        protocol_report = _usable_engine_protocol_report(
+            engine_evidence.get("protocolMessages"))
+        if protocol_report is None:
+            protocol_report = evidence_chain_artifact_report([
+                ("adapter.stdout+stderr", log_path),
+                ("engine-evidence.json", engine_evidence_path),
+                ("engine-result.json", directory / "engine-result.json"),
+            ])
+        engine_evidence["protocolMessages"] = protocol_report
         evidence = {
             "contractVersion": "topic4.privacy.evidence/v1",
             "externalJobId": external_id,

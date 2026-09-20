@@ -62,6 +62,49 @@ def atomic_json(path: Path, value: Any) -> None:
     os.replace(str(temporary), str(path))
 
 
+def aggregate_protocol_message_reports(
+    party_evidence: Dict[str, Dict[str, Any]], expected_parties: List[str]
+) -> Dict[str, Any]:
+    reports = {
+        party: value.get("engineEvidence", {}).get("protocolMessages")
+        for party, value in party_evidence.items()
+        if (isinstance(value, dict)
+            and isinstance(value.get("engineEvidence"), dict)
+            and isinstance(value["engineEvidence"].get("protocolMessages"), dict))
+    }
+    complete = set(reports) == set(expected_parties)
+    byte_values = [item.get("reportedBytes") for item in reports.values()]
+    scope_values = [item.get("measurementScope") for item in reports.values()]
+    scopes = set(scope_values)
+    byte_complete = complete and all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        for value in byte_values
+    )
+    common_scope = (
+        complete
+        and all(isinstance(value, str) and bool(value) for value in scope_values)
+        and len(scopes) == 1
+    )
+    if byte_complete and common_scope:
+        reported_bytes: Optional[int] = sum(byte_values)
+        measurement_scope = "SUM_OF_PER_PARTY_REPORTS[%s]" % next(iter(scopes))
+    elif complete and not common_scope:
+        reported_bytes = None
+        measurement_scope = "MIXED_PER_PARTY_MEASUREMENT_SCOPES"
+    else:
+        reported_bytes = None
+        measurement_scope = "INCOMPLETE_PER_PARTY_REPORTS"
+    summary: Dict[str, Any] = {
+        "source": "gateway aggregation of complete per-party reports; see party measurementScope",
+        "measurementScope": measurement_scope,
+        "parties": reports,
+        "reportedBytes": reported_bytes,
+        "transcriptDigestAvailable": False,
+    }
+    summary["summaryDigest"] = "sha256:" + hashlib.sha256(canonical(summary)).hexdigest()
+    return summary
+
+
 class GatewayError(RuntimeError):
     pass
 
@@ -755,23 +798,8 @@ class Gateway:
             for party, value in party_evidence.items()
             if isinstance(value, dict) and value.get("engineLogDigest")
         }
-        message_evidence = {
-            party: value.get("engineEvidence", {}).get("protocolMessages")
-            for party, value in party_evidence.items()
-            if (isinstance(value, dict)
-                and isinstance(value.get("engineEvidence"), dict)
-                and value["engineEvidence"].get("protocolMessages") is not None)
-        }
-        message_summary = {
-            "parties": message_evidence,
-            "reportedBytes": sum(
-                item.get("reportedBytes", 0)
-                for item in message_evidence.values()
-                if isinstance(item, dict) and isinstance(item.get("reportedBytes"), int)
-            ),
-        }
-        message_summary["summaryDigest"] = "sha256:" + hashlib.sha256(
-            canonical(message_summary)).hexdigest()
+        message_summary = aggregate_protocol_message_reports(
+            party_evidence, list(status["participants"]))
         evidence = {
             "contractVersion": "topic4.privacy.evidence/v1",
             "providerId": self.provider_id,

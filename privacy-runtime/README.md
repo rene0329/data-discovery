@@ -183,6 +183,16 @@ into runtime pods as a substitute for staging.
 
 Cluster acceptance exports raw evidence for the human judge:
 
+`protocolMessages.reportedBytes` always carries an explicit `measurementScope`.
+MP-SPDZ and PSI launcher counters use `ENGINE_REPORTED_PROTOCOL_BYTES` when the
+pinned engine emits real counters. When an engine exposes no such counter, the
+runner instead measures the byte length and SHA-256 of its captured combined
+stdout/stderr, `engine-evidence.json`, and `engine-result.json`. That fallback
+scope is `ENGINE_EVIDENCE_CHAIN_ARTIFACT_BYTES_NOT_NETWORK_TRAFFIC`; it is a
+reproducible measure of engine artifacts included in the evidence hash chain,
+not a claim about socket, RPC, or wire bytes. The gateway publishes a sum only
+when every party reports the same scope. Missing or mixed scopes remain `null`.
+
 1. Build/push with `PUSH=1 SBOM=1 build-topic4 privacy-mpspdz` and record the
    image digest.
 2. Deploy and submit the sum fixture. Verify the authorized recipient sees 145

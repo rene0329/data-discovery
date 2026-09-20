@@ -150,7 +150,8 @@ class PrivacyComputeServiceEvidenceTest {
     }
 
     private Map<String, Object> messageReport(String source, Number bytes, List<?> observations) {
-        return map("source", source, "observations", observations, "reportedBytes", bytes,
+        return map("source", source, "measurementScope", "ENGINE_REPORTED_PROTOCOL_BYTES",
+                "observations", observations, "reportedBytes", bytes,
                 "transcriptDigestAvailable", false, "summaryDigest", DIGEST);
     }
 
