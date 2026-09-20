@@ -16,6 +16,7 @@ import org.example.privacy.PrivacyComputeModels.DatasetOwnershipRecord;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
 import org.example.privacy.PrivacyComputeModels.ParticipantSpec;
 import org.example.privacy.PrivacyComputeModels.TemplateDefinition;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -38,6 +39,7 @@ public class PrivacyJobSpecResolver {
     private final PrivacyComputeMapper privacyMapper;
     private final ObjectMapper objectMapper;
 
+    @Autowired
     public PrivacyJobSpecResolver(DatasetRegistrationMapper datasets, PrivacyComputeMapper privacyMapper,
                                   ObjectMapper objectMapper) {
         this.datasets = datasets;
