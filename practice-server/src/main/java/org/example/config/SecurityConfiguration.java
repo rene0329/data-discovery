@@ -2,6 +2,7 @@ package org.example.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.auth.InternalAgentAuthenticationFilter;
+import org.example.auth.ImpersonationWriteGuardFilter;
 import org.example.auth.JwtAuthenticationFilter;
 import org.example.vo.ApiV1Response;
 import org.springframework.context.annotation.Bean;
@@ -27,12 +28,15 @@ public class SecurityConfiguration {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter,
                                                    InternalAgentAuthenticationFilter internalAgentFilter,
+                                                   ImpersonationWriteGuardFilter impersonationGuard,
                                                    ObjectMapper objectMapper) throws Exception {
         http.csrf().disable()
                 .sessionManagement().sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 .and().authorizeRequests()
                 .antMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .antMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
+                .antMatchers(HttpMethod.POST, "/api/v1/auth/impersonation").hasRole("ADMIN")
+                .antMatchers(HttpMethod.POST, "/api/v1/auth/impersonation/exit").authenticated()
                 .antMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/v1/privacy-computing/capabilities",
                         "/api/v1/privacy-computing/templates").permitAll()
@@ -75,6 +79,7 @@ public class SecurityConfiguration {
                             ApiV1Response.error(403, "FORBIDDEN", "permission denied"));
                 });
         http.addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+        http.addFilterAfter(impersonationGuard, JwtAuthenticationFilter.class);
         http.addFilterBefore(internalAgentFilter, JwtAuthenticationFilter.class);
         return http.build();
     }

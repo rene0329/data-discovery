@@ -21,6 +21,12 @@ public final class AuthDtos {
         public String getToken() { return token; }
     }
 
+    public static class ImpersonationRequest {
+        private Long userId;
+        public Long getUserId() { return userId; }
+        public void setUserId(Long userId) { this.userId = userId; }
+    }
+
     public static class DomainInfo {
         private final Long id;
         private final String code;
@@ -41,6 +47,9 @@ public final class AuthDtos {
         private final DomainInfo domain;
         private final Long domainId;
         private final String domainName;
+        private final boolean impersonated;
+        private final Long actorUserId;
+        private final String actorUsername;
         public MeResponse(AuthenticatedUser user) {
             this.id = user.getUserId();
             this.username = user.getUsername();
@@ -48,6 +57,9 @@ public final class AuthDtos {
             this.roles = new LinkedHashSet<>(user.getRoles());
             this.domainId = user.getDomainId();
             this.domainName = user.getDomainName();
+            this.impersonated = user.isImpersonated();
+            this.actorUserId = user.getActorUserId();
+            this.actorUsername = user.getActorUsername();
             this.domain = domainId == null ? null
                     : new DomainInfo(domainId, user.getDomainCode(), user.getDomainName());
         }
@@ -58,6 +70,9 @@ public final class AuthDtos {
         public DomainInfo getDomain() { return domain; }
         public Long getDomainId() { return domainId; }
         public String getDomainName() { return domainName; }
+        public boolean isImpersonated() { return impersonated; }
+        public Long getActorUserId() { return actorUserId; }
+        public String getActorUsername() { return actorUsername; }
     }
 
     public static class DomainRequest {

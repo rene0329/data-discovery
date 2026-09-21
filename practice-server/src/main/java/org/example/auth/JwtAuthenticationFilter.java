@@ -41,7 +41,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 if (user != null && Boolean.TRUE.equals(user.getEnabled())
                         && user.getTokenVersion() != null && user.getTokenVersion() == tokenVersion
                         && (user.getDomainId() == null || Boolean.TRUE.equals(user.getDomainEnabled()))) {
-                    AuthenticatedUser principal = authService.authenticatedUser(user);
+                    AuthenticatedUser principal = resolvePrincipal(claims, user);
+                    if (principal == null) {
+                        chain.doFilter(request, response);
+                        return;
+                    }
                     UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                             principal, null, principal.getRoles().stream()
                             .map(role -> new SimpleGrantedAuthority("ROLE_" + role)).collect(Collectors.toList()));
@@ -52,5 +56,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
         }
         chain.doFilter(request, response);
+    }
+
+    private AuthenticatedUser resolvePrincipal(Claims claims, AuthUserRecord effectiveUser) {
+        if (!Boolean.TRUE.equals(claims.get("imp", Boolean.class))) {
+            return authService.authenticatedUser(effectiveUser);
+        }
+        Number actorIdClaim = claims.get("actorUid", Number.class);
+        Number actorVersionClaim = claims.get("actorVer", Number.class);
+        if (actorIdClaim == null || actorVersionClaim == null) return null;
+        AuthUserRecord actor = mapper.findUserById(actorIdClaim.longValue());
+        if (actor == null || !Boolean.TRUE.equals(actor.getEnabled()) || actor.getTokenVersion() == null
+                || actor.getTokenVersion().intValue() != actorVersionClaim.intValue()
+                || !mapper.listRoleCodes(actor.getUserId()).contains("ADMIN")) {
+            return null;
+        }
+        return authService.authenticatedUser(effectiveUser, actor);
     }
 }
