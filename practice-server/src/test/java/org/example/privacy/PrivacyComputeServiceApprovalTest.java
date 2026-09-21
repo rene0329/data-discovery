@@ -173,6 +173,20 @@ class PrivacyComputeServiceApprovalTest {
     }
 
     @Test
+    void switchedAdministratorCanApproveAsEffectiveDataOwner() {
+        AuthenticatedUser switchedOwner = new AuthenticatedUser(2L, "bob", "bob",
+                Collections.singleton("DATA_OWNER"), 2L, "D2", "D2",
+                true, 99L, "admin");
+
+        service.approve("pcj-1", switchedOwner, new DecisionRequest());
+
+        assertEquals(JobStatus.QUEUED.name(), job.getStatus());
+        assertEquals(1, submitted.size());
+        verify(mapper).decide(eq("pcj-1"), eq("pca-1"), eq("B"), eq("APPROVED"),
+                isNull(), anyString(), eq(2L), eq("bob"));
+    }
+
+    @Test
     void ownerRejectionAbortsWithoutSubmission() {
         service.reject("pcj-1", user(2L, "bob"), reason("not authorized"));
         assertEquals(JobStatus.ABORTED.name(), job.getStatus());

@@ -379,7 +379,6 @@ public class PrivacyComputeService {
     public ResultView result(String jobId, AuthenticatedUser principal) {
         JobRecord job = requireRecord(jobId);
         requireUser(principal);
-        requireNotImpersonated(principal);
         if (canAuditAll(principal) || !principal.getUserId().equals(job.getInitiatorUserId())) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, "RESULT_ACCESS_DENIED",
                     "principal is not an authorized result recipient");
@@ -868,7 +867,6 @@ public class PrivacyComputeService {
 
     private void requireComputeInitiator(AuthenticatedUser user) {
         requireDataOwner(user);
-        requireNotImpersonated(user);
         if (canAuditAll(user)) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, "PRIVACY_INITIATOR_ROLE_FORBIDDEN",
                     "administrator and auditor accounts cannot initiate privacy computations");
@@ -877,7 +875,6 @@ public class PrivacyComputeService {
 
     private void requireApprovalOwner(AuthenticatedUser user) {
         requireDataOwner(user);
-        requireNotImpersonated(user);
         if (canAuditAll(user)) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_ROLE_FORBIDDEN",
                     "administrator and auditor accounts cannot approve privacy inputs");
@@ -887,7 +884,6 @@ public class PrivacyComputeService {
     private void requireInitiator(JobRecord job, AuthenticatedUser principal,
                                   String errorCode, String message) {
         requireUser(principal);
-        requireNotImpersonated(principal);
         if (canAuditAll(principal) || !principal.getUserId().equals(job.getInitiatorUserId())) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, errorCode, message);
         }
@@ -895,13 +891,6 @@ public class PrivacyComputeService {
 
     private boolean canAuditAll(AuthenticatedUser user) {
         return user != null && (user.hasRole("ADMIN") || user.hasRole("AUDITOR"));
-    }
-
-    private void requireNotImpersonated(AuthenticatedUser user) {
-        if (user != null && user.isImpersonated()) {
-            throw new RegistrationException(HttpStatus.FORBIDDEN, "IMPERSONATION_READ_ONLY",
-                    "administrator user switching is read-only");
-        }
     }
 
     private void queueWhenFullyApproved(JobRecord job) {
