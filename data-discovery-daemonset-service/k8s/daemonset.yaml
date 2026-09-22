@@ -100,7 +100,8 @@ spec:
 
             # MySQL 连接
             - name: SPRING_DATASOURCE_DRUID_URL
-              value: "jdbc:mysql://mysql.topic4-1.svc.cluster.local:3306/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8&sessionVariables=time_zone='%2B00:00'"
+              # master-141 的主机网络无法转发该 ClusterIP；headless DNS 会直接解析到 MySQL Pod。
+              value: "jdbc:mysql://mysql-headless.topic4-1.svc.cluster.local:3306/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8&sessionVariables=time_zone='%2B00:00'"
             - name: SPRING_DATASOURCE_DRUID_USERNAME
               value: "root"
             - name: SPRING_DATASOURCE_DRUID_PASSWORD

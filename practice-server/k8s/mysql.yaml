@@ -15,6 +15,23 @@ spec:
       targetPort: 3306
       protocol: TCP
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-headless
+  namespace: topic4-1
+  labels:
+    app: project4-mysql
+spec:
+  clusterIP: None
+  selector:
+    workload.user.cattle.io/workloadselector: apps.deployment-topic4-1-mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+      protocol: TCP
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
