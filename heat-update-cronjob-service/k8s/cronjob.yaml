@@ -40,7 +40,7 @@ spec:
 
           containers:
             - name: heat-update
-              image: ghcr.io/rene0329/data-discovery-heat-update-cronjob:v-79fded0037ebf10a738d33af372d31259b94c41a
+              image: 10.15.16.40:30455/data-discovery-heat-update-cronjob:v-79fded0037ebf10a738d33af372d31259b94c41a
               imagePullPolicy: IfNotPresent
               resources:
                 requests:
