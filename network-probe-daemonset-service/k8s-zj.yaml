@@ -24,7 +24,7 @@ spec:
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: network-probe
-          image: 10.15.16.40:30455/data-discovery-network-probe:v-72d7d8948aa1f301aec3c3a8d4f77773627926b0
+          image: 10.15.16.40:30455/data-discovery-network-probe:v-21fbaef6e5bda93004214ff4f03de9e3b1aca24c
           imagePullPolicy: IfNotPresent
           env:
             - name: LOCAL_NODE_NAME
