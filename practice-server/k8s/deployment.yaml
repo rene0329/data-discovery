@@ -15,18 +15,18 @@ spec:
       labels:
         app: practice-server
     spec:
-      serviceAccountName: practice-server-sa
+      # ZJ 的 topic4-1/default 已绑定现有节点与指标只读权限，避免新增集群级 RBAC。
+      serviceAccountName: default
       nodeSelector:
-        kubernetes.io/hostname: master-90
+        kubernetes.io/hostname: master-40
       tolerations:
         - key: node-role.kubernetes.io/master
           operator: Exists
           effect: NoSchedule
       containers:
         - name: practice-server
-          image: ghcr.io/rene0329/data-discovery-practice-server:latest
-          # latest 是可变标签；每次滚动都检查远端摘要，避免继续运行节点缓存的旧后端。
-          imagePullPolicy: Always
+          image: 10.15.16.40:30455/data-discovery-practice-server:v-408c1b792dec48941bc84c7da94bf21219739167
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
               name: http
@@ -36,9 +36,9 @@ spec:
             - name: SPRING_PROFILES_ACTIVE
               value: "prod"
             - name: DISPATCH_CENTRAL_NODE_IP
-              value: "10.212.14.90"
+              value: "10.15.16.40"
             - name: DISPATCH_CENTRAL_NODE_NAME
-              value: "master-90"
+              value: "master-40"
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS

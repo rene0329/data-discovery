@@ -12,6 +12,6 @@ spec:
   ports:
     - port: 8080
       targetPort: 8080
-      nodePort: 31081        # 对外后端 API；任一集群节点 IP 均可访问
+      nodePort: 30482        # ZJ 分配给 topic4-1 的后端 API 端口
       name: http
       protocol: TCP

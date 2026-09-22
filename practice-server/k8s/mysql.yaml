@@ -37,7 +37,7 @@ spec:
         workload.user.cattle.io/workloadselector: apps.deployment-topic4-1-mysql
     spec:
       nodeSelector:
-        kubernetes.io/hostname: master-88
+        kubernetes.io/hostname: master-40
       tolerations:
         - key: node-role.kubernetes.io/master
           operator: Exists
@@ -90,5 +90,5 @@ spec:
       volumes:
         - name: mysql-data
           hostPath:
-            path: /var/lib/topic4-1/mysql
+            path: /var/lib/topic4-1/mysql-migrated
             type: DirectoryOrCreate

@@ -32,7 +32,7 @@ spec:
         spec:
           restartPolicy: OnFailure
           nodeSelector:
-            kubernetes.io/hostname: master-90
+            kubernetes.io/hostname: master-40
           tolerations:
             - key: node-role.kubernetes.io/master
               operator: Exists
@@ -40,8 +40,7 @@ spec:
 
           containers:
             - name: heat-update
-              # GitHub Container Registry 镜像地址（由 publish-heat-update.yml workflow 构建推送）
-              image: ghcr.io/rene0329/data-discovery-heat-update-cronjob:latest
+              image: ghcr.io/rene0329/data-discovery-heat-update-cronjob:v-79fded0037ebf10a738d33af372d31259b94c41a
               imagePullPolicy: IfNotPresent
               resources:
                 requests:

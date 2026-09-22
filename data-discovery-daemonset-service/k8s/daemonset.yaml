@@ -18,7 +18,8 @@ spec:
       labels:
         app: data-discovery
     spec:
-      serviceAccountName: data-discovery-sa
+      # 复用 ZJ 中 topic4-1/default 已有的节点只读权限，不修改集群级 RBAC。
+      serviceAccountName: default
       tolerations:
         # 若需要在 master/control-plane 节点也运行，保留这两条；否则删除
         - key: node-role.kubernetes.io/master
@@ -35,12 +36,11 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: node-role
+                  - key: kubernetes.io/hostname
                     operator: In
                     values:
-                      - compute
-                      - storage
-                      - compute-storage
+                      - master-40
+                      - master-141
 
       # hostNetwork=true：Pod 直接使用宿主机网络，Pod IP = 节点 IP，重启后 IP 不变
       # 这样 practice-server 可以通过 node_management.internal_ip 稳定寻址，无需 DNS
@@ -49,8 +49,7 @@ spec:
 
       containers:
         - name: data-discovery
-          # ⚠️ 替换为实际构建并推送的镜像地址
-          image: ghcr.io/rene0329/data-discovery:latest
+          image: 10.15.16.40:30455/data-discovery:v-dd5603c26bb7673c8b3de49b35c98525ee7e1074
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
