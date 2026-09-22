@@ -34,6 +34,8 @@ spec:
             - name: CENTRAL_METRICS_URL
               # master-141 的主机网络无法转发 ClusterIP，headless DNS 直接解析后端 Pod。
               value: http://practice-server-headless.topic4-1.svc.cluster.local:8080/api/network/metrics/batch
+            - name: CENTRAL_NODE_HEARTBEAT_URL
+              value: http://practice-server-headless.topic4-1.svc.cluster.local:8080/api/network/nodes/heartbeat
             - name: LOCAL_CLUSTER_ID
               value: in-cluster-default
             - name: CENTRAL_PUBLIC_IP_URL
@@ -51,6 +53,14 @@ spec:
               value: "true"
             - name: PROBE_TARGET_EDGES
               value: master-40/master-141,master-40/master-215,master-141/master-215
+            - name: PROBE_EXTERNAL_RUNNER_NODE
+              value: master-40
+            - name: PROBE_EXTERNAL_CLUSTER_ID
+              value: zj-external-aliyun
+            - name: PROBE_EXTERNAL_EDGES
+              value: alihz@10.214.0.1/master-40,alish@10.214.0.5/master-40,alibj@10.214.0.3/master-215
+            - name: PROBE_EXTERNAL_HEARTBEAT_INTERVAL_MS
+              value: "60000"
             - name: PROBE_TRANSFER_BYTES
               value: "5242880"
             - name: PROBE_INTERVAL_MS

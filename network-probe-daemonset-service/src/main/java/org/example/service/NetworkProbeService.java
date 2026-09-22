@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.fabric8.kubernetes.api.model.Node;
 import io.fabric8.kubernetes.api.model.NodeAddress;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import org.example.dto.ExternalNodeHeartbeatDto;
 import org.example.dto.NetworkMetricDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,6 +72,20 @@ public class NetworkProbeService {
     @Value("${probe.target.edges:}")
     private String targetEdges;
 
+    // External links are probed by one designated ZJ node because only that host owns the SSH TUNs.
+    // Format: remoteNode@tunnelIp/logicalLocalNode,remoteNode@tunnelIp/logicalLocalNode
+    @Value("${probe.external.edges:}")
+    private String externalEdges;
+
+    @Value("${probe.external.runner-node:}")
+    private String externalRunnerNode;
+
+    @Value("${probe.external.cluster-id:zj-external-aliyun}")
+    private String externalClusterId;
+
+    @Value("${central.node-heartbeat.url:}")
+    private String centralNodeHeartbeatUrl;
+
     // 每个方向固定发送的字节数，避免按持续时间测速产生不可控流量。
     @Value("${probe.transfer.bytes:5242880}")
     private long probeTransferBytes;
@@ -82,8 +97,7 @@ public class NetworkProbeService {
 
         List<Node> targetNodes = getTargetNodes();
         if (targetNodes.isEmpty()) {
-            log.warn("未找到任何目标节点，跳过本次探测");
-            return;
+            log.warn("未找到任何集群内目标节点");
         }
 
         List<NetworkMetricDto> metricsList = new ArrayList<>();
@@ -124,10 +138,89 @@ public class NetworkProbeService {
             metricsList.add(dto);
         }
 
+        appendExternalMetrics(metricsList);
+
         if (!metricsList.isEmpty()) {
             pushMetricsToCentral(metricsList);
         } else {
             log.info("本次探测无有效数据");
+        }
+    }
+
+    private void appendExternalMetrics(List<NetworkMetricDto> metricsList) {
+        if (!isExternalRunner()) return;
+        for (ExternalProbeTarget target : parseExternalTargets(externalEdges)) {
+            double latencyMs = probeLatency(target.tunnelIp);
+            long bandwidthBps = probeBandwidth(target.tunnelIp);
+            NetworkMetricDto dto = new NetworkMetricDto();
+            dto.setSourceNode(target.logicalLocalNode);
+            dto.setTargetNode(target.remoteNode);
+            dto.setLatencyMs(latencyMs >= 0 ? latencyMs : null);
+            dto.setBandwidthBps(bandwidthBps >= 0 ? bandwidthBps : null);
+            dto.setMeasurementTime(System.currentTimeMillis());
+            metricsList.add(dto);
+        }
+    }
+
+    @Scheduled(initialDelayString = "${probe.external.heartbeat.initial-delay.ms:30000}",
+            fixedDelayString = "${probe.external.heartbeat.interval.ms:60000}")
+    public void probeExternalHeartbeats() {
+        if (!isExternalRunner() || centralNodeHeartbeatUrl == null
+                || centralNodeHeartbeatUrl.trim().isEmpty()) return;
+        for (ExternalProbeTarget target : parseExternalTargets(externalEdges)) {
+            double latencyMs = probeLatency(target.tunnelIp);
+            pushExternalHeartbeat(target, latencyMs >= 0,
+                    latencyMs >= 0 ? null : "SSH tunnel ping failed from " + localNodeName);
+        }
+    }
+
+    private boolean isExternalRunner() {
+        return localNodeName != null && externalRunnerNode != null
+                && localNodeName.equals(externalRunnerNode.trim());
+    }
+
+    private void pushExternalHeartbeat(ExternalProbeTarget target, boolean online, String reason) {
+        try {
+            ExternalNodeHeartbeatDto heartbeat = new ExternalNodeHeartbeatDto();
+            heartbeat.setClusterId(externalClusterId);
+            heartbeat.setNodeName(target.remoteNode);
+            heartbeat.setInternalIp(target.tunnelIp);
+            heartbeat.setOnline(online);
+            heartbeat.setReason(reason);
+            HttpHeaders headers = new HttpHeaders();
+            if (centralAuthToken != null && !centralAuthToken.trim().isEmpty()) {
+                headers.setBearerAuth(centralAuthToken.trim());
+            }
+            restTemplate.exchange(centralNodeHeartbeatUrl, HttpMethod.POST,
+                    new HttpEntity<>(heartbeat, headers), String.class);
+        } catch (Exception e) {
+            log.error("推送外部节点 {} 心跳失败: {}", target.remoteNode, e.getMessage());
+        }
+    }
+
+    static List<ExternalProbeTarget> parseExternalTargets(String configured) {
+        if (configured == null || configured.trim().isEmpty()) return Collections.emptyList();
+        List<ExternalProbeTarget> targets = new ArrayList<>();
+        for (String value : configured.split(",")) {
+            String[] sides = value.trim().split("/", -1);
+            if (sides.length != 2) continue;
+            int at = sides[0].lastIndexOf('@');
+            if (at <= 0 || at == sides[0].length() - 1 || sides[1].trim().isEmpty()) continue;
+            targets.add(new ExternalProbeTarget(sides[0].substring(0, at).trim(),
+                    sides[0].substring(at + 1).trim(), sides[1].trim()));
+        }
+        return targets;
+    }
+
+    static final class ExternalProbeTarget {
+        final String remoteNode;
+        final String tunnelIp;
+        final String logicalLocalNode;
+
+        ExternalProbeTarget(String remoteNode, String tunnelIp, String logicalLocalNode) {
+            this.remoteNode = remoteNode;
+            this.tunnelIp = tunnelIp;
+            this.logicalLocalNode = logicalLocalNode;
         }
     }
 

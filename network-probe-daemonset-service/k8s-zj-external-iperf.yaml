@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: topic4-zj-external-iperf
+  namespace: topic4-1
+  labels:
+    app: topic4-zj-external-iperf
+spec:
+  selector:
+    matchLabels:
+      app: topic4-zj-external-iperf
+  template:
+    metadata:
+      labels:
+        app: topic4-zj-external-iperf
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: [alihz, alibj, alish]
+      containers:
+        - name: iperf3
+          image: 10.212.14.88:30455/data-discovery-network-probe:v-72d7d8948aa1f301aec3c3a8d4f77773627926b0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command:
+            - sh
+            - -c
+            - |
+              case "$NODE_NAME" in
+                alihz) bind_ip=10.214.0.1 ;;
+                alibj) bind_ip=10.214.0.3 ;;
+                alish) bind_ip=10.214.0.5 ;;
+                *) exit 1 ;;
+              esac
+              until ip address show | grep -Fq "$bind_ip"; do sleep 5; done
+              exec iperf3 -s -B "$bind_ip"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 500m
+              memory: 64Mi

@@ -85,6 +85,16 @@ public interface NodeManagementMapper {
                                @Param("nodeName") String nodeName,
                                @Param("publicIp") String publicIp);
 
+    int markExternalNodeOnline(@Param("cluster") String cluster,
+                               @Param("nodeName") String nodeName,
+                               @Param("internalIp") String internalIp);
+
+    int markExternalNodeUnreachable(@Param("cluster") String cluster,
+                                    @Param("nodeName") String nodeName,
+                                    @Param("internalIp") String internalIp,
+                                    @Param("reason") String reason,
+                                    @Param("threshold") int threshold);
+
     int attachK8sIdentity(@Param("nodeId") Integer nodeId,
                           @Param("cluster") String cluster,
                           @Param("k8sUid") String k8sUid);

@@ -62,6 +62,19 @@ class NetworkProbeServiceTest {
     }
 
     @Test
+    void parsesExternalTunnelEdgesAndSkipsMalformedEntries() {
+        java.util.List<NetworkProbeService.ExternalProbeTarget> targets =
+                NetworkProbeService.parseExternalTargets(
+                        "alihz@10.214.0.1/master-40,bad,alibj@10.214.0.3/master-215");
+        assertEquals(2, targets.size());
+        assertEquals("alihz", targets.get(0).remoteNode);
+        assertEquals("10.214.0.1", targets.get(0).tunnelIp);
+        assertEquals("master-40", targets.get(0).logicalLocalNode);
+        assertEquals("alibj", targets.get(1).remoteNode);
+        assertEquals("master-215", targets.get(1).logicalLocalNode);
+    }
+
+    @Test
     void readsReceivedAggregateRegardlessOfFieldOrderAndScientificNotation() {
         // sum_sent deliberately follows sum_received; the last bps field is not the receiver rate.
         String output = "{\"end\":{\"sum_received\":{\"bits_per_second\":6.023201145840092e9},"

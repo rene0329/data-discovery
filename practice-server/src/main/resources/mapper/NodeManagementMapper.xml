@@ -189,6 +189,29 @@
           AND deleted_at IS NULL
     </update>
 
+    <update id="markExternalNodeOnline">
+        UPDATE node_management
+        SET internal_ip = #{internalIp}, last_seen_at = UTC_TIMESTAMP(3),
+            last_update_time = UTC_TIMESTAMP(3), observed_status = 'ONLINE',
+            observed_status_reason = NULL, offline_observation_count = 0
+        WHERE cluster = #{cluster} AND node_name = #{nodeName} AND deleted_at IS NULL
+    </update>
+
+    <update id="markExternalNodeUnreachable">
+        UPDATE node_management
+        SET internal_ip = #{internalIp}, last_update_time = UTC_TIMESTAMP(3),
+            offline_observation_count = offline_observation_count + 1,
+            observed_status = CASE
+                WHEN offline_observation_count + 1 &gt;= #{threshold} THEN 'OFFLINE'
+                ELSE observed_status
+            END,
+            observed_status_reason = CASE
+                WHEN offline_observation_count + 1 &gt;= #{threshold} THEN #{reason}
+                ELSE observed_status_reason
+            END
+        WHERE cluster = #{cluster} AND node_name = #{nodeName} AND deleted_at IS NULL
+    </update>
+
     <update id="updateRegistrationMetadata" parameterType="org.example.entity.NodeManagement">
         UPDATE node_management
         SET display_name = #{displayName}, type = #{type}, labels_json = #{labelsJson},

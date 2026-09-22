@@ -36,7 +36,8 @@ public class InternalAgentAuthenticationFilter extends OncePerRequestFilter {
         if (!"POST".equalsIgnoreCase(request.getMethod())) return true;
         String path = request.getRequestURI();
         return !("/api/network/metrics/batch".equals(path)
-                || "/api/network/nodes/public-ip".equals(path));
+                || "/api/network/nodes/public-ip".equals(path)
+                || "/api/network/nodes/heartbeat".equals(path));
     }
 
     @Override

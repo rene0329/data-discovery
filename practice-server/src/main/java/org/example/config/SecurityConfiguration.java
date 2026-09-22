@@ -39,7 +39,8 @@ public class SecurityConfiguration {
                 .antMatchers(HttpMethod.GET, "/api/v1/privacy-computing/capabilities",
                         "/api/v1/privacy-computing/templates").permitAll()
                 .antMatchers(HttpMethod.POST, "/api/network/metrics/batch",
-                        "/api/network/nodes/public-ip").hasRole("INTERNAL_AGENT")
+                        "/api/network/nodes/public-ip",
+                        "/api/network/nodes/heartbeat").hasRole("INTERNAL_AGENT")
                 .antMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .antMatchers(HttpMethod.POST, "/api/v1/scheduling/storage-plans/preview")
                         .hasAnyRole("ADMIN", "DATA_OWNER")

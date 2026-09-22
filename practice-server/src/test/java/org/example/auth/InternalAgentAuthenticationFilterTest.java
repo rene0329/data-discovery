@@ -51,4 +51,17 @@ class InternalAgentAuthenticationFilterTest {
         verify(chain, never()).doFilter(request, response);
         assertEquals(401, response.getStatus());
     }
+
+    @Test
+    void protectsExternalNodeHeartbeatEndpoint() throws Exception {
+        InternalAgentAuthenticationFilter filter = new InternalAgentAuthenticationFilter(TOKEN, new ObjectMapper());
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/network/nodes/heartbeat");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        filter.doFilter(request, response, chain);
+
+        verify(chain, never()).doFilter(request, response);
+        assertEquals(401, response.getStatus());
+    }
 }
