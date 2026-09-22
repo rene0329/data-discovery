@@ -15,3 +15,20 @@ spec:
       nodePort: 30482        # ZJ 分配给 topic4-1 的后端 API 端口
       name: http
       protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: practice-server-headless
+  namespace: topic4-1
+  labels:
+    app: practice-server
+spec:
+  clusterIP: None
+  selector:
+    app: practice-server
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+      protocol: TCP
