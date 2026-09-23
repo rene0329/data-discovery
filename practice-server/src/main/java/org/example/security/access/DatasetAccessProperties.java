@@ -14,6 +14,8 @@ import java.util.Map;
 public class DatasetAccessProperties {
     private boolean enabled = true;
     private long tokenTtlSeconds = 300;
+    /** Lifetime of a self-service dataset usage grant (访问控制 -> 申请令牌). */
+    private long grantTtlMinutes = 60;
     private String hmacSecret = "topic4-acceptance-hmac-secret-change-before-production";
     private Map<String, String> credentials = new LinkedHashMap<>();
     private Map<String, List<String>> permissions = new LinkedHashMap<>();
@@ -29,6 +31,8 @@ public class DatasetAccessProperties {
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
     public long getTokenTtlSeconds() { return tokenTtlSeconds; }
     public void setTokenTtlSeconds(long tokenTtlSeconds) { this.tokenTtlSeconds = tokenTtlSeconds; }
+    public long getGrantTtlMinutes() { return grantTtlMinutes; }
+    public void setGrantTtlMinutes(long grantTtlMinutes) { this.grantTtlMinutes = grantTtlMinutes; }
     public String getHmacSecret() { return hmacSecret; }
     public void setHmacSecret(String hmacSecret) { this.hmacSecret = hmacSecret; }
     public Map<String, String> getCredentials() { return credentials; }

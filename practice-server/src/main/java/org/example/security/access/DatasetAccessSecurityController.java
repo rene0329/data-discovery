@@ -61,8 +61,9 @@ public class DatasetAccessSecurityController {
             @RequestParam(required = false) String requestId,
             @RequestParam(required = false) String runId,
             @RequestParam(required = false) String principal,
+            @RequestParam(required = false) String decision,
             @RequestParam(defaultValue = "100") int limit) {
-        return ApiV1Response.ok(service.findAuditEvents(requestId, runId, principal, limit));
+        return ApiV1Response.ok(service.findAuditEvents(requestId, runId, principal, decision, limit));
     }
 
     private AccessAuditContext context(String requestId, String runId,

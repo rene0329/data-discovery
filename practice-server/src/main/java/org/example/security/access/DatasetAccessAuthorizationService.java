@@ -213,7 +213,16 @@ public class DatasetAccessAuthorizationService {
 
     public List<DatasetAccessAuditEvent> findAuditEvents(String requestId, String runId,
                                                           String principal, int limit) {
+        return findAuditEvents(requestId, runId, principal, null, limit);
+    }
+
+    /** {@code decision} (ALLOWED / DENIED, case-insensitive) is optional and filtered in SQL. */
+    public List<DatasetAccessAuditEvent> findAuditEvents(String requestId, String runId,
+                                                          String principal, String decision,
+                                                          int limit) {
+        String normalizedDecision = trimToNull(decision);
         return auditMapper.find(trimToNull(requestId), trimToNull(runId), trimToNull(principal),
+                normalizedDecision == null ? null : normalizedDecision.toUpperCase(Locale.ROOT),
                 Math.max(1, Math.min(limit, 500)));
     }
 
