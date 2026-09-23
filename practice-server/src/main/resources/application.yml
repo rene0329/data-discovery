@@ -190,6 +190,8 @@ app:
     # Daily bounded bandwidth probes: allow two hours for scheduling, retries and reporting.
     # Failed probes still mark links inactive immediately; node health is checked separately.
     stale-after-seconds: 93600
+    # Sites whose gateway links to a specific center node instead of the hub (site:node).
+    site-uplinks: shenzhen:master-141,hangzhou:master-215
   runtime-image:
     verify-namespace: ${APP_RUNTIME_IMAGE_VERIFY_NAMESPACE:topic4-1}
     verify-timeout-seconds: 3600

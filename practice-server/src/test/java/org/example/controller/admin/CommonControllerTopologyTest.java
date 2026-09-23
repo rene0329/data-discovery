@@ -63,6 +63,7 @@ class CommonControllerTopologyTest {
         assertEquals(1, firstNode.get("nodeId"));
         assertEquals("10.0.0.1", firstNode.get("internalIp"));
         assertEquals("8.8.8.8", firstNode.get("externalIp"));
+        assertEquals("center", firstNode.get("site"));
         assertEquals(location, firstNode.get("publicIpLocation"));
         verify(locations).lookup("8.8.8.8");
         org.junit.jupiter.api.Assertions.assertNull(firstNode.get("cpu"));

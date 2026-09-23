@@ -5,6 +5,7 @@ import org.example.entity.NodeManagement;
 import org.example.exception.RegistrationException;
 import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
@@ -28,20 +29,43 @@ public class NetworkTopologyService {
     private final NodeManagementMapper nodes;
     private final NodeAvailabilityService availability;
     private final long staleAfterSeconds;
+    private final Map<String, String> siteUplinks;
 
     public NetworkTopologyService(EdgeManagementMapper edges, NodeManagementMapper nodes,
+                                  NodeAvailabilityService availability, long staleAfterSeconds) {
+        this(edges, nodes, availability, staleAfterSeconds, "");
+    }
+
+    @Autowired
+    public NetworkTopologyService(EdgeManagementMapper edges, NodeManagementMapper nodes,
                                   NodeAvailabilityService availability,
-                                  @Value("${app.network-topology.stale-after-seconds:93600}") long staleAfterSeconds) {
+                                  @Value("${app.network-topology.stale-after-seconds:93600}") long staleAfterSeconds,
+                                  @Value("${app.network-topology.site-uplinks:}") String siteUplinks) {
         this.edges = edges;
         this.nodes = nodes;
         this.availability = availability;
         this.staleAfterSeconds = Math.max(1, staleAfterSeconds);
+        this.siteUplinks = parseUplinks(siteUplinks);
+    }
+
+    /** "site:node,site:node" — which hub-site node a site's gateway links to instead of the hub. */
+    static Map<String, String> parseUplinks(String value) {
+        Map<String, String> uplinks = new HashMap<>();
+        if (value == null) return uplinks;
+        for (String entry : value.split(",")) {
+            String[] parts = entry.split(":", 2);
+            if (parts.length == 2 && !parts[0].trim().isEmpty() && !parts[1].trim().isEmpty()) {
+                uplinks.put(parts[0].trim().toLowerCase(Locale.ROOT), parts[1].trim());
+            }
+        }
+        return Collections.unmodifiableMap(uplinks);
     }
 
     /**
      * Links are derived, not stored: full mesh inside each site, plus one link from each
-     * other site's gateway to the hub site's hub node. Unknown, failed and stale links stay
-     * visible without being treated as usable.
+     * other site's gateway to the hub site's hub node, or to the hub-site node configured as
+     * that site's uplink. Unknown, failed and stale links stay visible without being treated
+     * as usable.
      */
     public List<EdgeManagement> links() {
         Map<String, EdgeManagement> measured = new HashMap<>();
@@ -50,7 +74,7 @@ public class NetworkTopologyService {
         }
         Instant cutoff = Instant.now().minusSeconds(staleAfterSeconds);
         List<EdgeManagement> result = new ArrayList<>();
-        for (int[] pair : derivePairs(nodes.selectAllNodes())) {
+        for (int[] pair : derivePairs(nodes.selectAllNodes(), siteUplinks)) {
             EdgeManagement metric = measured.get(pairKey(pair[0], pair[1]));
             String status = metric == null ? "UNKNOWN" : metric.getStatus();
             if (metric != null && ("active".equalsIgnoreCase(status) || "UP".equalsIgnoreCase(status))) {
@@ -79,14 +103,14 @@ public class NetworkTopologyService {
     }
 
     /** "cluster-REGION-N" belongs to that region's site; any other name belongs to the hub site. */
-    static String siteOf(String nodeName) {
+    public static String siteOf(String nodeName) {
         if (nodeName == null) return HUB_SITE;
         Matcher matcher = REGIONAL_NODE.matcher(nodeName.trim().toLowerCase(Locale.ROOT));
         if (!matcher.matches()) return HUB_SITE;
         return REGION_SITES.getOrDefault(matcher.group(1), matcher.group(1));
     }
 
-    static List<int[]> derivePairs(List<NodeManagement> all) {
+    static List<int[]> derivePairs(List<NodeManagement> all, Map<String, String> uplinks) {
         Map<String, List<NodeManagement>> bySite = new TreeMap<>();
         for (NodeManagement node : all) {
             if (node.getNodeId() == null || node.getDeletedAt() != null) continue;
@@ -110,7 +134,11 @@ public class NetworkTopologyService {
         for (Map.Entry<String, List<NodeManagement>> site : bySite.entrySet()) {
             if (site.getKey().equals(hubSite)) continue;
             NodeManagement gateway = preferred(site.getValue(), "compute", "compute-storage", "storage");
-            addPair(pairs, seen, gateway.getNodeId(), hub.getNodeId());
+            String uplinkName = uplinks.get(site.getKey());
+            NodeManagement uplink = bySite.get(hubSite).stream()
+                    .filter(member -> member.getNodeName() != null && member.getNodeName().trim().equals(uplinkName))
+                    .findFirst().orElse(hub);
+            addPair(pairs, seen, gateway.getNodeId(), uplink.getNodeId());
         }
         pairs.sort(Comparator.<int[]>comparingInt(pair -> pair[0]).thenComparingInt(pair -> pair[1]));
         return pairs;

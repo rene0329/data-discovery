@@ -619,6 +619,7 @@ public class CommonController {
             nodeMap.put("id", node.getNodeName());
             nodeMap.put("nodeId", node.getNodeId());
             nodeMap.put("cluster", node.getCluster());
+            nodeMap.put("site", NetworkTopologyService.siteOf(node.getNodeName()));
             nodeMap.put("internalIp", node.getInternalIp());
             nodeMap.put("externalIp", node.getExternalIp());
             nodeMap.put("publicIpLocation", publicIpLocationService.lookup(node.getExternalIp()));

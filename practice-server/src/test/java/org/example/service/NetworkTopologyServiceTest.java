@@ -58,6 +58,22 @@ class NetworkTopologyServiceTest {
     }
 
     @Test
+    void configuredUplinkAttachesSiteGatewayToThatCenterNodeInsteadOfHub() {
+        nodes.add(node(9, "cluster-sz-1", "compute"));
+        nodes.add(node(8, "cluster-sz-2", "storage"));
+        NetworkTopologyService uplinked = new NetworkTopologyService(edgeMapper, nodeMapper,
+                new NodeAvailabilityService(300), 1800, " shenzhen : master-141 , hangzhou:master-215,beijing:missing");
+        List<String> derived = pairs(uplinked.links());
+        assertTrue(derived.containsAll(Arrays.asList("1-9", "2-4", "3-12", "8-9")));
+        assertFalse(derived.contains("3-9"));
+        assertFalse(derived.contains("3-4"));
+        metrics.add(metric(2, 4, 7, 80));
+        metrics.add(metric(1, 9, 3, 70));
+        metrics.add(metric(8, 9, 1, 900));
+        assertEquals(Arrays.asList(4, 2, 1, 9, 8), uplinked.requirePath(4, 8).getNodeIds());
+    }
+
+    @Test
     void newNodeJoinsItsSiteMeshAndNewSiteGetsOneHubLinkWithoutConfiguration() {
         nodes.add(node(13, "cluster-bj-3", "storage"));
         nodes.add(node(20, "cluster-gz-1", "storage"));
