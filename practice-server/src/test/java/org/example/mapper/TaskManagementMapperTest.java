@@ -36,6 +36,27 @@ class TaskManagementMapperTest {
     }
 
     @Test
+    void scheduleListFlagsTasksLaunchedByComputePlans() throws Exception {
+        Configuration configuration = new Configuration();
+        String resource = "mapper/TaskManagementMapper.xml";
+        try (InputStream input = getClass().getClassLoader().getResourceAsStream(resource)) {
+            assertNotNull(input);
+            new XMLMapperBuilder(input, configuration, resource, configuration.getSqlFragments()).parse();
+        }
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("query", "任务");
+        String sql = configuration.getMappedStatement(
+                "org.example.mapper.TaskManagementMapper.listWithSchedule")
+                .getBoundSql(params).getSql().replaceAll("\\s+", " ");
+
+        assertTrue(sql.contains(
+                "EXISTS(SELECT 1 FROM scheduling_plan sp WHERE sp.internal_task_id = tm.task_id) AS manual_schedule"));
+        assertTrue(sql.contains("tm.schedule IS NOT NULL AND tm.schedule != ''"));
+        assertTrue(sql.contains("tm.task_name LIKE CONCAT('%', ?, '%')"));
+    }
+
+    @Test
     void registeredTaskPersistenceUsesSemanticEvidenceFields() throws Exception {
         Configuration configuration = new Configuration();
         String resource = "mapper/TaskManagementMapper.xml";

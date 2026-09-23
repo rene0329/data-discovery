@@ -40,4 +40,7 @@ public class TaskManagement {
     private Boolean executionEvidenceComplete;
     private LocalDateTime startedAt;
     private LocalDateTime finishedAt;
+
+    /** Read-only (调度结果 list): true when the task was launched by a 数据集管理 compute plan. */
+    private Boolean manualSchedule;
 }
