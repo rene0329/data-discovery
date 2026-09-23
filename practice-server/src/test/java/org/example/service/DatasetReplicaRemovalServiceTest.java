@@ -1,6 +1,7 @@
 package org.example.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.auth.AuthMapper;
 import org.example.dto.registration.OperationResult;
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
@@ -10,6 +11,7 @@ import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
+import org.example.security.access.DatasetDomainMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -54,7 +56,8 @@ class DatasetReplicaRemovalServiceTest {
         uploadClient = mock(DatasetUploadClient.class);
         service = new DatasetRegistrationService(mapper, nodeMapper, mock(RuntimeImageMapper.class),
                 auditMapper, new ObjectMapper(), mock(RestTemplate.class), availability, uploadClient,
-                mock(NodeAvailabilityService.class), mock(PlatformTransactionManager.class), 8080, "/dataset");
+                mock(NodeAvailabilityService.class), mock(DatasetDomainMapper.class), mock(AuthMapper.class),
+                mock(PlatformTransactionManager.class), 8080, "/dataset");
         when(mapper.findDatasetById(42L)).thenReturn(RegisteredDataset.builder()
                 .datasetId(42L).name("sales").datasetVersion("1.0").legacyDataId(7).status("ACTIVE").build());
         node = NodeManagement.builder().nodeId(3).nodeName("storage-3").internalIp("10.0.0.3").build();
