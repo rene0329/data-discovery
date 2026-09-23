@@ -49,7 +49,7 @@ spec:
 
       containers:
         - name: data-discovery
-          image: 10.15.16.40:30455/data-discovery:v-dd5603c26bb7673c8b3de49b35c98525ee7e1074
+          image: 10.15.16.40:30455/data-discovery:v-48219487ff4cf1a27106ef95d03f394c792e2e61
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
