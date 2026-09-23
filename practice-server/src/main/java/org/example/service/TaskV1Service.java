@@ -266,6 +266,8 @@ public class TaskV1Service {
             // IN_PLACE means "same physical site", not "same node_id": a
             // replica sitting on a storage-only node is fine as long as a
             // schedulable compute node exists in that node's site_code.
+            Set<Integer> availableComputeNodeIds = availableNodes.stream()
+                    .map(NodeManagement::getNodeId).collect(Collectors.toSet());
             Set<String> availableComputeSites = availableNodes.stream()
                     .map(NodeManagement::getSiteCode).filter(Objects::nonNull).collect(Collectors.toSet());
             for (Long datasetId : request.getDatasetIds()) {
@@ -282,6 +284,12 @@ public class TaskV1Service {
                     if (!usability.isUsable()) {
                         replicaReasons.add(nodeLabel + ": " + usability.getReason());
                         continue;
+                    }
+                    if (availableComputeNodeIds.contains(replica.getNodeId())) {
+                        // Fast path: the replica already sits on an available compute
+                        // node, so no site_code lookup is needed at all.
+                        hasInPlaceReplica = true;
+                        break;
                     }
                     String siteCode = replicaNode == null ? null : replicaNode.getSiteCode();
                     if (siteCode == null) {
