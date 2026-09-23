@@ -56,11 +56,15 @@ public interface DatasetAccessGrantMapper {
     @Select("SELECT user_id FROM app_user WHERE user_id = #{userId} FOR UPDATE")
     Long lockUser(@Param("userId") Long userId);
 
-    /** Ownership facts needed by the usage policy; soft-deleted datasets are not returned. */
+    /**
+     * Existence and version of the given datasets for the usage policy; soft-deleted
+     * datasets are not returned. Ownership (owner_domain_id) is deliberately not read:
+     * the policy decides by location (DatasetDomainMapper).
+     */
     @Select({"<script>",
-            "SELECT dataset_id, dataset_version, owner_domain_id FROM registered_dataset",
+            "SELECT dataset_id, dataset_version FROM registered_dataset",
             "WHERE deleted_at IS NULL AND dataset_id IN",
             "<foreach collection='datasetIds' item='id' open='(' separator=',' close=')'>#{id}</foreach>",
             "</script>"})
-    List<RegisteredDataset> findDatasetOwnership(@Param("datasetIds") Collection<Long> datasetIds);
+    List<RegisteredDataset> findLiveDatasets(@Param("datasetIds") Collection<Long> datasetIds);
 }

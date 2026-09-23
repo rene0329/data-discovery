@@ -30,25 +30,28 @@ public interface AuthMapper {
             + "WHERE ur.user_id=#{userId} ORDER BY r.role_code")
     List<String> listRoleCodes(Long userId);
 
-    @Select("SELECT domain_id id, domain_code code, name, description, enabled, created_at, updated_at "
-            + "FROM collaboration_domain ORDER BY domain_id")
+    String DOMAIN_SELECT = "SELECT domain_id id, domain_code code, name, site_code, description, enabled, "
+            + "created_at, updated_at FROM collaboration_domain ";
+
+    @Select(DOMAIN_SELECT + "ORDER BY domain_id")
     List<CollaborationDomain> listDomains();
 
-    @Select("SELECT domain_id id, domain_code code, name, description, enabled, created_at, updated_at "
-            + "FROM collaboration_domain WHERE domain_id=#{id}")
+    @Select(DOMAIN_SELECT + "WHERE domain_id=#{id}")
     CollaborationDomain findDomainById(Long id);
 
-    @Select("SELECT domain_id id, domain_code code, name, description, enabled, created_at, updated_at "
-            + "FROM collaboration_domain WHERE domain_code=#{code}")
+    @Select(DOMAIN_SELECT + "WHERE domain_code=#{code}")
     CollaborationDomain findDomainByCode(String code);
 
-    @Insert("INSERT INTO collaboration_domain(domain_code,name,description,enabled) "
-            + "VALUES(#{code},#{name},#{description},#{enabled})")
+    @Select(DOMAIN_SELECT + "WHERE site_code=#{siteCode}")
+    CollaborationDomain findDomainBySiteCode(String siteCode);
+
+    @Insert("INSERT INTO collaboration_domain(domain_code,name,site_code,description,enabled) "
+            + "VALUES(#{code},#{name},#{siteCode},#{description},#{enabled})")
     @Options(useGeneratedKeys = true, keyProperty = "id")
     int insertDomain(CollaborationDomain domain);
 
-    @Update("UPDATE collaboration_domain SET name=#{name}, description=#{description}, enabled=#{enabled} "
-            + "WHERE domain_id=#{id}")
+    @Update("UPDATE collaboration_domain SET name=#{name}, site_code=#{siteCode}, description=#{description}, "
+            + "enabled=#{enabled} WHERE domain_id=#{id}")
     int updateDomain(CollaborationDomain domain);
 
     @Insert("INSERT INTO app_user(username,password_hash,display_name,domain_id,enabled,token_version) "

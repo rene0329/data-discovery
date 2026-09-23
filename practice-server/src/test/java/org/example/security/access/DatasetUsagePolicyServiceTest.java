@@ -32,11 +32,13 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -61,8 +63,22 @@ class DatasetUsagePolicyServiceTest {
     private static final AuthenticatedUser OWNER_A = user(7L, "owner-a", 1L, "DATA_OWNER");
     private static final AuthenticatedUser OWNER_NO_DOMAIN = user(8L, "owner-free", null, "DATA_OWNER");
     private static final AuthenticatedUser AUDITOR_A = user(9L, "auditor-a", 1L, "AUDITOR");
+    private static final AuthenticatedUser OWNER_B = user(10L, "owner-b", 2L, "DATA_OWNER");
+    private static final AuthenticatedUser OWNER_C = user(11L, "owner-c", 3L, "DATA_OWNER");
+    private static final AuthenticatedUser OWNER_D = user(12L, "owner-d", 4L, "DATA_OWNER");
+
+    // Nodes: 11/12 in site sh (domain 1), 21 in sz (domain 2), 31 in bj (domain 3),
+    // 41 in hz (domain 4, disabled), 51 in an unmapped site, 61 without a site.
+    private static final int SH_1 = 11;
+    private static final int SH_2 = 12;
+    private static final int SZ_1 = 21;
+    private static final int BJ_1 = 31;
+    private static final int HZ_1 = 41;
+    private static final int GZ_1 = 51;
+    private static final int NO_SITE = 61;
 
     private InMemoryGrants grants;
+    private InMemoryLocations locations;
     private DatasetAccessAuditMapper audits;
     private PlatformTransactionManager transactions;
     private DatasetAccessProperties properties;
@@ -71,16 +87,36 @@ class DatasetUsagePolicyServiceTest {
     @BeforeEach
     void setUp() {
         grants = new InMemoryGrants();
-        grants.dataset(1L, "v1", 1L, "Domain A");
-        grants.dataset(2L, "v2", 2L, "Domain B");
+        locations = new InMemoryLocations(grants);
+        locations.domain(1L, "Domain A", "sh", true);
+        locations.domain(2L, "Domain B", "sz", true);
+        locations.domain(3L, "Domain C", "bj", true);
+        locations.domain(4L, "Domain D", "hz", false);
+        locations.domain(5L, "Domain without site", null, true);
+        locations.node(SH_1, "sh");
+        locations.node(SH_2, "sh");
+        locations.node(SZ_1, "sz");
+        locations.node(BJ_1, "bj");
+        locations.node(HZ_1, "hz");
+        locations.node(GZ_1, "gz");
+        locations.node(NO_SITE, null);
+        // 1 is located in A, 2 in B, 3 nowhere (no replica at all).
+        grants.dataset(1L, "v1", null, null);
+        grants.dataset(2L, "v2", null, null);
         grants.dataset(3L, "v3", null, null);
+        locations.replica(1L, SH_1, "AVAILABLE");
+        locations.replica(2L, SZ_1, "AVAILABLE");
         DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
-        when(datasets.listDatasets(null, null)).thenAnswer(inv -> new ArrayList<>(grants.datasets.values()));
-        when(datasets.findDatasetById(anyLong())).thenAnswer(inv -> grants.datasets.get(inv.<Long>getArgument(0)));
+        when(datasets.listDatasets(null, null)).thenAnswer(inv -> grants.datasets.values().stream()
+                .filter(dataset -> !grants.deleted.contains(dataset.getDatasetId())).collect(Collectors.toList()));
+        when(datasets.findDatasetById(anyLong())).thenAnswer(inv -> {
+            Long id = inv.getArgument(0);
+            return grants.deleted.contains(id) ? null : grants.datasets.get(id);
+        });
         audits = mock(DatasetAccessAuditMapper.class);
         transactions = mock(PlatformTransactionManager.class);
         properties = new DatasetAccessProperties();
-        service = new DatasetUsagePolicyService(new CurrentUserService(), grants, audits, datasets,
+        service = new DatasetUsagePolicyService(new CurrentUserService(), grants, locations, audits, datasets,
                 properties, transactions, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -93,7 +129,7 @@ class DatasetUsagePolicyServiceTest {
     // ---- rule matrix -------------------------------------------------------
 
     @Test
-    void adminMayUseEveryDatasetIncludingOnesWithoutOwnerDomain() {
+    void adminMayUseEveryDatasetIncludingOnesLocatedInNoDomain() {
         login(ADMIN);
 
         assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Arrays.asList(1L, 2L, 3L)));
@@ -113,7 +149,150 @@ class DatasetUsagePolicyServiceTest {
         assertTrue(items.get(1L).isAccessible());
         assertFalse(items.get(2L).isAccessible());
         assertNull(items.get(2L).getBasis());
-        assertFalse(items.get(3L).isAccessible(), "a dataset without owner domain needs a grant");
+        assertFalse(items.get(3L).isAccessible(), "a dataset located in no domain needs a grant");
+    }
+
+    @Test
+    void datasetInTwoDomainsServesBothDomainsAndNobodyElse() {
+        grants.dataset(4L, "v4", null, null);
+        locations.replica(4L, SH_2, "AVAILABLE");
+        locations.replica(4L, SZ_1, "AVAILABLE");
+        locations.replica(4L, SH_1, "AVAILABLE");
+
+        login(OWNER_A);
+        assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+        DatasetUsageModels.Item item = itemsById().get(4L);
+        assertEquals("OWN_DOMAIN", item.getBasis());
+        assertEquals(Arrays.asList(1L, 2L), item.getDomainIds(), "one entry per domain, ordered by domain id");
+        assertEquals(Arrays.asList("Domain A", "Domain B"), item.getDomainNames());
+
+        login(OWNER_B);
+        assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+        assertEquals("OWN_DOMAIN", itemsById().get(4L).getBasis());
+
+        login(OWNER_C);
+        assertEquals(Collections.singletonList(4L),
+                service.checkAndAuditTaskDatasets(Collections.singletonList(4L), "req-two"));
+        assertEquals("LOCATION_DOMAIN_OR_GRANT;userDomain=3;datasetDomains=1,2;roles=DATA_OWNER",
+                singleAuditEvent().getPolicyRule());
+    }
+
+    @Test
+    void missingAndVerifyFailedReplicasDoNotLocateADataset() {
+        grants.dataset(4L, "v4", null, null);
+        locations.replica(4L, SH_1, "MISSING");
+        locations.replica(4L, SH_2, "VERIFY_FAILED");
+
+        login(OWNER_A);
+        assertEquals(Collections.singletonList(4L), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+        DatasetUsageModels.Item item = itemsById().get(4L);
+        assertFalse(item.isAccessible());
+        assertEquals(Collections.emptyList(), item.getDomainIds());
+        assertEquals(Collections.emptyList(), item.getDomainNames());
+    }
+
+    @Test
+    void everyOtherReplicaStateStillLocatesTheDataset() {
+        String[] states = {"AVAILABLE", "VERIFYING", "UNVERIFIED", "UNAVAILABLE"};
+        for (int i = 0; i < states.length; i++) {
+            long datasetId = 10L + i;
+            grants.dataset(datasetId, "v", null, null);
+            locations.replica(datasetId, SH_1, states[i]);
+        }
+
+        login(OWNER_A);
+        assertEquals(Collections.emptyList(),
+                service.inaccessibleDatasetIds(Arrays.asList(10L, 11L, 12L, 13L)));
+        Map<Long, DatasetUsageModels.Item> items = itemsById();
+        for (long id = 10L; id <= 13L; id++) {
+            assertEquals("OWN_DOMAIN", items.get(id).getBasis(), "replica state of dataset " + id);
+            assertEquals(Collections.singletonList(1L), items.get(id).getDomainIds());
+        }
+    }
+
+    @Test
+    void movedDatasetFollowsItsReplicasToTheTargetDomain() {
+        // After a MOVE from sh to sz the source row stays behind as MISSING.
+        grants.dataset(4L, "v4", null, null);
+        locations.replica(4L, SH_1, "MISSING");
+        locations.replica(4L, SZ_1, "AVAILABLE");
+
+        login(OWNER_B);
+        assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+        assertEquals("OWN_DOMAIN", itemsById().get(4L).getBasis());
+
+        login(OWNER_A);
+        assertEquals(Collections.singletonList(4L),
+                service.checkAndAuditTaskDatasets(Collections.singletonList(4L), "req-moved"));
+        assertEquals("LOCATION_DOMAIN_OR_GRANT;userDomain=1;datasetDomains=2;roles=DATA_OWNER",
+                singleAuditEvent().getPolicyRule());
+        DatasetUsageModels.Item item = itemsById().get(4L);
+        assertEquals(Collections.singletonList(2L), item.getDomainIds());
+        assertEquals(Collections.singletonList("Domain B"), item.getDomainNames());
+    }
+
+    @Test
+    void disabledDomainDoesNotCount() {
+        grants.dataset(4L, "v4", null, null);
+        locations.replica(4L, HZ_1, "AVAILABLE");
+        locations.replica(4L, BJ_1, "AVAILABLE");
+
+        login(OWNER_D);
+        assertEquals(Collections.singletonList(4L), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+
+        login(OWNER_C);
+        assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+        assertEquals(Collections.singletonList(3L), itemsById().get(4L).getDomainIds());
+    }
+
+    @Test
+    void replicasOutsideEveryDomainSiteOrOnUnregisteredNodesDoNotLocateADataset() {
+        grants.dataset(4L, "v4", null, null);
+        locations.replica(4L, GZ_1, "AVAILABLE");
+        locations.replica(4L, NO_SITE, "AVAILABLE");
+        locations.replica(4L, 99, "AVAILABLE");
+        grants.dataset(5L, "v5", null, null);
+        locations.node(71, "sh");
+        locations.deletedNodes.add(71);
+        locations.replica(5L, 71, "AVAILABLE");
+
+        login(OWNER_A);
+        assertEquals(Arrays.asList(4L, 5L), service.inaccessibleDatasetIds(Arrays.asList(4L, 5L)));
+        assertEquals(Collections.emptyList(), itemsById().get(4L).getDomainIds());
+        assertEquals(Collections.emptyList(), itemsById().get(5L).getDomainIds());
+    }
+
+    @Test
+    void ownerDomainIdNoLongerInfluencesTheDecision() {
+        // Held by domain A (数据归属) but located in B, and the reverse.
+        grants.dataset(4L, "v4", 1L, "Domain A");
+        locations.replica(4L, SZ_1, "AVAILABLE");
+        grants.dataset(5L, "v5", 2L, "Domain B");
+        locations.replica(5L, SH_1, "AVAILABLE");
+
+        login(OWNER_A);
+        assertEquals(Collections.singletonList(4L), service.inaccessibleDatasetIds(Arrays.asList(4L, 5L)));
+        Map<Long, DatasetUsageModels.Item> items = itemsById();
+        assertNull(items.get(4L).getBasis());
+        assertEquals(Collections.singletonList(2L), items.get(4L).getDomainIds());
+        assertEquals("OWN_DOMAIN", items.get(5L).getBasis());
+        assertEquals(Collections.singletonList(1L), items.get(5L).getDomainIds());
+        // Not "already accessible": the holder domain does not count.
+        assertNotNull(service.issueGrant(new DatasetUsageModels.GrantRequest(4L, "held by A, stored in B"),
+                "req-own", null).getGrantId());
+        assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+    }
+
+    @Test
+    void softDeletedDatasetsAreIgnored() {
+        grants.dataset(4L, "v4", null, null);
+        locations.replica(4L, SZ_1, "AVAILABLE");
+        grants.deleted.add(4L);
+
+        login(OWNER_A);
+        assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
+        assertFalse(itemsById().containsKey(4L));
+        assertTrue(locations.findAllLocationDomains().stream().noneMatch(row -> row.getDatasetId() == 4L));
     }
 
     @Test
@@ -201,7 +380,8 @@ class DatasetUsagePolicyServiceTest {
         assertEquals("TASK_CREATE", first.getAction());
         assertEquals("DENIED", first.getDecision());
         assertEquals("CROSS_DOMAIN_ACCESS_DENIED", first.getReason());
-        assertEquals("DOMAIN_OR_GRANT;userDomain=1;datasetDomain=2;roles=DATA_OWNER", first.getPolicyRule());
+        assertEquals("LOCATION_DOMAIN_OR_GRANT;userDomain=1;datasetDomains=2;roles=DATA_OWNER",
+                first.getPolicyRule());
         assertEquals("10.0.0.8", first.getClientIp());
         assertNull(first.getFilePath());
         assertNull(first.getTargetNode());
@@ -209,7 +389,7 @@ class DatasetUsagePolicyServiceTest {
         assertNull(first.getJti());
         assertNull(first.getTokenExpiresAt());
         assertEquals("3", captor.getAllValues().get(1).getDatasetId());
-        assertEquals("DOMAIN_OR_GRANT;userDomain=1;datasetDomain=none;roles=DATA_OWNER",
+        assertEquals("LOCATION_DOMAIN_OR_GRANT;userDomain=1;datasetDomains=none;roles=DATA_OWNER",
                 captor.getAllValues().get(1).getPolicyRule());
 
         ArgumentCaptor<TransactionDefinition> definition = ArgumentCaptor.forClass(TransactionDefinition.class);
@@ -290,8 +470,23 @@ class DatasetUsagePolicyServiceTest {
         assertEquals("ds-2", item.getDatasetCode());
         assertEquals("v2", item.getVersion());
         assertEquals("ACTIVE", item.getStatus());
-        assertEquals(2L, item.getOwnerDomainId());
-        assertEquals("Domain B", item.getOwnerDomainName());
+        assertEquals(Collections.singletonList(2L), item.getDomainIds());
+        assertEquals(Collections.singletonList("Domain B"), item.getDomainNames());
+        DatasetUsageModels.Item nowhere = itemsById().get(3L);
+        assertNotNull(nowhere.getDomainIds(), "never null");
+        assertTrue(nowhere.getDomainIds().isEmpty());
+        assertTrue(nowhere.getDomainNames().isEmpty());
+    }
+
+    @Test
+    void adminOverviewStillShowsWhereEachDatasetIs() {
+        login(ADMIN);
+
+        Map<Long, DatasetUsageModels.Item> items = itemsById();
+        assertEquals(Collections.singletonList(1L), items.get(1L).getDomainIds());
+        assertEquals(Collections.singletonList("Domain A"), items.get(1L).getDomainNames());
+        assertEquals("ADMIN", items.get(3L).getBasis());
+        assertTrue(items.get(3L).getDomainIds().isEmpty());
     }
 
     @Test
@@ -379,6 +574,20 @@ class DatasetUsagePolicyServiceTest {
         assertConflict(1L, "DATASET_ALREADY_ACCESSIBLE");
         assertTrue(grants.rows.isEmpty());
         verify(audits, never()).insert(any());
+    }
+
+    @Test
+    void alreadyAccessibleFollowsTheCurrentLocation() {
+        grants.dataset(4L, "v4", null, null);
+        locations.replica(4L, SH_1, "MISSING");
+        locations.replica(4L, SZ_1, "AVAILABLE");
+
+        login(OWNER_B);
+        assertConflict(4L, "DATASET_ALREADY_ACCESSIBLE");
+
+        login(OWNER_A);
+        assertNotNull(service.issueGrant(new DatasetUsageModels.GrantRequest(4L, "moved to B"), "req", null)
+                .getGrantId());
     }
 
     @Test
@@ -496,6 +705,7 @@ class DatasetUsagePolicyServiceTest {
     /** Mirrors the SQL of DatasetAccessGrantMapper: active means expires_at > now. */
     static final class InMemoryGrants implements DatasetAccessGrantMapper {
         final Map<Long, RegisteredDataset> datasets = new LinkedHashMap<>();
+        final Set<Long> deleted = new HashSet<>();
         final List<DatasetAccessGrant> rows = new ArrayList<>();
         final List<Long> lockedUsers = new ArrayList<>();
         Integer lastLogLimit;
@@ -572,8 +782,69 @@ class DatasetUsagePolicyServiceTest {
         }
 
         @Override
-        public List<RegisteredDataset> findDatasetOwnership(Collection<Long> datasetIds) {
-            return datasetIds.stream().map(datasets::get).filter(Objects::nonNull).collect(Collectors.toList());
+        public List<RegisteredDataset> findLiveDatasets(Collection<Long> datasetIds) {
+            return datasetIds.stream().filter(id -> !deleted.contains(id))
+                    .map(datasets::get).filter(Objects::nonNull).collect(Collectors.toList());
+        }
+    }
+
+    /**
+     * Mirrors the SQL of DatasetDomainMapper: replica -> live dataset -> registered
+     * node -> enabled domain of the node's site; MISSING and VERIFY_FAILED replicas
+     * do not count; distinct rows ordered by dataset id, domain id.
+     */
+    static final class InMemoryLocations implements DatasetDomainMapper {
+        private final InMemoryGrants registry;
+        final Map<Long, String[]> domains = new LinkedHashMap<>();
+        final Map<Integer, String> nodeSites = new LinkedHashMap<>();
+        final Set<Integer> deletedNodes = new HashSet<>();
+        final List<Object[]> replicas = new ArrayList<>();
+
+        InMemoryLocations(InMemoryGrants registry) {
+            this.registry = registry;
+        }
+
+        void domain(Long id, String name, String siteCode, boolean enabled) {
+            domains.put(id, new String[]{name, siteCode, String.valueOf(enabled)});
+        }
+
+        void node(int nodeId, String siteCode) {
+            nodeSites.put(nodeId, siteCode);
+        }
+
+        void replica(Long datasetId, int nodeId, String availability) {
+            replicas.add(new Object[]{datasetId, nodeId, availability});
+        }
+
+        @Override
+        public List<DatasetDomainLocation> findLocationDomains(Collection<Long> datasetIds) {
+            return findAllLocationDomains().stream().filter(row -> datasetIds.contains(row.getDatasetId()))
+                    .collect(Collectors.toList());
+        }
+
+        @Override
+        public List<DatasetDomainLocation> findAllLocationDomains() {
+            Set<String> seen = new HashSet<>();
+            List<DatasetDomainLocation> rows = new ArrayList<>();
+            for (Object[] replica : replicas) {
+                Long datasetId = (Long) replica[0];
+                Integer nodeId = (Integer) replica[1];
+                String availability = (String) replica[2];
+                if ("MISSING".equals(availability) || "VERIFY_FAILED".equals(availability)) continue;
+                if (!registry.datasets.containsKey(datasetId) || registry.deleted.contains(datasetId)) continue;
+                if (!nodeSites.containsKey(nodeId) || deletedNodes.contains(nodeId)) continue;
+                String site = nodeSites.get(nodeId);
+                for (Map.Entry<Long, String[]> domain : domains.entrySet()) {
+                    String[] facts = domain.getValue();
+                    if (site == null || !site.equals(facts[1]) || !Boolean.parseBoolean(facts[2])) continue;
+                    if (seen.add(datasetId + "/" + domain.getKey())) {
+                        rows.add(new DatasetDomainLocation(datasetId, domain.getKey(), facts[0]));
+                    }
+                }
+            }
+            rows.sort(Comparator.comparing(DatasetDomainLocation::getDatasetId)
+                    .thenComparing(DatasetDomainLocation::getDomainId));
+            return rows;
         }
     }
 }

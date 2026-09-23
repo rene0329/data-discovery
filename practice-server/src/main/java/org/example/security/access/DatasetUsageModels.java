@@ -1,6 +1,7 @@
 package org.example.security.access;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /** Request and response bodies of /api/v1/security/dataset-access. */
@@ -33,8 +34,10 @@ public final class DatasetUsageModels {
     }
 
     /**
-     * One registered dataset as seen by the current user. The grant fields are
-     * only filled when {@code basis} is GRANT.
+     * One registered dataset as seen by the current user. {@code domainIds} /
+     * {@code domainNames} (same order, by domain id; empty when the dataset is in
+     * no enabled domain) are where its replicas currently are. The grant fields
+     * are only filled when {@code basis} is GRANT.
      */
     public static class Item {
         private Long datasetId;
@@ -42,8 +45,8 @@ public final class DatasetUsageModels {
         private String datasetCode;
         private String version;
         private String status;
-        private Long ownerDomainId;
-        private String ownerDomainName;
+        private List<Long> domainIds = new ArrayList<>();
+        private List<String> domainNames = new ArrayList<>();
         private boolean accessible;
         private String basis;
         private Long grantId;
@@ -60,10 +63,14 @@ public final class DatasetUsageModels {
         public void setVersion(String version) { this.version = version; }
         public String getStatus() { return status; }
         public void setStatus(String status) { this.status = status; }
-        public Long getOwnerDomainId() { return ownerDomainId; }
-        public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
-        public String getOwnerDomainName() { return ownerDomainName; }
-        public void setOwnerDomainName(String ownerDomainName) { this.ownerDomainName = ownerDomainName; }
+        public List<Long> getDomainIds() { return domainIds; }
+        public void setDomainIds(List<Long> domainIds) {
+            this.domainIds = domainIds == null ? new ArrayList<>() : domainIds;
+        }
+        public List<String> getDomainNames() { return domainNames; }
+        public void setDomainNames(List<String> domainNames) {
+            this.domainNames = domainNames == null ? new ArrayList<>() : domainNames;
+        }
         public boolean isAccessible() { return accessible; }
         public void setAccessible(boolean accessible) { this.accessible = accessible; }
         public String getBasis() { return basis; }

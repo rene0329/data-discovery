@@ -78,12 +78,19 @@ public final class AuthDtos {
     public static class DomainRequest {
         private String code;
         private String name;
+        private String siteCode;
+        private boolean siteCodePresent;
         private String description;
         private Boolean enabled;
         public String getCode() { return code; }
         public void setCode(String code) { this.code = code; }
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
+        public String getSiteCode() { return siteCode; }
+        /** Jackson calls this for an explicit {@code "siteCode": null} too, so PATCH can clear the site. */
+        public void setSiteCode(String siteCode) { this.siteCode = siteCode; this.siteCodePresent = true; }
+        /** Whether the body named siteCode at all; an absent field leaves the site unchanged on update. */
+        public boolean hasSiteCode() { return siteCodePresent; }
         public String getDescription() { return description; }
         public void setDescription(String description) { this.description = description; }
         public Boolean getEnabled() { return enabled; }

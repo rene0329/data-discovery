@@ -21,6 +21,8 @@ import java.util.stream.Collectors;
 public class AdminIdentityService {
     private static final Pattern CODE = Pattern.compile("^[a-zA-Z0-9._-]{2,64}$");
     private static final Pattern USERNAME = Pattern.compile("^[a-zA-Z0-9._-]{3,64}$");
+    private static final Pattern SITE_CODE = Pattern.compile("^[a-z0-9-]{1,32}$");
+    private static final String SITE_UNIQUE_KEY = "uk_collaboration_domain_site";
     private static final Set<String> ALLOWED_ROLES = Collections.unmodifiableSet(
             new LinkedHashSet<>(Arrays.asList("ADMIN", "DATA_OWNER", "AUDITOR")));
 
@@ -43,12 +45,16 @@ public class AdminIdentityService {
         String name = required(request.getName(), "domain name");
         if (!CODE.matcher(code).matches()) invalid("domain code must contain 2-64 letters, digits, dots, '_' or '-'");
         if (name.length() > 128) invalid("domain name is too long");
+        String siteCode = normalizeSiteCode(request.getSiteCode());
         CollaborationDomain domain = new CollaborationDomain();
-        domain.setCode(code); domain.setName(name); domain.setDescription(trim(request.getDescription()));
+        domain.setCode(code); domain.setName(name); domain.setSiteCode(siteCode);
+        domain.setDescription(trim(request.getDescription()));
         domain.setEnabled(request.getEnabled() == null || request.getEnabled());
+        requireSiteFree(siteCode, null);
         try {
             mapper.insertDomain(domain);
         } catch (DuplicateKeyException ex) {
+            if (violates(ex, SITE_UNIQUE_KEY)) throw siteTaken(siteCode, null);
             throw new AuthException(HttpStatus.CONFLICT, "DOMAIN_CODE_EXISTS", "domain code already exists");
         }
         return mapper.findDomainById(domain.getId());
@@ -64,7 +70,17 @@ public class AdminIdentityService {
         if (request.getName() != null) domain.setName(required(request.getName(), "domain name"));
         if (request.getDescription() != null) domain.setDescription(trim(request.getDescription()));
         if (request.getEnabled() != null) domain.setEnabled(request.getEnabled());
-        mapper.updateDomain(domain);
+        if (request.hasSiteCode()) {
+            String siteCode = normalizeSiteCode(request.getSiteCode());
+            requireSiteFree(siteCode, domain.getId());
+            domain.setSiteCode(siteCode);
+        }
+        try {
+            mapper.updateDomain(domain);
+        } catch (DuplicateKeyException ex) {
+            // site_code is the only unique column an update can change (the code is immutable).
+            throw siteTaken(domain.getSiteCode(), null);
+        }
         return mapper.findDomainById(id);
     }
 
@@ -187,6 +203,34 @@ public class AdminIdentityService {
             throw new AuthException(HttpStatus.CONFLICT, "DOMAIN_DISABLED", "the selected domain is disabled");
         }
         return domain;
+    }
+
+    /** Blank clears the site; otherwise trimmed, lower-cased and checked like node site codes. */
+    private String normalizeSiteCode(String value) {
+        String site = trim(value);
+        if (site == null) return null;
+        site = site.toLowerCase(Locale.ROOT);
+        if (!SITE_CODE.matcher(site).matches()) invalid("site code must contain 1-32 lower-case letters, digits or '-'");
+        return site;
+    }
+
+    /** One domain per site: a site already mapped to another domain is a conflict. */
+    private void requireSiteFree(String siteCode, Long domainId) {
+        if (siteCode == null) return;
+        CollaborationDomain holder = mapper.findDomainBySiteCode(siteCode);
+        if (holder != null && !holder.getId().equals(domainId)) throw siteTaken(siteCode, holder);
+    }
+
+    private AuthException siteTaken(String siteCode, CollaborationDomain holder) {
+        return new AuthException(HttpStatus.CONFLICT, "DOMAIN_SITE_TAKEN", "site '" + siteCode
+                + "' is already mapped to " + (holder == null ? "another domain" : "domain '" + holder.getCode() + "'"));
+    }
+
+    private static boolean violates(DuplicateKeyException ex, String key) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause.getMessage() != null && cause.getMessage().contains(key)) return true;
+        }
+        return false;
     }
 
     private AuthUserRecord requireUser(Long id) {

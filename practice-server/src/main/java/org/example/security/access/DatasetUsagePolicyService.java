@@ -41,9 +41,13 @@ import java.util.stream.Collectors;
  *
  * <p>Rule, evaluated for the effective (possibly impersonated) user:
  * ADMIN may use every dataset; a DATA_OWNER with a domain may use datasets
- * owned by that domain; anyone may use a dataset for which they hold an
- * unexpired grant. Datasets without an owner domain are reachable by
- * non-admins only through a grant.
+ * located in that domain (OWN_DOMAIN); anyone may use a dataset for which they
+ * hold an unexpired grant (GRANT). A dataset is located in the domain(s) of the
+ * nodes currently holding its replicas ({@link DatasetDomainMapper}), so it
+ * follows copy/move scheduling; a dataset in two domains serves both. Datasets
+ * located in no enabled domain are reachable by non-admins only through a
+ * grant. registered_dataset.owner_domain_id (the 数据归属 holder used by privacy
+ * computing) does not influence this decision.
  *
  * <p>A request whose principal is not a JWT user (anonymous, internal Agent,
  * background thread) has no roles, no domain and no grants, so every
@@ -67,6 +71,7 @@ public class DatasetUsagePolicyService {
 
     private final CurrentUserService currentUsers;
     private final DatasetAccessGrantMapper grants;
+    private final DatasetDomainMapper locations;
     private final DatasetAccessAuditMapper audits;
     private final DatasetRegistrationMapper datasets;
     private final DatasetAccessProperties properties;
@@ -76,15 +81,17 @@ public class DatasetUsagePolicyService {
     @Autowired
     public DatasetUsagePolicyService(CurrentUserService currentUsers,
                                      DatasetAccessGrantMapper grants,
+                                     DatasetDomainMapper locations,
                                      DatasetAccessAuditMapper audits,
                                      DatasetRegistrationMapper datasets,
                                      DatasetAccessProperties properties,
                                      PlatformTransactionManager transactionManager) {
-        this(currentUsers, grants, audits, datasets, properties, transactionManager, Clock.systemUTC());
+        this(currentUsers, grants, locations, audits, datasets, properties, transactionManager, Clock.systemUTC());
     }
 
     DatasetUsagePolicyService(CurrentUserService currentUsers,
                               DatasetAccessGrantMapper grants,
+                              DatasetDomainMapper locations,
                               DatasetAccessAuditMapper audits,
                               DatasetRegistrationMapper datasets,
                               DatasetAccessProperties properties,
@@ -92,6 +99,7 @@ public class DatasetUsagePolicyService {
                               Clock clock) {
         this.currentUsers = currentUsers;
         this.grants = grants;
+        this.locations = locations;
         this.audits = audits;
         this.datasets = datasets;
         this.properties = properties;
@@ -118,11 +126,11 @@ public class DatasetUsagePolicyService {
      */
     public List<Long> checkAndAuditTaskDatasets(Collection<Long> datasetIds, String requestId) {
         Subject subject = currentSubject();
-        List<RegisteredDataset> denied = deniedDatasets(subject, datasetIds, utc(now()));
+        List<Denial> denied = deniedDatasets(subject, datasetIds, utc(now()));
         if (!denied.isEmpty()) {
             String clientIp = currentClientIp();
             List<DatasetAccessAuditEvent> events = denied.stream()
-                    .map(dataset -> denialEvent(subject, dataset, requestId, clientIp))
+                    .map(denial -> denialEvent(subject, denial, requestId, clientIp))
                     .collect(Collectors.toList());
             independentAuditTransaction.executeWithoutResult(status -> events.forEach(audits::insert));
         }
@@ -143,9 +151,11 @@ public class DatasetUsagePolicyService {
         Map<Long, DatasetAccessGrant> active = subject.isAdmin()
                 ? Collections.<Long, DatasetAccessGrant>emptyMap()
                 : activeGrantsByDataset(subject.userId(), utc(now));
+        Map<Long, Location> located = byDataset(locations.findAllLocationDomains());
         List<DatasetUsageModels.Item> items = new ArrayList<>();
         for (RegisteredDataset dataset : datasets.listDatasets(null, null)) {
-            items.add(item(subject, dataset, active.get(dataset.getDatasetId())));
+            Long id = dataset.getDatasetId();
+            items.add(item(subject, dataset, locationOf(located, id), active.get(id)));
         }
         return new DatasetUsageModels.Overview(now, ttlMinutes(), items);
     }
@@ -200,7 +210,8 @@ public class DatasetUsagePolicyService {
             throw RegistrationException.notFound("DATASET_NOT_FOUND", "registered dataset not found: " + datasetId);
         }
         Subject subject = Subject.of(user);
-        String standing = basis(subject, dataset.getOwnerDomainId(), false);
+        String standing = basis(subject,
+                locationOf(locationsOf(Collections.singletonList(datasetId)), datasetId), false);
         if (standing != null) {
             throw RegistrationException.conflict("DATASET_ALREADY_ACCESSIBLE",
                     "dataset is already accessible (" + standing + "); no grant is needed");
@@ -230,21 +241,21 @@ public class DatasetUsagePolicyService {
         return Math.max(1L, properties.getGrantTtlMinutes());
     }
 
-    private List<RegisteredDataset> deniedDatasets(Subject subject, Collection<Long> datasetIds,
-                                                   LocalDateTime now) {
+    private List<Denial> deniedDatasets(Subject subject, Collection<Long> datasetIds, LocalDateTime now) {
         List<Long> ids = distinctNonNull(datasetIds);
         if (ids.isEmpty() || subject.isAdmin()) return Collections.emptyList();
 
         Map<Long, RegisteredDataset> registered = new HashMap<>();
-        for (RegisteredDataset dataset : grants.findDatasetOwnership(ids)) {
+        for (RegisteredDataset dataset : grants.findLiveDatasets(ids)) {
             registered.put(dataset.getDatasetId(), dataset);
         }
+        List<Long> known = ids.stream().filter(registered::containsKey).collect(Collectors.toList());
+        if (known.isEmpty()) return Collections.emptyList();
+
+        Map<Long, Location> located = locationsOf(known);
         List<Long> needGrant = new ArrayList<>();
-        for (Long id : ids) {
-            RegisteredDataset dataset = registered.get(id);
-            if (dataset != null && basis(subject, dataset.getOwnerDomainId(), false) == null) {
-                needGrant.add(id);
-            }
+        for (Long id : known) {
+            if (basis(subject, locationOf(located, id), false) == null) needGrant.add(id);
         }
         if (needGrant.isEmpty()) return Collections.emptyList();
 
@@ -254,11 +265,31 @@ public class DatasetUsagePolicyService {
                 granted.add(grant.getDatasetId());
             }
         }
-        List<RegisteredDataset> denied = new ArrayList<>();
+        List<Denial> denied = new ArrayList<>();
         for (Long id : needGrant) {
-            if (!granted.contains(id)) denied.add(registered.get(id));
+            if (!granted.contains(id)) denied.add(new Denial(registered.get(id), locationOf(located, id)));
         }
         return denied;
+    }
+
+    private Map<Long, Location> locationsOf(Collection<Long> datasetIds) {
+        if (datasetIds.isEmpty()) return Collections.emptyMap();
+        return byDataset(locations.findLocationDomains(datasetIds));
+    }
+
+    private static Map<Long, Location> byDataset(List<DatasetDomainLocation> rows) {
+        Map<Long, Location> result = new HashMap<>();
+        for (DatasetDomainLocation row : rows) {
+            if (row.getDatasetId() == null || row.getDomainId() == null) continue;
+            result.computeIfAbsent(row.getDatasetId(), id -> new Location())
+                    .add(row.getDomainId(), row.getDomainName());
+        }
+        return result;
+    }
+
+    private static Location locationOf(Map<Long, Location> located, Long datasetId) {
+        Location location = located.get(datasetId);
+        return location == null ? Location.NOWHERE : location;
     }
 
     private Map<Long, DatasetAccessGrant> activeGrantsByDataset(Long userId, LocalDateTime now) {
@@ -271,17 +302,17 @@ public class DatasetUsagePolicyService {
         return result;
     }
 
-    private DatasetUsageModels.Item item(Subject subject, RegisteredDataset dataset,
+    private DatasetUsageModels.Item item(Subject subject, RegisteredDataset dataset, Location location,
                                          DatasetAccessGrant activeGrant) {
-        String basis = basis(subject, dataset.getOwnerDomainId(), activeGrant != null);
+        String basis = basis(subject, location, activeGrant != null);
         DatasetUsageModels.Item item = new DatasetUsageModels.Item();
         item.setDatasetId(dataset.getDatasetId());
         item.setName(dataset.getName());
         item.setDatasetCode(dataset.getDatasetCode());
         item.setVersion(dataset.getDatasetVersion());
         item.setStatus(dataset.getStatus());
-        item.setOwnerDomainId(dataset.getOwnerDomainId());
-        item.setOwnerDomainName(dataset.getOwnerDomainName());
+        item.setDomainIds(new ArrayList<>(location.domainIds));
+        item.setDomainNames(new ArrayList<>(location.domainNames));
         item.setAccessible(basis != null);
         item.setBasis(basis);
         if (BASIS_GRANT.equals(basis)) {
@@ -293,17 +324,17 @@ public class DatasetUsagePolicyService {
     }
 
     /** ADMIN, then OWN_DOMAIN, then GRANT; null means not accessible. */
-    private static String basis(Subject subject, Long ownerDomainId, boolean activeGrant) {
+    private static String basis(Subject subject, Location location, boolean activeGrant) {
         if (subject.isAdmin()) return BASIS_ADMIN;
-        if (subject.ownsDomain(ownerDomainId)) return BASIS_OWN_DOMAIN;
+        if (subject.belongsToAnyOf(location.domainIds)) return BASIS_OWN_DOMAIN;
         return activeGrant ? BASIS_GRANT : null;
     }
 
-    private DatasetAccessAuditEvent denialEvent(Subject subject, RegisteredDataset dataset,
+    private DatasetAccessAuditEvent denialEvent(Subject subject, Denial denial,
                                                 String requestId, String clientIp) {
-        DatasetAccessAuditEvent event = baseEvent(subject, dataset, requestId, clientIp);
+        DatasetAccessAuditEvent event = baseEvent(subject, denial.dataset, requestId, clientIp);
         event.setAction(ACTION_TASK_CREATE);
-        event.setPolicyRule(truncate(subject.denialRule(dataset.getOwnerDomainId()), 256));
+        event.setPolicyRule(truncate(subject.denialRule(denial.location.domainIds), 256));
         event.setDecision("DENIED");
         event.setReason(REASON_ACCESS_DENIED);
         return event;
@@ -363,8 +394,8 @@ public class DatasetUsagePolicyService {
         return new ArrayList<>(ordered);
     }
 
-    private static List<Long> idsOf(List<RegisteredDataset> datasets) {
-        return datasets.stream().map(RegisteredDataset::getDatasetId).collect(Collectors.toList());
+    private static List<Long> idsOf(List<Denial> denied) {
+        return denied.stream().map(denial -> denial.dataset.getDatasetId()).collect(Collectors.toList());
     }
 
     private static RegistrationException badRequest(String message) {
@@ -408,15 +439,17 @@ public class DatasetUsagePolicyService {
 
         boolean isAdmin() { return user != null && user.hasRole("ADMIN"); }
 
-        boolean ownsDomain(Long ownerDomainId) {
+        /** Only a DATA_OWNER bound to a domain is limited to (and entitled to) its domain's datasets. */
+        boolean belongsToAnyOf(List<Long> datasetDomainIds) {
             return user != null && user.hasRole("DATA_OWNER") && user.getDomainId() != null
-                    && ownerDomainId != null && user.getDomainId().equals(ownerDomainId);
+                    && datasetDomainIds.contains(user.getDomainId());
         }
 
-        String denialRule(Long ownerDomainId) {
+        String denialRule(List<Long> datasetDomainIds) {
             if (user == null) return "NO_USER_IDENTITY";
-            return "DOMAIN_OR_GRANT;userDomain=" + orNone(user.getDomainId())
-                    + ";datasetDomain=" + orNone(ownerDomainId)
+            return "LOCATION_DOMAIN_OR_GRANT;userDomain=" + orNone(user.getDomainId())
+                    + ";datasetDomains=" + (datasetDomainIds.isEmpty() ? "none"
+                            : datasetDomainIds.stream().map(String::valueOf).collect(Collectors.joining(",")))
                     + ";roles=" + (user.getRoles().isEmpty() ? "none" : String.join("|", user.getRoles()))
                     + actorSuffix();
         }
@@ -427,6 +460,40 @@ public class DatasetUsagePolicyService {
 
         private static String orNone(Long value) {
             return value == null ? "none" : String.valueOf(value);
+        }
+    }
+
+    /** The enabled domains a dataset is located in, ordered by domain id (the mapper's order). */
+    private static final class Location {
+        static final Location NOWHERE = new Location(Collections.<Long>emptyList(), Collections.<String>emptyList());
+
+        final List<Long> domainIds;
+        final List<String> domainNames;
+
+        Location() {
+            this(new ArrayList<Long>(), new ArrayList<String>());
+        }
+
+        private Location(List<Long> domainIds, List<String> domainNames) {
+            this.domainIds = domainIds;
+            this.domainNames = domainNames;
+        }
+
+        void add(Long domainId, String domainName) {
+            if (domainIds.contains(domainId)) return;
+            domainIds.add(domainId);
+            domainNames.add(domainName);
+        }
+    }
+
+    /** A dataset the subject may not use, with the location recorded in the denial audit row. */
+    private static final class Denial {
+        final RegisteredDataset dataset;
+        final Location location;
+
+        Denial(RegisteredDataset dataset, Location location) {
+            this.dataset = dataset;
+            this.location = location;
         }
     }
 }

@@ -6,9 +6,11 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,6 +22,7 @@ class DatasetAccessMapperSqlTest {
         configuration = new Configuration();
         configuration.addMapper(DatasetAccessAuditMapper.class);
         configuration.addMapper(DatasetAccessGrantMapper.class);
+        configuration.addMapper(DatasetDomainMapper.class);
     }
 
     @Test
@@ -53,9 +56,10 @@ class DatasetAccessMapperSqlTest {
         assertTrue(byDatasets.contains("WHERE user_id = ? AND expires_at > ? AND dataset_id IN"), byDatasets);
         assertTrue(byDatasets.replace(" ", "").contains("IN(?,?)"), byDatasets);
 
-        String ownership = sql(DatasetAccessGrantMapper.class, "findDatasetOwnership", params);
-        assertTrue(ownership.contains("FROM registered_dataset WHERE deleted_at IS NULL AND dataset_id IN"),
-                ownership);
+        String live = sql(DatasetAccessGrantMapper.class, "findLiveDatasets", params);
+        assertTrue(live.startsWith("SELECT dataset_id, dataset_version FROM registered_dataset "
+                + "WHERE deleted_at IS NULL AND dataset_id IN"), live);
+        assertFalse(live.contains("owner_domain_id"), "ownership must not feed the usage decision: " + live);
 
         String lock = sql(DatasetAccessGrantMapper.class, "lockUser", params);
         assertTrue(lock.endsWith("FOR UPDATE"), lock);
@@ -78,6 +82,26 @@ class DatasetAccessMapperSqlTest {
         String insert = sql(DatasetAccessGrantMapper.class, "insert", new DatasetAccessGrant());
         assertTrue(insert.contains("(user_id, dataset_id, reason, created_at, expires_at)"), insert);
         assertTrue(insert.contains("VALUES (?, ?, ?, ?, ?)"), insert);
+    }
+
+    @Test
+    void locationDomainsFollowLocatedReplicasThroughNodeSitesToEnabledDomains() {
+        String expected = "SELECT DISTINCT r.dataset_id, d.domain_id, d.name AS domain_name "
+                + "FROM dataset_replica r "
+                + "JOIN registered_dataset rd ON rd.dataset_id = r.dataset_id AND rd.deleted_at IS NULL "
+                + "JOIN node_management n ON n.node_id = r.node_id AND n.deleted_at IS NULL "
+                + "JOIN collaboration_domain d ON d.site_code = n.site_code AND d.enabled = 1 "
+                + "WHERE r.availability NOT IN ('MISSING', 'VERIFY_FAILED') ";
+
+        String all = sql(DatasetDomainMapper.class, "findAllLocationDomains", Collections.emptyMap());
+        assertEquals(expected + "ORDER BY r.dataset_id, d.domain_id", all);
+        assertFalse(all.contains("owner_domain_id"), all);
+
+        Map<String, Object> params = new HashMap<>();
+        params.put("datasetIds", Arrays.asList(4L, 5L, 6L));
+        String some = sql(DatasetDomainMapper.class, "findLocationDomains", params);
+        assertTrue(some.startsWith(expected + "AND r.dataset_id IN"), some);
+        assertTrue(some.replace(" ", "").endsWith("IN(?,?,?)ORDERBYr.dataset_id,d.domain_id"), some);
     }
 
     private String sql(Class<?> mapper, String statement, Object params) {

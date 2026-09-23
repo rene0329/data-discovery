@@ -49,8 +49,8 @@ class DatasetUsageControllerTest {
         granted.setDatasetCode("ds-b");
         granted.setVersion("v2");
         granted.setStatus("ACTIVE");
-        granted.setOwnerDomainId(2L);
-        granted.setOwnerDomainName("Domain B");
+        granted.setDomainIds(Arrays.asList(2L, 5L));
+        granted.setDomainNames(Arrays.asList("深圳域（B）", "中心域"));
         granted.setAccessible(true);
         granted.setBasis("GRANT");
         granted.setGrantId(100L);
@@ -71,14 +71,22 @@ class DatasetUsageControllerTest {
                 .andExpect(jsonPath("$.data.items[0].datasetCode").value("ds-b"))
                 .andExpect(jsonPath("$.data.items[0].version").value("v2"))
                 .andExpect(jsonPath("$.data.items[0].status").value("ACTIVE"))
-                .andExpect(jsonPath("$.data.items[0].ownerDomainId").value(2))
-                .andExpect(jsonPath("$.data.items[0].ownerDomainName").value("Domain B"))
+                .andExpect(jsonPath("$.data.items[0].domainIds[0]").value(2))
+                .andExpect(jsonPath("$.data.items[0].domainIds[1]").value(5))
+                .andExpect(jsonPath("$.data.items[0].domainNames[0]").value("深圳域（B）"))
+                .andExpect(jsonPath("$.data.items[0].domainNames[1]").value("中心域"))
+                .andExpect(jsonPath("$.data.items[0].ownerDomainId").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].ownerDomainName").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].accessible").value(true))
                 .andExpect(jsonPath("$.data.items[0].basis").value("GRANT"))
                 .andExpect(jsonPath("$.data.items[0].grantId").value(100))
                 .andExpect(jsonPath("$.data.items[0].grantExpiresAt").value("2026-09-24T09:00:00.123Z"))
                 .andExpect(jsonPath("$.data.items[0].grantReason").value("need B"))
                 .andExpect(jsonPath("$.data.items[1].accessible").value(false))
+                .andExpect(jsonPath("$.data.items[1].domainIds").isArray())
+                .andExpect(jsonPath("$.data.items[1].domainIds").isEmpty())
+                .andExpect(jsonPath("$.data.items[1].domainNames").isArray())
+                .andExpect(jsonPath("$.data.items[1].domainNames").isEmpty())
                 .andExpect(jsonPath("$.data.items[1].basis").value(nullValue()))
                 .andExpect(jsonPath("$.data.items[1].grantId").value(nullValue()))
                 .andExpect(jsonPath("$.data.items[1].grantExpiresAt").value(nullValue()));
