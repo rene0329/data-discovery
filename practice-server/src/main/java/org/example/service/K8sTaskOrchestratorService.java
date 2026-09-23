@@ -52,6 +52,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -90,6 +91,7 @@ public class K8sTaskOrchestratorService {
     private final DatasetAccessAuthorizationService accessAuthorizationService;
 
     private final InPlacePlacementService inPlacePlacement;
+    private final DatasetHeatService heat;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
     /** 等待单个 K8s Job 完成的超时时间（分钟）。 */
@@ -125,7 +127,8 @@ public class K8sTaskOrchestratorService {
             SchedulingPlanMapper schedulingPlanMapper,
             DatasetUploadClient datasetUploadClient,
             DatasetAccessAuthorizationService accessAuthorizationService,
-            InPlacePlacementService inPlacePlacement
+            InPlacePlacementService inPlacePlacement,
+            DatasetHeatService heat
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -143,6 +146,7 @@ public class K8sTaskOrchestratorService {
         this.datasetUploadClient = datasetUploadClient;
         this.accessAuthorizationService = accessAuthorizationService;
         this.inPlacePlacement = inPlacePlacement;
+        this.heat = heat;
     }
 
 
@@ -172,14 +176,17 @@ public class K8sTaskOrchestratorService {
 
             List<String> schedules = new ArrayList<>();
             List<DataItemResult> successful = new ArrayList<>();
-            for (CompletableFuture<DataItemResult> future : futures) {
-                DataItemResult result = future.get();
+            Set<Long> readDatasets = new LinkedHashSet<>();
+            for (int i = 0; i < futures.size(); i++) {
+                DataItemResult result = futures.get(i).get();
                 if (result != null) {
                     schedules.add(result.getScheduleT1());
                     successful.add(result);
+                    if (hasCompleteEvidence(result)) readDatasets.add(datasetIds.get(i));
                 }
             }
             updateRegisteredTaskStatus(taskId, normalizedMode, schedules, successful, datasetIds.size());
+            recordDatasetReads(taskId, readDatasets);
         } catch (Exception e) {
             log.error("注册资源任务 {} 执行失败", taskId, e);
             updateTaskStatusToFailed(taskId, e.getMessage());
@@ -205,9 +212,22 @@ public class K8sTaskOrchestratorService {
         List<CompletableFuture<DataItemResult>> all = new ArrayList<>(inPlaceFutures);
         all.addAll(centralizedFutures);
         CompletableFuture.allOf(all.toArray(new CompletableFuture[0])).join();
-        updateComparisonTaskStatus(taskId, datasetIds,
-                inPlaceFutures.stream().map(CompletableFuture::join).collect(Collectors.toList()),
-                centralizedFutures.stream().map(CompletableFuture::join).collect(Collectors.toList()));
+        List<DataItemResult> inPlaceResults = inPlaceFutures.stream()
+                .map(CompletableFuture::join).collect(Collectors.toList());
+        List<DataItemResult> centralizedResults = centralizedFutures.stream()
+                .map(CompletableFuture::join).collect(Collectors.toList());
+        updateComparisonTaskStatus(taskId, datasetIds, inPlaceResults, centralizedResults);
+        // 两种模式各读一次同一数据集，但仍是同一个任务的一次访问。
+        Set<Long> readDatasets = new LinkedHashSet<>();
+        for (int i = 0; i < datasetIds.size(); i++) {
+            DataItemResult inPlace = inPlaceResults.get(i);
+            DataItemResult centralized = centralizedResults.get(i);
+            if ((inPlace != null && hasCompleteEvidence(inPlace))
+                    || (centralized != null && hasCompleteEvidence(centralized))) {
+                readDatasets.add(datasetIds.get(i));
+            }
+        }
+        recordDatasetReads(taskId, readDatasets);
     }
 
     private CompletableFuture<DataItemResult> submitRegisteredDataItem(Integer taskId, Long datasetId,
@@ -232,6 +252,7 @@ public class K8sTaskOrchestratorService {
         double totalSeconds = 0.0;
         int successCount = 0;
         String lastError = null;
+        Set<Long> readDatasets = new LinkedHashSet<>();
         for (SchedulingAssignment assignment : assignments) {
             List<String> targetLines = schedulesByTarget.computeIfAbsent(
                     nodeLabel(assignment.getTargetNodeId()), key -> new ArrayList<>());
@@ -243,6 +264,8 @@ public class K8sTaskOrchestratorService {
                 targetLines.add(result.getScheduleT1());
                 totalSeconds += result.getT1Seconds();
                 successCount++;
+                // Job 成功即已读完输入并通过字节数与 SHA-256 校验（validateInputEvidence）。
+                readDatasets.add(assignment.getDatasetId());
                 schedulingPlanMapper.updateAssignmentStatus(
                         assignment.getAssignmentId(), "COMPLETED", null);
             } catch (Exception ex) {
@@ -264,6 +287,23 @@ public class K8sTaskOrchestratorService {
         }
         updateFinalTaskStatus(taskId, totalSeconds, String.join("\n", scheduleLines),
                 successCount, assignments.size());
+        recordDatasetReads(taskId, readDatasets);
+    }
+
+    /**
+     * 任务真实读取数据才算一次访问：Job 完整读到输入且字节数、SHA-256 与副本一致后，
+     * 每个任务对每个数据集只加一次热度。提交、数据搬运和失败的 Job 都不加热度。
+     */
+    private void recordDatasetReads(Integer taskId, Set<Long> datasetIds) {
+        for (Long datasetId : datasetIds) {
+            try {
+                heat.recordAccess(datasetId);
+                log.info("任务 {} 读取数据集 {} 已计入热度", taskId, datasetId);
+            } catch (Exception e) {
+                // 热度只影响后续存储决策，记录失败不改变已回写的任务结果。
+                log.warn("任务 {} 读取数据集 {} 计入热度失败: {}", taskId, datasetId, e.getMessage());
+            }
+        }
     }
 
     /**

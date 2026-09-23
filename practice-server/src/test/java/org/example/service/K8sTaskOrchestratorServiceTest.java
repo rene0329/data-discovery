@@ -67,6 +67,7 @@ class K8sTaskOrchestratorServiceTest {
         DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
         DatasetAccessAuthorizationService authorization = mock(DatasetAccessAuthorizationService.class);
         MigrationTaskMapper migrations = mock(MigrationTaskMapper.class);
+        DatasetHeatService heat = mock(DatasetHeatService.class);
         NodeManagement source = NodeManagement.builder().nodeId(3).nodeName("node-a")
                 .type("compute-storage").build();
         DatasetReplica replica = DatasetReplica.builder().replicaId(20L).datasetId(10L).nodeId(3)
@@ -124,7 +125,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, migrations, jobs, datasets, images,
                 new ObjectMapper(), "node-a", "", Runnable::run, availability,
                 mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability), heat);
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
 
@@ -140,6 +141,7 @@ class K8sTaskOrchestratorServiceTest {
                 && Long.valueOf(1000L).equals(summary.getDataPreparationMs())
                 && Long.valueOf(2000L).equals(summary.getComputeDurationMs())
                 && Boolean.TRUE.equals(summary.getExecutionEvidenceComplete())));
+        verify(heat).recordAccess(10L);
     }
 
     @Test
@@ -182,7 +184,8 @@ class K8sTaskOrchestratorServiceTest {
                 new ObjectMapper(), "node-a", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), mock(SchedulingPlanMapper.class),
                 mock(DatasetUploadClient.class),
-                mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class));
+                mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class),
+                mock(DatasetHeatService.class));
         DataItemResult first = evidence("2026-09-19T00:00:00Z", "2026-09-19T00:00:04Z",
                 "2026-09-19T00:00:04Z", "2026-09-19T00:00:08Z");
         DataItemResult second = evidence("2026-09-19T00:00:01Z", "2026-09-19T00:00:03Z",
@@ -229,11 +232,12 @@ class K8sTaskOrchestratorServiceTest {
         when(jobs.createDataProcessingJob(anyString(), eq("node-b"), eq("test.npz"),
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
                 eq("scoped-read-token"))).thenThrow(new IllegalStateException("unit test stop"));
+        DatasetHeatService heat = mock(DatasetHeatService.class);
         K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability), heat);
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "CENTRALIZED");
 
@@ -243,6 +247,7 @@ class K8sTaskOrchestratorServiceTest {
         verify(tasks, never()).updateTask(any());
         verify(tasks).updateExecutionSummary(argThat(summary -> "执行失败".equals(summary.getStatus())
                 && Boolean.FALSE.equals(summary.getExecutionEvidenceComplete())));
+        verifyNoInteractions(heat);
     }
 
     @Test
@@ -273,11 +278,12 @@ class K8sTaskOrchestratorServiceTest {
         when(jobs.createDataProcessingJob(anyString(), anyString(), anyString(), anyString(), anyString(),
                 isNull(), any(), any(), any(), same(image), eq("scoped-read-token")))
                 .thenThrow(new IllegalStateException("unit test stop"));
+        DatasetHeatService heat = mock(DatasetHeatService.class);
         K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability), heat);
 
         service.executeRegisteredTask(30, Arrays.asList(10L, 11L), 7L, null, "COMPARISON");
 
@@ -318,6 +324,7 @@ class K8sTaskOrchestratorServiceTest {
         assertNotNull(finalRow.getValue().getFinishedAt());
         assertEquals("分布式调度方案:\nmnist: 执行失败\ncifar: 执行失败\n"
                 + "中心化调度方案:\nmnist: 执行失败\ncifar: 执行失败", finalRow.getValue().getSchedule());
+        verifyNoInteractions(heat);
     }
 
     @Test
@@ -365,11 +372,12 @@ class K8sTaskOrchestratorServiceTest {
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
                 eq("scoped-read-token")))
                 .thenReturn(new JobCreationResult(new JobBuilder().build(), client, "node-a", "/data/test.npz"));
+        DatasetHeatService heat = mock(DatasetHeatService.class);
         K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability), heat);
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "COMPARISON");
 
@@ -411,6 +419,53 @@ class K8sTaskOrchestratorServiceTest {
         assertEquals(Boolean.TRUE, finalRow.getValue().getExecutionEvidenceComplete());
         assertEquals("分布式调度方案:\ntest: node-a -> node-a\n中心化调度方案:\ntest: node-a -> node-a",
                 finalRow.getValue().getSchedule());
+        // Both modes read the dataset, but it is one task and so one access.
+        verify(heat).recordAccess(10L);
+        verifyNoMoreInteractions(heat);
+    }
+
+    @Test
+    void comparisonCountsADatasetThatEitherModeRead() {
+        DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
+        NodeManagementMapper nodes = mock(NodeManagementMapper.class);
+        TaskManagementMapper tasks = mock(TaskManagementMapper.class);
+        RuntimeImageMapper images = mock(RuntimeImageMapper.class);
+        K8sJobFactory jobs = mock(K8sJobFactory.class);
+        DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
+        DatasetAccessAuthorizationService authorization = mock(DatasetAccessAuthorizationService.class);
+        DatasetHeatService heat = mock(DatasetHeatService.class);
+        NodeManagement nodeA = NodeManagement.builder().nodeId(3).nodeName("node-a")
+                .type("compute-storage").build();
+        when(nodes.getComputeCapableNodes()).thenReturn(Collections.singletonList(nodeA));
+        when(nodes.getNodeById(3)).thenReturn(nodeA);
+        when(nodes.getNodeByName("node-a")).thenReturn(nodeA);
+        registerDataset(datasets, availability, 10L, "test", 3);
+        RuntimeImage image = RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true)
+                .resolvedDigest("sha256:image").commandJson("[\"python\"]")
+                .argsTemplateJson("[\"run.py\"]").build();
+        when(images.findById(7L)).thenReturn(image);
+        AccessAuthorizationResult grant = new AccessAuthorizationResult();
+        grant.setToken("scoped-read-token");
+        when(authorization.issueInternal(any(), any())).thenReturn(grant);
+        KubernetesClient client = completedJobClient("node-a");
+        when(jobs.createDataProcessingJob(startsWith("in-place-"), eq("node-a"), eq("test.npz"),
+                eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
+                eq("scoped-read-token")))
+                .thenReturn(new JobCreationResult(new JobBuilder().build(), client, "node-a", "/data/test.npz"));
+        when(jobs.createDataProcessingJob(startsWith("centralized-"), eq("node-a"), eq("test.npz"),
+                eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
+                eq("scoped-read-token"))).thenThrow(new IllegalStateException("unit test stop"));
+        K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
+                mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
+                jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
+                availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
+                authorization, placement(nodes, availability), heat);
+
+        service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "COMPARISON");
+
+        verify(tasks).updateTask(argThat(row -> "部分完成".equals(row.getStatus())));
+        verify(heat).recordAccess(10L);
+        verifyNoMoreInteractions(heat);
     }
 
     @Test
@@ -595,7 +650,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "master-40", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                authorization, placement(nodes, availability, topology));
+                authorization, placement(nodes, availability, topology), mock(DatasetHeatService.class));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
 
@@ -634,7 +689,8 @@ class K8sTaskOrchestratorServiceTest {
                 mock(RuntimeImageMapper.class), new ObjectMapper(), "node-a", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), mock(SchedulingPlanMapper.class),
                 mock(DatasetUploadClient.class),
-                mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class));
+                mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class),
+                mock(DatasetHeatService.class));
     }
 
     private DataItemResult moved(long preparationMs, String source, String target,
@@ -659,6 +715,26 @@ class K8sTaskOrchestratorServiceTest {
                 .datasetCode(code).datasetVersion("v1").status("ACTIVE").defaultRuntimeImageId(7L).build());
         when(datasets.listReplicas(datasetId)).thenReturn(Collections.singletonList(replica));
         when(availability.evaluate(replica)).thenReturn(new ReplicaAvailability("USABLE", true, null));
+    }
+
+    @SuppressWarnings("unchecked")
+    private KubernetesClient completedJobClient(String nodeName) {
+        KubernetesClient client = mock(KubernetesClient.class, RETURNS_DEEP_STUBS);
+        MixedOperation<Pod, PodList, PodResource> pods = mock(MixedOperation.class, RETURNS_SELF);
+        MixedOperation<Job, JobList, ScalableResource<Job>> jobApi = mock(MixedOperation.class, RETURNS_SELF);
+        ScalableResource<Job> jobResource = mock(ScalableResource.class);
+        PodResource podResource = mock(PodResource.class, RETURNS_DEEP_STUBS);
+        when(client.pods()).thenReturn(pods);
+        when(client.batch().v1().jobs()).thenReturn(jobApi);
+        doReturn(jobResource).when(jobApi).withName(anyString());
+        doReturn(podResource).when(pods).withName(anyString());
+        when(podResource.inContainer("data-transfer-container").getLog())
+                .thenReturn("TRANSFER_MS=1000\nINPUT_BYTES=100\nINPUT_SHA256=" + SHA256);
+        when(podResource.inContainer("processing-container").getLog()).thenReturn("result=ok");
+        doReturn(new PodListBuilder().withItems(completedPod(nodeName)).build()).when(pods).list();
+        when(jobResource.get()).thenReturn(new JobBuilder().withNewStatus().addNewCondition()
+                .withType("Complete").withStatus("True").endCondition().endStatus().build());
+        return client;
     }
 
     private Pod completedPod(String nodeName) {

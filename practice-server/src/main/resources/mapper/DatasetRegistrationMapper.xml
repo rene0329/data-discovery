@@ -266,6 +266,17 @@
             AND p.status IN ('ACCEPTED', 'RUNNING')
     </select>
 
+    <!-- Pending assignments that copy, move or delete one of the dataset's replicas.
+         Compute tasks only read, so they share a dataset with each other but not with these. -->
+    <select id="countActiveWriteReferences" resultType="int">
+        SELECT COUNT(*) FROM scheduling_assignment a
+        JOIN scheduling_plan p ON p.plan_id = a.plan_id
+        WHERE a.dataset_id = #{datasetId}
+            AND p.status IN ('ACCEPTED', 'RUNNING')
+            AND (a.action IN ('COPY', 'MOVE', 'DELETE')
+                OR (a.action IN ('COPY_AND_USE', 'MOVE_AND_USE') AND a.source_node_id &lt;&gt; a.target_node_id))
+    </select>
+
     <select id="lockDataset" resultType="long">
         SELECT dataset_id FROM registered_dataset WHERE dataset_id = #{datasetId} FOR UPDATE
     </select>

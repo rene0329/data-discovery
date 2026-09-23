@@ -8,7 +8,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.Collection;
 import java.util.TreeSet;
 
-/** Admission locks are held until the task/plan reservation commits. Call in READ_COMMITTED transactions. */
+/**
+ * Admission locks are held until the task/plan reservation commits. Call in READ_COMMITTED transactions.
+ * Readers (compute tasks) may share a dataset; a writer (copy, move or delete of a replica) needs it idle.
+ */
 public final class DatasetOperationGuard {
     private DatasetOperationGuard() { }
 
@@ -25,6 +28,11 @@ public final class DatasetOperationGuard {
     public static void requireIdle(DatasetRegistrationMapper mapper, RegisteredDataset dataset) {
         if (busy(mapper, dataset)) throw RegistrationException.conflict(
                 "数据集 " + dataset.getName() + " 正在被任务或调度占用，请等待结束后重试");
+    }
+
+    public static void requireReadable(DatasetRegistrationMapper mapper, RegisteredDataset dataset) {
+        if (mapper.countActiveWriteReferences(dataset.getDatasetId()) > 0) throw RegistrationException.conflict(
+                "数据集 " + dataset.getName() + " 正在被复制、迁移或删除，请等待结束后重试");
     }
 
     public static void afterCommit(Runnable action) {

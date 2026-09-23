@@ -338,6 +338,29 @@ class SchedulingServiceTest {
         verifyNoInteractions(dataExecutor);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"USE_IN_PLACE", "REMOTE_READ"})
+    void readOnlyComputePlansShareADatasetWithRunningTasks(String action) {
+        SchedulingPlanRequest request = computePlan(action);
+        when(datasetMapper.countActiveTaskReferences(10L, null)).thenReturn(1);
+        when(datasetMapper.countActiveSchedulingReferences(10L)).thenReturn(1);
+        assertEquals(40L, service.submit(request).getPlanId());
+
+        when(datasetMapper.countActiveWriteReferences(10L)).thenReturn(1);
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verify(orchestrator).executeExternalPlan(any(), any(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"COPY_AND_USE", "MOVE_AND_USE"})
+    void crossNodeCopyOrMovePlansStillNeedAnIdleDataset(String action) {
+        SchedulingPlanRequest request = computePlan(action);
+        when(datasetMapper.countActiveTaskReferences(10L, null)).thenReturn(1);
+        assertThrows(RegistrationException.class, () -> service.submit(request));
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+        verifyNoInteractions(orchestrator);
+    }
+
     @Test
     void pendingTargetsReserveCapacityAcrossPlans() {
         SchedulingPlanRequest request = dataPlan("COPY");

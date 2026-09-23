@@ -112,7 +112,7 @@ public class TaskV1Service {
         List<RegisteredDataset> datasets = request.getDatasetIds().stream()
                 .map(this::requireActiveDataset)
                 .collect(Collectors.toList());
-        datasets.forEach(dataset -> DatasetOperationGuard.requireIdle(datasetMapper, dataset));
+        datasets.forEach(dataset -> DatasetOperationGuard.requireReadable(datasetMapper, dataset));
         validateImages(datasets, request.getRuntimeImageId());
 
         TaskManagement task = TaskManagement.builder()

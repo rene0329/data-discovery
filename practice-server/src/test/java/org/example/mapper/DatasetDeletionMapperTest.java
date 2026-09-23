@@ -61,6 +61,16 @@ class DatasetDeletionMapperTest {
         assertFalse(deletion.contains("DELETE FROM"));
     }
 
+    @Test
+    void onlyPendingCopiesMovesAndDeletesBlockReaders() {
+        String sql = sql("countActiveWriteReferences");
+        assertTrue(sql.contains("a.dataset_id = ?"));
+        assertTrue(sql.contains("p.status IN ('ACCEPTED', 'RUNNING')"));
+        assertTrue(sql.contains("a.action IN ('COPY', 'MOVE', 'DELETE')"));
+        assertTrue(sql.contains(
+                "a.action IN ('COPY_AND_USE', 'MOVE_AND_USE') AND a.source_node_id <> a.target_node_id"));
+    }
+
     private String sql(String statement) {
         return configuration.getMappedStatement("org.example.mapper.DatasetRegistrationMapper." + statement)
                 .getBoundSql(params).getSql().replaceAll("\\s+", " ");

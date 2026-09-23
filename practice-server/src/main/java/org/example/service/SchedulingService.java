@@ -174,7 +174,9 @@ public class SchedulingService {
             if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
                 throw RegistrationException.conflict("dataset is not ACTIVE: " + item.getDatasetId());
             }
-            DatasetOperationGuard.requireIdle(datasetMapper, dataset);
+            String action = item.getAction().trim().toUpperCase(Locale.ROOT);
+            if (writesReplica(dataOnly, action, item)) DatasetOperationGuard.requireIdle(datasetMapper, dataset);
+            else DatasetOperationGuard.requireReadable(datasetMapper, dataset);
             DatasetReplica replica = datasetMapper.findReplicaById(item.getReplicaId());
             if (replica == null || !item.getDatasetId().equals(replica.getDatasetId())) {
                 throw RegistrationException.invalid("replica does not belong to dataset: " + item.getReplicaId());
@@ -185,7 +187,6 @@ public class SchedulingService {
             if (!replicaAvailabilityService.evaluate(replica).isUsable()) {
                 throw RegistrationException.conflict("replica is not available: " + item.getReplicaId());
             }
-            String action = item.getAction().trim().toUpperCase(Locale.ROOT);
             boolean deleteOnly = dataOnly && "DELETE".equals(action);
             NodeManagement target = nodeMapper.getNodeById(item.getTargetNodeId());
             if (target == null || !nodeAvailabilityService.isSchedulable(target)) {
@@ -245,10 +246,17 @@ public class SchedulingService {
             assignment.setPlanId(plan.getPlanId());
             planMapper.insertAssignment(assignment);
         }
-        // Submission and data movement are not business reads. Heat is raised only after
-        // DatasetAccessService records a complete, checksum-verified read.
+        // Submission and data movement are not business reads. Heat is raised only after a
+        // complete, checksum-verified read: an access test (DatasetAccessService) or a task
+        // Job that finished reading its input (K8sTaskOrchestratorService).
         dispatchAfterCommit(plan.getPlanId(), plan.getInternalTaskId(), assignments);
         return accepted(plan);
+    }
+
+    /** Must match countActiveWriteReferences: these assignments change the dataset's replicas. */
+    private static boolean writesReplica(boolean dataOnly, String action, SchedulingPlanRequest.Assignment item) {
+        return dataOnly || (("COPY_AND_USE".equals(action) || "MOVE_AND_USE".equals(action))
+                && !item.getSourceNodeId().equals(item.getTargetNodeId()));
     }
 
     private void dispatchAfterCommit(Long planId, Integer taskId,

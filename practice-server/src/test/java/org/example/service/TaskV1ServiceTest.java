@@ -120,24 +120,7 @@ class TaskV1ServiceTest {
 
     @Test
     void createAcceptsOnlyActiveDatasetAndUsableImage() {
-        RegisteredDataset dataset = RegisteredDataset.builder()
-                .datasetId(11L).name("sales.csv").status("ACTIVE").build();
-        RuntimeImage image = RuntimeImage.builder()
-                .runtimeImageId(3L).status("READY").enabled(true).resolvedDigest("sha256:abc").build();
-        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
-        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(3).availability("AVAILABLE").build();
-        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
-        when(replicaAvailabilityService.evaluate(replica))
-                .thenReturn(new ReplicaAvailability("USABLE", true, null));
-        when(imageMapper.findById(3L)).thenReturn(image);
-        NodeManagement compute = NodeManagement.builder().nodeId(3).build();
-        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(compute));
-        when(nodeAvailabilityService.isSchedulable(compute)).thenReturn(true);
-        when(nodeMapper.getNodeByName("compute")).thenReturn(compute);
-        doAnswer(invocation -> {
-            invocation.<TaskManagement>getArgument(0).setTaskId(42);
-            return null;
-        }).when(taskMapper).submitData(any(TaskManagement.class));
+        stubAcceptableTask();
 
         CreateTaskRequest request = request();
         org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
@@ -157,12 +140,29 @@ class TaskV1ServiceTest {
                 eq(null), eq("IN_PLACE"));
         org.mockito.InOrder order = org.mockito.Mockito.inOrder(datasetMapper, taskMapper);
         order.verify(datasetMapper).lockDataset(11L);
-        order.verify(datasetMapper).countActiveSchedulingReferences(11L);
+        order.verify(datasetMapper).countActiveWriteReferences(11L);
         order.verify(taskMapper).submitData(any());
         org.mockito.Mockito.clearInvocations(taskMapper, orchestrator);
-        when(datasetMapper.countActiveSchedulingReferences(11L)).thenReturn(1);
+        when(datasetMapper.countActiveWriteReferences(11L)).thenReturn(1);
         assertThrows(RegistrationException.class, () -> service.create(request, "request-busy"));
         org.mockito.Mockito.verifyNoInteractions(taskMapper, orchestrator);
+    }
+
+    @Test
+    void createSharesADatasetWithTasksAlreadyReadingIt() {
+        stubAcceptableTask();
+        // Running tasks, their Jobs and read-only plans only read the dataset: they do not block another task.
+        when(datasetMapper.countActiveTaskReferences(11L, "sales.csv")).thenReturn(2);
+        when(datasetMapper.countActiveMigrationReferences(11L, null)).thenReturn(2);
+        when(datasetMapper.countActiveSchedulingReferences(11L)).thenReturn(1);
+
+        assertEquals(42, service.create(request(), "request-concurrent").getTaskId());
+
+        // A pending copy, move or delete of one of its replicas does.
+        when(datasetMapper.countActiveWriteReferences(11L)).thenReturn(1);
+        RegistrationException busy = assertThrows(RegistrationException.class,
+                () -> service.create(request(), "request-during-move"));
+        assertTrue(busy.getMessage().contains("正在被复制、迁移或删除"));
     }
 
     @Test
@@ -459,6 +459,28 @@ class TaskV1ServiceTest {
                 .map(TaskPreflightCheck::getExecutionMode).filter(Objects::nonNull).collect(Collectors.toSet()));
         request.setExecutionMode("BOTH");
         assertThrows(RegistrationException.class, () -> service.preflight(request));
+    }
+
+    /** Dataset 11 (ACTIVE, one usable replica on compute node 3) with ready image 3; the task gets ID 42. */
+    private void stubAcceptableTask() {
+        RegisteredDataset dataset = RegisteredDataset.builder()
+                .datasetId(11L).name("sales.csv").status("ACTIVE").build();
+        RuntimeImage image = RuntimeImage.builder()
+                .runtimeImageId(3L).status("READY").enabled(true).resolvedDigest("sha256:abc").build();
+        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
+        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(3).availability("AVAILABLE").build();
+        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
+        when(replicaAvailabilityService.evaluate(replica))
+                .thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(imageMapper.findById(3L)).thenReturn(image);
+        NodeManagement compute = NodeManagement.builder().nodeId(3).build();
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(compute));
+        when(nodeAvailabilityService.isSchedulable(compute)).thenReturn(true);
+        when(nodeMapper.getNodeByName("compute")).thenReturn(compute);
+        doAnswer(invocation -> {
+            invocation.<TaskManagement>getArgument(0).setTaskId(42);
+            return null;
+        }).when(taskMapper).submitData(any(TaskManagement.class));
     }
 
     private CreateTaskRequest request() {

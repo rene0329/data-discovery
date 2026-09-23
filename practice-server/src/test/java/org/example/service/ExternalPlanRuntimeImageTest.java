@@ -48,6 +48,7 @@ class ExternalPlanRuntimeImageTest {
     private RuntimeImage selectedImage;
     private SchedulingPlanMapper plans;
     private DatasetAccessAuthorizationService authorization;
+    private DatasetHeatService heat;
 
     @BeforeEach
     void setUp() {
@@ -59,10 +60,11 @@ class ExternalPlanRuntimeImageTest {
         jobs = mock(K8sJobFactory.class);
         plans = mock(SchedulingPlanMapper.class);
         authorization = mock(DatasetAccessAuthorizationService.class);
+        heat = mock(DatasetHeatService.class);
         service = new K8sTaskOrchestratorService(mock(DataManagementMapper.class), nodes, tasks,
                 mock(MigrationTaskMapper.class), jobs, datasets, images, new ObjectMapper(), "", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), plans, uploads,
-                authorization, mock(InPlacePlacementService.class));
+                authorization, mock(InPlacePlacementService.class), heat);
         when(datasets.findDatasetById(10L)).thenReturn(RegisteredDataset.builder().datasetId(10L)
                 .datasetCode("test").datasetVersion("v1").defaultRuntimeImageId(8L).build());
         when(datasets.findReplicaById(20L)).thenReturn(DatasetReplica.builder().replicaId(20L)
@@ -196,6 +198,8 @@ class ExternalPlanRuntimeImageTest {
         verify(plans).updatePlanStatus(eq(40L), eq("Complete".equals(jobCondition) ? "COMPLETED" : "FAILED"), any());
         verify(jobResource).get();
         verifyNoInteractions(uploads);
+        if ("Complete".equals(jobCondition)) verify(heat).recordAccess(10L);
+        else verifyNoInteractions(heat);
     }
 
     @Test
@@ -253,6 +257,9 @@ class ExternalPlanRuntimeImageTest {
         assertNull(row.getValue().getT2());
         assertNull(row.getValue().getRating());
         assertFalse(row.getValue().getSchedule().contains("中心化调度方案:"));
+        // Two assignments read dataset 10 within one task: one access. Dataset 11 was never read.
+        verify(heat).recordAccess(10L);
+        verifyNoMoreInteractions(heat);
     }
 
     @Test
