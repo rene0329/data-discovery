@@ -7,6 +7,12 @@
 -- Every statement is guarded so the script can be re-run after a partial
 -- operational apply, like the other migrations. Depends on V20260920_1
 -- (collaboration_domain) and V20260924_1 (node_management.site_code).
+
+-- The domain names below are Chinese literals. The mysql client in the MySQL
+-- pod defaults to latin1 (POSIX locale), which would store them double-encoded,
+-- so the connection charset is pinned here rather than left to the caller.
+SET NAMES utf8mb4;
+
 SET @db = DATABASE();
 
 -- site_code is joined against node_management.site_code, whose table uses
