@@ -141,6 +141,53 @@ class DatasetUsageControllerTest {
     }
 
     @Test
+    void grantLogSerializesApplicantDatasetAndStatus() throws Exception {
+        DatasetUsageModels.GrantLogItem item = new DatasetUsageModels.GrantLogItem();
+        item.setGrantId(100L);
+        item.setUserId(7L);
+        item.setUsername("owner-a");
+        item.setDisplayName("Owner A");
+        item.setDomainName("Domain A");
+        item.setDatasetId(2L);
+        item.setDatasetName("B");
+        item.setDatasetCode("ds-b");
+        item.setDatasetVersion("v2");
+        item.setReason("need B");
+        item.setCreatedAt(Instant.parse("2026-09-24T07:00:00.123Z"));
+        item.setExpiresAt(Instant.parse("2026-09-24T08:00:00.123Z"));
+        item.setActive(true);
+        when(service.grantLog(500)).thenReturn(new DatasetUsageModels.GrantLog(
+                Instant.parse("2026-09-24T07:30:00.123Z"), Arrays.asList(item)));
+
+        mvc.perform(get("/api/v1/security/dataset-access/grants"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.serverTime").value("2026-09-24T07:30:00.123Z"))
+                .andExpect(jsonPath("$.data.items[0].grantId").value(100))
+                .andExpect(jsonPath("$.data.items[0].userId").value(7))
+                .andExpect(jsonPath("$.data.items[0].username").value("owner-a"))
+                .andExpect(jsonPath("$.data.items[0].displayName").value("Owner A"))
+                .andExpect(jsonPath("$.data.items[0].domainName").value("Domain A"))
+                .andExpect(jsonPath("$.data.items[0].datasetId").value(2))
+                .andExpect(jsonPath("$.data.items[0].datasetName").value("B"))
+                .andExpect(jsonPath("$.data.items[0].datasetCode").value("ds-b"))
+                .andExpect(jsonPath("$.data.items[0].datasetVersion").value("v2"))
+                .andExpect(jsonPath("$.data.items[0].reason").value("need B"))
+                .andExpect(jsonPath("$.data.items[0].createdAt").value("2026-09-24T07:00:00.123Z"))
+                .andExpect(jsonPath("$.data.items[0].expiresAt").value("2026-09-24T08:00:00.123Z"))
+                .andExpect(jsonPath("$.data.items[0].active").value(true));
+    }
+
+    @Test
+    void grantLogPassesTheLimitAndRendersRoleErrors() throws Exception {
+        when(service.grantLog(20)).thenThrow(new RegistrationException(HttpStatus.FORBIDDEN,
+                "ROLE_REQUIRED", "required role: ADMIN"));
+
+        mvc.perform(get("/api/v1/security/dataset-access/grants").param("limit", "20"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorCode").value("ROLE_REQUIRED"));
+    }
+
+    @Test
     void missingUserIsUnauthorized() throws Exception {
         when(service.overview()).thenThrow(new AuthException(HttpStatus.UNAUTHORIZED,
                 "AUTH_REQUIRED", "authentication is required"));

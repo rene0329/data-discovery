@@ -63,6 +63,7 @@ public class DatasetUsagePolicyService {
     static final String REASON_ACCESS_DENIED = "CROSS_DOMAIN_ACCESS_DENIED";
     static final String REASON_GRANT_ISSUED = "GRANT_ISSUED";
     static final int MAX_REASON_LENGTH = 500;
+    static final int MAX_GRANT_LOG_ROWS = 1000;
 
     private final CurrentUserService currentUsers;
     private final DatasetAccessGrantMapper grants;
@@ -147,6 +148,39 @@ public class DatasetUsagePolicyService {
             items.add(item(subject, dataset, active.get(dataset.getDatasetId())));
         }
         return new DatasetUsageModels.Overview(now, ttlMinutes(), items);
+    }
+
+    /**
+     * 访问申请日志 (ADMIN only): the newest grants with applicant, dataset, reason and
+     * whether each is still active at the returned serverTime.
+     */
+    public DatasetUsageModels.GrantLog grantLog(int limit) {
+        AuthenticatedUser user = currentUsers.require();
+        if (!user.hasRole("ADMIN")) {
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "ROLE_REQUIRED", "required role: ADMIN");
+        }
+        Instant now = now();
+        LocalDateTime utcNow = utc(now);
+        List<DatasetUsageModels.GrantLogItem> items = new ArrayList<>();
+        for (DatasetAccessGrantLogRow row : grants.findGrantLog(Math.max(1, Math.min(limit, MAX_GRANT_LOG_ROWS)))) {
+            DatasetUsageModels.GrantLogItem item = new DatasetUsageModels.GrantLogItem();
+            item.setGrantId(row.getGrantId());
+            item.setUserId(row.getUserId());
+            item.setUsername(row.getUsername());
+            item.setDisplayName(row.getDisplayName());
+            item.setDomainName(row.getDomainName());
+            item.setDatasetId(row.getDatasetId());
+            item.setDatasetName(row.getDatasetName());
+            item.setDatasetCode(row.getDatasetCode());
+            item.setDatasetVersion(row.getDatasetVersion());
+            item.setReason(row.getReason());
+            item.setCreatedAt(row.getCreatedAt() == null ? null : row.getCreatedAt().toInstant(ZoneOffset.UTC));
+            item.setExpiresAt(row.getExpiresAt() == null ? null : row.getExpiresAt().toInstant(ZoneOffset.UTC));
+            // Same rule as the usage check: a grant is active while expires_at > now.
+            item.setActive(row.getExpiresAt() != null && row.getExpiresAt().isAfter(utcNow));
+            items.add(item);
+        }
+        return new DatasetUsageModels.GrantLog(now, items);
     }
 
     /** Issues a grant valid for the configured TTL, starting immediately; no approval step. */

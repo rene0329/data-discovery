@@ -38,6 +38,8 @@ public class SecurityConfiguration {
                 // Any signed-in user (AUDITOR and domain-less users included) may request a
                 // short-lived dataset usage grant for themselves; creating tasks stays restricted.
                 .antMatchers(HttpMethod.POST, "/api/v1/security/dataset-access/grants").authenticated()
+                // 访问申请日志 lists every user's grants, so only administrators may read it.
+                .antMatchers(HttpMethod.GET, "/api/v1/security/dataset-access/grants").hasRole("ADMIN")
                 .antMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/v1/privacy-computing/capabilities",
                         "/api/v1/privacy-computing/templates").permitAll()

@@ -41,6 +41,17 @@ public interface DatasetAccessGrantMapper {
                                                          @Param("datasetIds") Collection<Long> datasetIds,
                                                          @Param("now") LocalDateTime now);
 
+    /** 访问申请日志: the newest grants first, each with its applicant and dataset. */
+    @Select("SELECT g.grant_id, g.user_id, u.username, u.display_name, d.name AS domain_name, " +
+            "g.dataset_id, rd.name AS dataset_name, rd.dataset_code, rd.dataset_version, " +
+            "g.reason, g.created_at, g.expires_at " +
+            "FROM dataset_access_grant g " +
+            "LEFT JOIN app_user u ON u.user_id = g.user_id " +
+            "LEFT JOIN collaboration_domain d ON d.domain_id = u.domain_id " +
+            "LEFT JOIN registered_dataset rd ON rd.dataset_id = g.dataset_id " +
+            "ORDER BY g.grant_id DESC LIMIT #{limit}")
+    List<DatasetAccessGrantLogRow> findGrantLog(@Param("limit") int limit);
+
     /** Serializes concurrent grant requests of one user so "already active" stays exact. */
     @Select("SELECT user_id FROM app_user WHERE user_id = #{userId} FOR UPDATE")
     Long lockUser(@Param("userId") Long userId);

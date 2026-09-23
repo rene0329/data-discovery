@@ -62,6 +62,18 @@ class DatasetAccessMapperSqlTest {
     }
 
     @Test
+    void grantLogJoinsApplicantAndDatasetNewestFirst() {
+        Map<String, Object> params = new HashMap<>();
+        params.put("limit", 500);
+
+        String log = sql(DatasetAccessGrantMapper.class, "findGrantLog", params);
+        assertTrue(log.contains("FROM dataset_access_grant g LEFT JOIN app_user u ON u.user_id = g.user_id"), log);
+        assertTrue(log.contains("LEFT JOIN collaboration_domain d ON d.domain_id = u.domain_id"), log);
+        assertTrue(log.contains("LEFT JOIN registered_dataset rd ON rd.dataset_id = g.dataset_id"), log);
+        assertTrue(log.endsWith("ORDER BY g.grant_id DESC LIMIT ?"), log);
+    }
+
+    @Test
     void grantInsertWritesBothUtcTimestampsExplicitly() {
         String insert = sql(DatasetAccessGrantMapper.class, "insert", new DatasetAccessGrant());
         assertTrue(insert.contains("(user_id, dataset_id, reason, created_at, expires_at)"), insert);

@@ -95,6 +95,70 @@ public final class DatasetUsageModels {
         public void setReason(String reason) { this.reason = reason; }
     }
 
+    /** GET /api/v1/security/dataset-access/grants (ADMIN only): the 访问申请日志. */
+    public static class GrantLog {
+        /** The instant {@code active} was evaluated at. */
+        private Instant serverTime;
+        private List<GrantLogItem> items;
+
+        public GrantLog() {
+        }
+
+        public GrantLog(Instant serverTime, List<GrantLogItem> items) {
+            this.serverTime = serverTime;
+            this.items = items;
+        }
+
+        public Instant getServerTime() { return serverTime; }
+        public void setServerTime(Instant serverTime) { this.serverTime = serverTime; }
+        public List<GrantLogItem> getItems() { return items; }
+        public void setItems(List<GrantLogItem> items) { this.items = items; }
+    }
+
+    /** One grant: who applied, for which dataset, why, when, and whether it is still usable. */
+    public static class GrantLogItem {
+        private Long grantId;
+        private Long userId;
+        private String username;
+        private String displayName;
+        private String domainName;
+        private Long datasetId;
+        private String datasetName;
+        private String datasetCode;
+        private String datasetVersion;
+        private String reason;
+        private Instant createdAt;
+        private Instant expiresAt;
+        private boolean active;
+
+        public Long getGrantId() { return grantId; }
+        public void setGrantId(Long grantId) { this.grantId = grantId; }
+        public Long getUserId() { return userId; }
+        public void setUserId(Long userId) { this.userId = userId; }
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+        public String getDisplayName() { return displayName; }
+        public void setDisplayName(String displayName) { this.displayName = displayName; }
+        public String getDomainName() { return domainName; }
+        public void setDomainName(String domainName) { this.domainName = domainName; }
+        public Long getDatasetId() { return datasetId; }
+        public void setDatasetId(Long datasetId) { this.datasetId = datasetId; }
+        public String getDatasetName() { return datasetName; }
+        public void setDatasetName(String datasetName) { this.datasetName = datasetName; }
+        public String getDatasetCode() { return datasetCode; }
+        public void setDatasetCode(String datasetCode) { this.datasetCode = datasetCode; }
+        public String getDatasetVersion() { return datasetVersion; }
+        public void setDatasetVersion(String datasetVersion) { this.datasetVersion = datasetVersion; }
+        public String getReason() { return reason; }
+        public void setReason(String reason) { this.reason = reason; }
+        public Instant getCreatedAt() { return createdAt; }
+        public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+        public Instant getExpiresAt() { return expiresAt; }
+        public void setExpiresAt(Instant expiresAt) { this.expiresAt = expiresAt; }
+        public boolean isActive() { return active; }
+        public void setActive(boolean active) { this.active = active; }
+    }
+
     /** POST /api/v1/security/dataset-access/grants response body. */
     public static class GrantIssued {
         private Long grantId;

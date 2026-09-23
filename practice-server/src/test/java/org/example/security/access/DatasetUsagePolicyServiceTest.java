@@ -405,6 +405,49 @@ class DatasetUsagePolicyServiceTest {
         assertEquals(NOW.plusSeconds(60), issued.getExpiresAt());
     }
 
+    // ---- 访问申请日志 -----------------------------------------------------------
+
+    @Test
+    void grantLogListsEveryGrantNewestFirstWithActiveStateAtServerTime() {
+        grants.grant(7L, 2L, "need B", NOW_UTC.plusMinutes(30));
+        grants.grant(9L, 3L, "audit C", NOW_UTC);
+        login(ADMIN);
+
+        DatasetUsageModels.GrantLog log = service.grantLog(500);
+
+        assertEquals(NOW, log.getServerTime());
+        assertEquals(Arrays.asList(101L, 100L), log.getItems().stream()
+                .map(DatasetUsageModels.GrantLogItem::getGrantId).collect(Collectors.toList()));
+        DatasetUsageModels.GrantLogItem lapsed = log.getItems().get(0);
+        assertFalse(lapsed.isActive(), "a grant expiring exactly at serverTime is no longer usable");
+        assertEquals("user-9", lapsed.getUsername());
+        assertEquals("ds-3", lapsed.getDatasetCode());
+        assertEquals(NOW, lapsed.getExpiresAt());
+        DatasetUsageModels.GrantLogItem active = log.getItems().get(1);
+        assertTrue(active.isActive());
+        assertEquals(7L, active.getUserId());
+        assertEquals("dataset-2", active.getDatasetName());
+        assertEquals("v2", active.getDatasetVersion());
+        assertEquals("need B", active.getReason());
+        assertEquals(NOW.minusSeconds(60), active.getCreatedAt());
+        assertEquals(NOW.plusSeconds(1800), active.getExpiresAt());
+    }
+
+    @Test
+    void grantLogIsForAdministratorsOnlyAndCapsTheRowCount() {
+        login(OWNER_A);
+        RegistrationException error = assertThrows(RegistrationException.class, () -> service.grantLog(500));
+        assertEquals(HttpStatus.FORBIDDEN, error.getStatus());
+        assertEquals("ROLE_REQUIRED", error.getErrorCode());
+        assertNull(grants.lastLogLimit);
+
+        login(ADMIN);
+        service.grantLog(100000);
+        assertEquals(1000, grants.lastLogLimit);
+        service.grantLog(0);
+        assertEquals(1, grants.lastLogLimit);
+    }
+
     // ---- helpers -------------------------------------------------------------
 
     private void assertBadRequest(DatasetUsageModels.GrantRequest request) {
@@ -455,6 +498,7 @@ class DatasetUsagePolicyServiceTest {
         final Map<Long, RegisteredDataset> datasets = new LinkedHashMap<>();
         final List<DatasetAccessGrant> rows = new ArrayList<>();
         final List<Long> lockedUsers = new ArrayList<>();
+        Integer lastLogLimit;
         private long nextId = 100L;
 
         void dataset(Long id, String version, Long ownerDomainId, String ownerDomainName) {
@@ -496,6 +540,29 @@ class DatasetUsagePolicyServiceTest {
             return findActiveByUser(userId, now).stream()
                     .filter(row -> datasetIds.contains(row.getDatasetId()))
                     .collect(Collectors.toList());
+        }
+
+        @Override
+        public List<DatasetAccessGrantLogRow> findGrantLog(int limit) {
+            lastLogLimit = limit;
+            List<DatasetAccessGrantLogRow> result = new ArrayList<>();
+            for (int i = rows.size() - 1; i >= 0 && result.size() < limit; i--) {
+                DatasetAccessGrant grant = rows.get(i);
+                RegisteredDataset dataset = datasets.get(grant.getDatasetId());
+                DatasetAccessGrantLogRow row = new DatasetAccessGrantLogRow();
+                row.setGrantId(grant.getGrantId());
+                row.setUserId(grant.getUserId());
+                row.setUsername("user-" + grant.getUserId());
+                row.setDatasetId(grant.getDatasetId());
+                row.setDatasetName(dataset == null ? null : dataset.getName());
+                row.setDatasetCode(dataset == null ? null : dataset.getDatasetCode());
+                row.setDatasetVersion(dataset == null ? null : dataset.getDatasetVersion());
+                row.setReason(grant.getReason());
+                row.setCreatedAt(grant.getCreatedAt());
+                row.setExpiresAt(grant.getExpiresAt());
+                result.add(row);
+            }
+            return result;
         }
 
         @Override
