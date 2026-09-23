@@ -23,6 +23,8 @@ public interface DatasetRegistrationMapper {
     int markCandidateAvailability(@Param("nodeId") Integer nodeId,
                                   @Param("filePath") String filePath,
                                   @Param("availability") String availability);
+    int deleteCandidate(@Param("nodeId") Integer nodeId,
+                        @Param("filePath") String filePath);
     int updateCandidateIntegrity(@Param("nodeId") Integer nodeId,
                                  @Param("filePath") String filePath,
                                  @Param("sizeBytes") Long sizeBytes,
@@ -77,6 +79,7 @@ public interface DatasetRegistrationMapper {
     int updateReplicaAvailability(@Param("replicaId") Long replicaId,
                                   @Param("availability") String availability,
                                   @Param("verified") boolean verified);
+    int deleteReplica(@Param("replicaId") Long replicaId);
     int updateReplicaIntegrity(@Param("replicaId") Long replicaId,
                                @Param("sizeBytes") Long sizeBytes,
                                @Param("checksumAlgorithm") String checksumAlgorithm,

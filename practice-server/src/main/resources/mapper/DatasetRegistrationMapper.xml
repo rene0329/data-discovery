@@ -143,6 +143,11 @@
         WHERE node_id = #{nodeId} AND file_path = #{filePath}
     </update>
 
+    <delete id="deleteCandidate">
+        DELETE FROM dataset_discovery_candidate
+        WHERE node_id = #{nodeId} AND file_path = #{filePath}
+    </delete>
+
     <update id="updateCandidateIntegrity">
         UPDATE dataset_discovery_candidate
         SET size_bytes = #{sizeBytes}, checksum_algorithm = #{checksumAlgorithm}, checksum = #{checksum},
@@ -352,6 +357,10 @@
             verified_at = <choose><when test="verified">UTC_TIMESTAMP(3)</when><otherwise>NULL</otherwise></choose>
         WHERE replica_id = #{replicaId}
     </update>
+
+    <delete id="deleteReplica">
+        DELETE FROM dataset_replica WHERE replica_id = #{replicaId}
+    </delete>
 
     <update id="updateReplicaIntegrity">
         UPDATE dataset_replica

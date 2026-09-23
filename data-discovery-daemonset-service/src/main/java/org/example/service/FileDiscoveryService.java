@@ -356,15 +356,22 @@ public class FileDiscoveryService {
                 log.warn("文件 '{}' 本轮未观测到（连续 {}/{} 次），暂不标记为 MISSING", path, streak, missingConfirmScans);
                 continue;
             }
+            // Confirmed absent for missingConfirmScans consecutive scans: this is no
+            // longer "possibly a transient mount hiccup" (that case returns above,
+            // via the streak < missingConfirmScans check) — the file is gone, so its
+            // candidate/replica rows are deleted outright rather than left behind
+            // marked MISSING. Deletion, not a status flag, is the record of loss.
             missingStreaks.remove(path);
-            datasetRegistrationMapper.markCandidateAvailability(
-                    nodeId, path, "MISSING");
             DatasetReplica replica = datasetRegistrationMapper.findReplicaByNodePath(
                     nodeId, path);
             if (replica != null) {
-                datasetRegistrationMapper.updateReplicaAvailability(
-                        replica.getReplicaId(), "MISSING", false);
+                log.warn("文件 '{}' 连续 {} 轮未观测到，确认丢失：删除注册副本记录 (replicaId={})",
+                        path, missingConfirmScans, replica.getReplicaId());
+                datasetRegistrationMapper.deleteReplica(replica.getReplicaId());
+            } else {
+                log.warn("文件 '{}' 连续 {} 轮未观测到，确认丢失：删除扫描候选记录", path, missingConfirmScans);
             }
+            datasetRegistrationMapper.deleteCandidate(nodeId, path);
             missingCount++;
         }
 
@@ -403,7 +410,7 @@ public class FileDiscoveryService {
             observedCount++;
         }
 
-        log.info("候选文件同步完成: 观测 {}, 标记缺失 {}。注册数据集未被自动删除。",
+        log.info("候选文件同步完成: 观测 {}, 确认丢失并删除 {}。注册数据集（registered_dataset）本身未被自动删除。",
                 observedCount, missingCount);
     }
 
