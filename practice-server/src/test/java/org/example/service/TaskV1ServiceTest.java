@@ -16,6 +16,8 @@ import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.example.mapper.NodeManagementMapper;
+import org.example.security.access.DatasetUsagePolicyService;
+import org.springframework.http.HttpStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -53,6 +55,7 @@ class TaskV1ServiceTest {
     private DatasetReplicaAvailabilityService replicaAvailabilityService;
     private NodeAvailabilityService nodeAvailabilityService;
     private NodeManagementMapper nodeMapper;
+    private DatasetUsagePolicyService usagePolicy;
 
     @BeforeEach
     void setUp() {
@@ -63,9 +66,52 @@ class TaskV1ServiceTest {
         replicaAvailabilityService = mock(DatasetReplicaAvailabilityService.class);
         nodeAvailabilityService = mock(NodeAvailabilityService.class);
         nodeMapper = mock(NodeManagementMapper.class);
+        usagePolicy = mock(DatasetUsagePolicyService.class);
+        when(usagePolicy.checkAndAuditTaskDatasets(any(), any())).thenReturn(Collections.emptyList());
         service = new TaskV1Service(datasetMapper, imageMapper, taskMapper,
                 mock(RegistrationAuditMapper.class), orchestrator, new ObjectMapper(), nodeMapper,
-                replicaAvailabilityService, nodeAvailabilityService, "compute");
+                replicaAvailabilityService, nodeAvailabilityService, usagePolicy, "compute");
+    }
+
+    @Test
+    void createRejectsOutOfScopeDatasetsBeforeLockingOrPreflight() {
+        RegistrationException denied = new RegistrationException(HttpStatus.FORBIDDEN,
+                "DATASET_ACCESS_DENIED", "任务创建失败，用户访问受限");
+        org.mockito.Mockito.doThrow(denied).when(usagePolicy)
+                .requireTaskDatasetsAccessible(Arrays.asList(11L, 12L), "req-denied");
+        CreateTaskRequest request = new CreateTaskRequest();
+        request.setTaskName("mixed");
+        request.setDatasetIds(Arrays.asList(11L, 12L));
+        request.setExecutionMode("COMPARISON");
+
+        RegistrationException thrown = assertThrows(RegistrationException.class,
+                () -> service.create(request, "req-denied"));
+
+        assertEquals("DATASET_ACCESS_DENIED", thrown.getErrorCode());
+        verify(datasetMapper, never()).findDatasetById(any());
+        verify(taskMapper, never()).submitData(any(TaskManagement.class));
+        verify(orchestrator, never()).executeRegisteredTask(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void preflightFailsWholeRequestWhenAnyDatasetIsOutOfScope() {
+        when(usagePolicy.checkAndAuditTaskDatasets(eq(Arrays.asList(11L, 12L)), any()))
+                .thenReturn(Collections.singletonList(12L));
+        CreateTaskRequest request = new CreateTaskRequest();
+        request.setTaskName("mixed");
+        request.setDatasetIds(Arrays.asList(11L, 12L));
+        request.setExecutionMode("COMPARISON");
+
+        TaskPreflightResult result = service.preflight(request);
+
+        assertFalse(result.isValid());
+        assertEquals(1, result.getChecks().size());
+        TaskPreflightCheck check = result.getChecks().get(0);
+        assertEquals("12", check.getResourceId());
+        assertEquals("DATASET_ACCESS_DENIED", check.getErrorCode());
+        assertEquals("任务创建失败，用户访问受限", check.getMessage());
+        assertEquals("COMPARISON", result.getExecutionMode());
+        verify(datasetMapper, never()).findDatasetById(any());
     }
 
     @Test

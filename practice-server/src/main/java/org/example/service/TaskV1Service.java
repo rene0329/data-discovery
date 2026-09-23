@@ -20,6 +20,7 @@ import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
 import org.example.mapper.TaskManagementMapper;
 import org.example.mapper.NodeManagementMapper;
+import org.example.security.access.DatasetUsagePolicyService;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -44,6 +45,7 @@ public class TaskV1Service {
     private final NodeManagementMapper nodeMapper;
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     private final NodeAvailabilityService nodeAvailabilityService;
+    private final DatasetUsagePolicyService usagePolicy;
     private final String centralNodeName;
 
     static final String MODE_CENTRALIZED = "CENTRALIZED";
@@ -60,6 +62,7 @@ public class TaskV1Service {
                          NodeManagementMapper nodeMapper,
                          DatasetReplicaAvailabilityService replicaAvailabilityService,
                          NodeAvailabilityService nodeAvailabilityService,
+                         DatasetUsagePolicyService usagePolicy,
                          @Value("${dispatch.central-node.name:}") String centralNodeName) {
         this.datasetMapper = datasetMapper;
         this.imageMapper = imageMapper;
@@ -70,6 +73,7 @@ public class TaskV1Service {
         this.nodeMapper = nodeMapper;
         this.replicaAvailabilityService = replicaAvailabilityService;
         this.nodeAvailabilityService = nodeAvailabilityService;
+        this.usagePolicy = usagePolicy;
         this.centralNodeName = centralNodeName == null ? "" : centralNodeName.trim();
     }
 
@@ -83,6 +87,8 @@ public class TaskV1Service {
                     : taskCreated(existing);
         }
         validate(request);
+        // 权限外数据集先于资源预检查拒绝：返回 403 而不是副本/节点相关的 404/409，并写入异常访问日志。
+        usagePolicy.requireTaskDatasetsAccessible(request.getDatasetIds(), requestId);
         String executionMode = normalizeExecutionMode(request.getExecutionMode());
         String acceptanceRunId = normalizeAcceptanceRunId(request.getAcceptanceRunId());
         int runRound = request.getRunRound() == null ? 1 : request.getRunRound();
@@ -193,6 +199,17 @@ public class TaskV1Service {
 
     public TaskPreflightResult preflight(CreateTaskRequest request) {
         validate(request);
+        // 数据选择页点击“创建任务”时先调用预检查：只要有一个权限外数据集就整体失败并记入异常访问日志，
+        // 且不再返回其副本、节点等资源细节。
+        List<Long> denied = usagePolicy.checkAndAuditTaskDatasets(request.getDatasetIds(),
+                UUID.randomUUID().toString());
+        if (!denied.isEmpty()) {
+            List<TaskPreflightCheck> checks = denied.stream()
+                    .map(datasetId -> check("DATASET", datasetId, null, false, "ACCESS_DENIED",
+                            "DATASET_ACCESS_DENIED", "任务创建失败，用户访问受限"))
+                    .collect(Collectors.toList());
+            return new TaskPreflightResult(checks, normalizeExecutionMode(request.getExecutionMode()));
+        }
         return preflightValidated(request);
     }
 
