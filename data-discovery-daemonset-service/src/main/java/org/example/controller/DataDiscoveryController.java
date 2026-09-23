@@ -153,8 +153,22 @@ public class DataDiscoveryController {
 
         // 检查数据目录
         Path dataPath = Paths.get(dataDirectory);
-        health.put("dataDirectoryExists", Files.exists(dataPath));
+        boolean dataDirectoryExists = Files.exists(dataPath);
+        health.put("dataDirectoryExists", dataDirectoryExists);
         health.put("dataDirectoryReadable", Files.isReadable(dataPath));
+
+        // 数据目录所在文件系统的容量，用于控制面展示存储使用率
+        if (dataDirectoryExists) {
+            try {
+                java.nio.file.FileStore store = Files.getFileStore(dataPath);
+                long totalBytes = store.getTotalSpace();
+                long usableBytes = store.getUsableSpace();
+                health.put("diskTotalBytes", totalBytes);
+                health.put("diskUsedBytes", totalBytes - usableBytes);
+            } catch (IOException e) {
+                log.warn("无法获取数据目录 {} 所在文件系统的容量信息", dataDirectory, e);
+            }
+        }
 
         return health;
     }

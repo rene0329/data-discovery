@@ -48,5 +48,8 @@ public class NodeManagement {
     private String effectiveStatus;
     private Boolean schedulable;
     private String statusReason;
+    // 存储使用率（GiB）；实时从 data-discovery Agent 拉取，节点不可达时为 null。
+    private Double maxDisk;
+    private Double currentDisk;
 
 }

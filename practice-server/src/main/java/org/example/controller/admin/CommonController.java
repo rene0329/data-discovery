@@ -589,7 +589,37 @@ public class CommonController {
         if (data == null) {
             return ResponseEntity.status(404).body(ApiResponse.error(404, "not found"));
         }
+        fillDiskUsage(data);
         return ResponseEntity.ok(ApiResponse.ok(data));
+    }
+
+    /**
+     * 存储使用率不落库，现取现用：向节点上的 data-discovery Agent 请求其数据目录所在
+     * 文件系统的容量。节点不可达或未部署 Agent（如纯计算节点）时保持为 null，
+     * 前端据此展示“暂无数据”而不是编造一个百分比。
+     */
+    @SuppressWarnings("unchecked")
+    private void fillDiskUsage(NodeManagement node) {
+        if (node.getInternalIp() == null || node.getInternalIp().trim().isEmpty()) {
+            return;
+        }
+        try {
+            String url = String.format("http://%s:%d/data-discovery/health", node.getInternalIp(), discoveryPort);
+            ResponseEntity<Map> response = restTemplate.getForEntity(url, Map.class);
+            Map<String, Object> body = response.getBody();
+            if (body == null) {
+                return;
+            }
+            Number totalBytes = (Number) body.get("diskTotalBytes");
+            Number usedBytes = (Number) body.get("diskUsedBytes");
+            if (totalBytes != null && usedBytes != null && totalBytes.longValue() > 0) {
+                double gib = 1024.0 * 1024.0 * 1024.0;
+                node.setMaxDisk(totalBytes.doubleValue() / gib);
+                node.setCurrentDisk(usedBytes.doubleValue() / gib);
+            }
+        } catch (RuntimeException ex) {
+            log.debug("无法获取节点 {} 的存储使用率", node.getNodeName(), ex);
+        }
     }
 
     /**
