@@ -83,8 +83,8 @@ dispatch:
       speed-limit-bytes: 1024
       speed-time-seconds: 30
       limit-rate:
-        # 拓扑实验按路径模拟有效吞吐量，使结果能与历史性能分析直接比较。
-        default: 2048k
+        # 不设全局默认限速：数据搬运耗时反映实际网络路径。
+        # 以下路径级限速是 zjlab 拓扑实验的配置，按节点名匹配，在 ZJ 集群上不生效。
         n89-to-88: 3277k
         n89-to-90: 2048k
         n88-to-90: 4096k
@@ -192,6 +192,9 @@ app:
     stale-after-seconds: 93600
     # Sites whose gateway links to a specific center node instead of the hub (site:node).
     site-uplinks: shenzhen:master-215,hangzhou:master-141
+    # Private (VPC) addresses of edge nodes (node:ip). internal_ip is the SSH-TUN address, which
+    # routes even same-site transfers through the hub; two listed nodes of the same site use these.
+    lan-addresses: cluster-sh-1:172.28.241.199,cluster-sh-2:172.28.241.198,cluster-sh-3:172.28.241.196,cluster-sz-1:172.28.225.69,cluster-sz-2:172.28.225.70,cluster-sz-3:172.28.225.68,cluster-bj-1:172.28.115.14,cluster-bj-2:172.28.115.13
   runtime-image:
     verify-namespace: ${APP_RUNTIME_IMAGE_VERIFY_NAMESPACE:topic4-1}
     verify-timeout-seconds: 3600

@@ -7,6 +7,7 @@ import org.example.entity.NodeManagement;
 import org.example.exception.RegistrationException;
 import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
+import org.example.service.DataTransferAddressResolver;
 import org.example.service.NetworkTopologyService;
 import org.example.service.NodeAvailabilityService;
 import org.junit.jupiter.api.BeforeEach;
@@ -103,6 +104,38 @@ class K8sJobFactoryTopologyTest {
 
         assertEquals("cluster-hz-1", result.getSelectedNodeName());
         assertEquals("cluster-hz-1", result.getJob().getSpec().getTemplate().getSpec().getNodeName());
+    }
+
+    @Test
+    void sameSiteTransferDownloadsFromTheSourcePrivateAddress() {
+        NodeManagementMapper nodes = mock(NodeManagementMapper.class);
+        EdgeManagementMapper edges = mock(EdgeManagementMapper.class);
+        NodeAvailabilityService availability = new NodeAvailabilityService(300);
+        NodeManagement sh3 = node(5, "cluster-sh-3"), sh1 = node(11, "cluster-sh-1"), center = node(3, "master-40");
+        when(nodes.getNodeByName("cluster-sh-3")).thenReturn(sh3);
+        when(nodes.getNodeByName("cluster-sh-1")).thenReturn(sh1);
+        when(nodes.getNodeByName("master-40")).thenReturn(center);
+        when(nodes.selectAllNodes()).thenReturn(Arrays.asList(center, sh3, sh1));
+        when(edges.selectAllMetrics()).thenReturn(Arrays.asList(edge(5, 11, 1, 1000), edge(3, 5, 15, 100)));
+        K8sJobFactory lanFactory = new K8sJobFactory("unused", nodes, "cluster.local",
+                "curl:test", "python:test", "discovery", "default", 8080, "", 1,
+                new NetworkTopologyService(edges, nodes, availability, 1800), availability,
+                new DataTransferAddressResolver("cluster-sh-1:172.28.241.199,cluster-sh-3:172.28.241.196"));
+        @SuppressWarnings("unchecked")
+        Map<String, KubernetesClient> clients = (Map<String, KubernetesClient>)
+                ReflectionTestUtils.getField(lanFactory, "clusterClients");
+        clients.put("cluster-a", mock(KubernetesClient.class));
+
+        String inPlace = lanFactory.createDataProcessingJob("in-place-job", "cluster-sh-3", "test.npz",
+                "/dataset/test.npz", "cluster-sh-1", null, 0.5, 1.0)
+                .getJob().getSpec().getTemplate().getSpec().getInitContainers().get(0).getCommand().get(2);
+        String centralized = lanFactory.createDataProcessingJob("centralized-job", "cluster-sh-3", "test.npz",
+                "/dataset/test.npz", "master-40", null, 0.5, 1.0)
+                .getJob().getSpec().getTemplate().getSpec().getInitContainers().get(0).getCommand().get(2);
+
+        assertTrue(inPlace.contains("'http://172.28.241.196:8080/data-discovery/download/dataset/test.npz'"));
+        assertTrue(centralized.contains("'http://10.0.0.5:8080/data-discovery/download/dataset/test.npz'"));
+        assertFalse(inPlace.contains("--limit-rate"));
     }
 
     private NodeManagement node(int id, String name) {

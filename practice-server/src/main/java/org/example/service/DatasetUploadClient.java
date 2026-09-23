@@ -47,6 +47,7 @@ public class DatasetUploadClient {
     private final int readTimeoutMs;
     private final String dataDirectory;
     private final DatasetAccessAuthorizationService accessAuthorization;
+    private final DataTransferAddressResolver transferAddresses;
 
     @Autowired
     public DatasetUploadClient(
@@ -54,18 +55,27 @@ public class DatasetUploadClient {
             @Value("${app.storage-transfer.connect-timeout-ms:5000}") int connectTimeoutMs,
             @Value("${app.storage-transfer.read-timeout-ms:2700000}") int readTimeoutMs,
             @Value("${dispatch.data-discovery.data-directory:/dataset}") String dataDirectory,
-            DatasetAccessAuthorizationService accessAuthorization) {
+            DatasetAccessAuthorizationService accessAuthorization,
+            DataTransferAddressResolver transferAddresses) {
         this.discoveryPort = discoveryPort;
         this.connectTimeoutMs = Math.max(1000, connectTimeoutMs);
         this.readTimeoutMs = Math.max(1000, readTimeoutMs);
         this.dataDirectory = Paths.get(dataDirectory).toAbsolutePath().normalize().toString();
         this.accessAuthorization = accessAuthorization;
+        this.transferAddresses = transferAddresses;
     }
 
     /** Test and compatibility constructor for unauthenticated discovery-only operations such as scan. */
     public DatasetUploadClient(int discoveryPort, int connectTimeoutMs, int readTimeoutMs,
                                String dataDirectory) {
         this(discoveryPort, connectTimeoutMs, readTimeoutMs, dataDirectory, null);
+    }
+
+    /** Test and compatibility constructor without same-site private addresses. */
+    public DatasetUploadClient(int discoveryPort, int connectTimeoutMs, int readTimeoutMs,
+                               String dataDirectory, DatasetAccessAuthorizationService accessAuthorization) {
+        this(discoveryPort, connectTimeoutMs, readTimeoutMs, dataDirectory, accessAuthorization,
+                new DataTransferAddressResolver(""));
     }
 
     public void upload(NodeManagement node, MultipartFile file, String relativePath) {
@@ -208,8 +218,9 @@ public class DatasetUploadClient {
         }
         HttpURLConnection connection = null;
         try {
-            String sourceUrl = baseUrl(source) + "/data-discovery/download/"
-                    + encodeAbsolutePath(absolutePath);
+            // The target Agent pulls from the source: use the source address as seen from the target.
+            String sourceUrl = "http://" + transferAddresses.sourceAddress(source, target) + ":" + discoveryPort
+                    + "/data-discovery/download/" + encodeAbsolutePath(absolutePath);
             String relativePath = relativeDataPath(absolutePath);
             String body = "{\"sourceUrl\":\"" + jsonEscape(sourceUrl)
                     + "\",\"path\":\"" + jsonEscape(relativePath) + "\""

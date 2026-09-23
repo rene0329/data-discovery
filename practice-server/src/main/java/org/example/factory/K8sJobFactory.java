@@ -10,6 +10,7 @@ import io.fabric8.kubernetes.client.KubernetesClientException;
 import lombok.extern.slf4j.Slf4j;
 import org.example.entity.NodeManagement;
 import org.example.entity.RuntimeImage;
+import org.example.service.DataTransferAddressResolver;
 import org.example.service.NetworkTopologyService;
 import org.example.mapper.NodeManagementMapper;
 import org.example.service.NodeAvailabilityService;
@@ -49,6 +50,7 @@ public class K8sJobFactory {
     private final int discoveryPort;
     private final String wgetLimitRate;
     private final NodeAvailabilityService nodeAvailabilityService;
+    private final DataTransferAddressResolver transferAddresses;
 
     /** 路径级限速: master-89 -> master-88（旧 master-141 -> master-40） */
     @Value("${dispatch.job.curl.limit-rate.n89-to-88:}")
@@ -155,6 +157,17 @@ public class K8sJobFactory {
     }
     // <-- CandidateNode 定义结束
 
+    /** 测试与兼容构造器：不配置同站点内网地址，所有传输都使用 internal_ip。 */
+    public K8sJobFactory(String kubeconfigPath, NodeManagementMapper nodeManagementMapper,
+                         String clusterDomain, String initContainerImage, String mainContainerImage,
+                         String discoveryService, String discoveryNamespace, int discoveryPort,
+                         String wgetLimitRate, int nEpochs, NetworkTopologyService networkTopologyService,
+                         NodeAvailabilityService nodeAvailabilityService) {
+        this(kubeconfigPath, nodeManagementMapper, clusterDomain, initContainerImage, mainContainerImage,
+                discoveryService, discoveryNamespace, discoveryPort, wgetLimitRate, nEpochs,
+                networkTopologyService, nodeAvailabilityService, new DataTransferAddressResolver(""));
+    }
+
     @Autowired
     public K8sJobFactory(
             @Value("${dispatch.kubeconfig.path:C:/Users/xuty/.kube/config}") String kubeconfigPath,
@@ -168,7 +181,8 @@ public class K8sJobFactory {
             @Value("${dispatch.job.curl.limit-rate.default:}") String wgetLimitRate,
             @Value("${dispatch.training.n-epochs:15}") int nEpochs,
             NetworkTopologyService networkTopologyService,
-            NodeAvailabilityService nodeAvailabilityService
+            NodeAvailabilityService nodeAvailabilityService,
+            DataTransferAddressResolver transferAddresses
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -182,6 +196,7 @@ public class K8sJobFactory {
         this.wgetLimitRate = wgetLimitRate;
         this.nEpochs = nEpochs;
         this.nodeAvailabilityService = nodeAvailabilityService;
+        this.transferAddresses = transferAddresses;
     }
 
     @PostConstruct
@@ -375,9 +390,11 @@ public class K8sJobFactory {
             throw new IllegalStateException("找不到目标集群 '" + bestNode.getClusterId() + "' 的客户端。");
         }
 
-        // data-discovery 使用 hostNetwork: true，Pod IP = 节点 IP，直接用 internalIp 访问，不依赖 DNS
+        // data-discovery 使用 hostNetwork: true，Pod IP = 节点 IP，直接用节点地址访问，不依赖 DNS；
+        // 同站点节点之间走内网地址，其余走 internalIp（见 DataTransferAddressResolver）。
         // 下载路径使用 DB 中的 filePath（完整宿主机路径），去掉 dataDirectory 前缀得到相对路径
-        String sourceIp = sourceNodeInfo.getInternalIp();
+        String sourceIp = transferAddresses.sourceAddress(sourceNodeInfo,
+                nodeManagementMapper.getNodeByName(bestNode.getName()));
         if (sourceIp == null || sourceIp.isEmpty()) {
             throw new IllegalStateException("源节点 " + sourceNodeName + " 未配置 internalIp，无法构建数据下载 URL");
         }

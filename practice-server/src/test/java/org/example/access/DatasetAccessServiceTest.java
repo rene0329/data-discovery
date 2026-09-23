@@ -6,6 +6,7 @@ import org.example.entity.RegisteredDataset;
 import org.example.mapper.DatasetAccessEventMapper;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
+import org.example.service.DataTransferAddressResolver;
 import org.example.service.DatasetHeatService;
 import org.example.service.DatasetReplicaAvailabilityService;
 import org.example.service.NetworkTopologyService;
@@ -38,7 +39,7 @@ class DatasetAccessServiceTest {
     @BeforeEach
     void setup() {
         service = new DatasetAccessService(datasets, nodes, availability, topology, events, heat, reads,
-                authorization, 8080);
+                authorization, new DataTransferAddressResolver(""), 8080);
         when(datasets.findDatasetById(9L)).thenReturn(RegisteredDataset.builder().datasetId(9L)
                 .datasetVersion("1.0").status("ACTIVE").build());
         replica = DatasetReplica.builder().replicaId(19L).datasetId(9L).nodeId(2)

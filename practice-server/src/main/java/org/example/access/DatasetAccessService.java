@@ -7,6 +7,7 @@ import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetAccessEventMapper;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.mapper.NodeManagementMapper;
+import org.example.service.DataTransferAddressResolver;
 import org.example.service.DatasetHeatService;
 import org.example.service.DatasetReplicaAvailabilityService;
 import org.example.service.NetworkTopologyService;
@@ -36,16 +37,18 @@ public class DatasetAccessService {
     private final DatasetHeatService heat;
     private final NodeDatasetReadClient reads;
     private final DatasetAccessAuthorizationService authorization;
+    private final DataTransferAddressResolver transferAddresses;
     private final int discoveryPort;
 
     public DatasetAccessService(DatasetRegistrationMapper datasets, NodeManagementMapper nodes,
             DatasetReplicaAvailabilityService availability, NetworkTopologyService topology,
             DatasetAccessEventMapper events, DatasetHeatService heat, NodeDatasetReadClient reads,
-            DatasetAccessAuthorizationService authorization,
+            DatasetAccessAuthorizationService authorization, DataTransferAddressResolver transferAddresses,
             @Value("${dispatch.data-discovery.port:8080}") int discoveryPort) {
         this.datasets = datasets; this.nodes = nodes; this.availability = availability;
         this.topology = topology; this.events = events; this.heat = heat; this.reads = reads;
         this.authorization = authorization;
+        this.transferAddresses = transferAddresses;
         this.discoveryPort = discoveryPort;
     }
 
@@ -100,8 +103,8 @@ public class DatasetAccessService {
         events.insertStarted(event);
         long startedNanos = System.nanoTime();
         try {
-            NodeReadCommand command = command(event, dataset, source, sourceNode, request.isClearCache(),
-                    sourceGrant.getToken());
+            NodeReadCommand command = command(event, dataset, source, sourceNode, consumer,
+                    request.isClearCache(), sourceGrant.getToken());
             NodeReadOutcome outcome = reads.read(consumer, command, consumerGrant.getToken());
             if (outcome == null || outcome.getBytesRead() != source.getSizeBytes()
                     || !source.getChecksum().equalsIgnoreCase(outcome.getChecksum())) {
@@ -133,7 +136,8 @@ public class DatasetAccessService {
     }
 
     private NodeReadCommand command(DatasetAccessEvent event, RegisteredDataset dataset,
-            DatasetReplica source, NodeManagement sourceNode, boolean clearCache, String sourceToken) {
+            DatasetReplica source, NodeManagement sourceNode, NodeManagement consumer,
+            boolean clearCache, String sourceToken) {
         NodeReadCommand command = new NodeReadCommand();
         command.setRequestId(event.getRequestId());
         command.setDatasetId(String.valueOf(dataset.getDatasetId()));
@@ -141,7 +145,7 @@ public class DatasetAccessService {
         command.setSourcePath(source.getFilePath());
         command.setCacheKey(dataset.getDatasetId() + ":" + dataset.getDatasetVersion() + ":" + source.getChecksum());
         if (event.getConsumerNodeId().equals(source.getNodeId())) command.setLocalPath(source.getFilePath());
-        else command.setSourceUrl("http://" + sourceNode.getInternalIp() + ":" + discoveryPort
+        else command.setSourceUrl("http://" + transferAddresses.sourceAddress(sourceNode, consumer) + ":" + discoveryPort
                 + "/data-discovery/download/" + encodePath(source.getFilePath()));
         command.setSourceToken(sourceToken);
         command.setExpectedSize(source.getSizeBytes());

@@ -122,6 +122,36 @@ class DatasetUploadClientTest {
     }
 
     @Test
+    void sameSiteCopyPointsTheTargetAgentAtTheSourcePrivateAddress() throws Exception {
+        String digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/data-discovery/copy-from", exchange -> {
+            requestBody.set(new String(readAll(exchange.getRequestBody()), StandardCharsets.UTF_8));
+            byte[] response = ("{\"path\":\"mnist/mnist-1.0.npz\",\"sizeBytes\":123,"
+                    + "\"algorithm\":\"SHA-256\",\"digest\":\"" + digest
+                    + "\",\"verified\":true}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        DatasetUploadClient client = new DatasetUploadClient(port, 1000, 5000, "/dataset", authorization(),
+                new DataTransferAddressResolver("cluster-sh-2:172.28.241.198,cluster-sh-3:172.28.241.196"));
+        NodeManagement source = NodeManagement.builder().nodeName("cluster-sh-3")
+                .internalIp("10.214.0.5").build();
+        NodeManagement target = NodeManagement.builder().nodeName("cluster-sh-2")
+                .internalIp("127.0.0.1").build();
+
+        client.copyFrom(source, target, "/dataset/mnist/mnist-1.0.npz", 123L, digest,
+                42L, "1.0", "copy-request-8", "run-12");
+
+        assertTrue(requestBody.get().contains("\"sourceUrl\":\"http://172.28.241.196:" + port
+                + "/data-discovery/download/dataset/mnist/mnist-1.0.npz\""));
+    }
+
+    @Test
     void verifyReturnsMeasurementButDoesNotInventSuccessWithoutExpectedDigest() throws Exception {
         String digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         AtomicReference<String> authorizationHeader = new AtomicReference<>();
