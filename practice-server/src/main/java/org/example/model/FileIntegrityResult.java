@@ -1,12 +1,17 @@
 package org.example.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.io.Serializable;
 
 /**
  * Result of streaming a file through a node Agent integrity verifier.
  * The digest is always measured from the physical file. The verified flag is
  * true only when a non-empty expected SHA-256 and byte count both match.
+ * Agent responses also carry legacy fields such as {@code status} and
+ * {@code size}; they are ignored rather than failing an otherwise good copy.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class FileIntegrityResult implements Serializable {
     private static final long serialVersionUID = 1L;
 
