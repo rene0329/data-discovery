@@ -75,8 +75,8 @@ spec:
               value: "true"
             - name: PROBE_TARGET_EDGES
               value: "master-88/master-89,master-88/master-90,master-89/master-90,alihz/master-88,alish/master-88,alibj/master-90"
-            - name: PROBE_TRANSFER_BYTES
-              value: "5242880"
+            - name: PROBE_TRANSFER_SECONDS
+              value: "2"
             - name: PROBE_INTERVAL_MS
               value: "86400000"
             - name: PROBE_INITIAL_DELAY_MS

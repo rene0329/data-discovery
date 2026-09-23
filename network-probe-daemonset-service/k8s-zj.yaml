@@ -61,8 +61,8 @@ spec:
               value: alihz@10.214.0.1/master-40,alish@10.214.0.5/master-40,alibj@10.214.0.3/master-215
             - name: PROBE_EXTERNAL_HEARTBEAT_INTERVAL_MS
               value: "60000"
-            - name: PROBE_TRANSFER_BYTES
-              value: "5242880"
+            - name: PROBE_TRANSFER_SECONDS
+              value: "2"
             - name: PROBE_INTERVAL_MS
               value: "86400000"
             - name: PROBE_INITIAL_DELAY_MS

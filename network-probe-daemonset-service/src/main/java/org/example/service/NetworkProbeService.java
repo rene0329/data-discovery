@@ -92,9 +92,12 @@ public class NetworkProbeService {
     @Value("${central.node-heartbeat.url:}")
     private String centralNodeHeartbeatUrl;
 
-    // 每个方向固定发送的字节数，避免按持续时间测速产生不可控流量。
-    @Value("${probe.transfer.bytes:5242880}")
-    private long probeTransferBytes;
+    // Fixed-duration test per direction: a fixed byte count under-measures fast,
+    // low-latency links (transfer finishes during TCP slow start), while a fixed
+    // duration reaches steady-state throughput on any link and keeps total probe
+    // time bounded regardless of the link's actual speed.
+    @Value("${probe.transfer.seconds:2}")
+    private int probeTransferSeconds;
 
     @Scheduled(initialDelayString = "${probe.initial-delay.ms:30000}",
             fixedDelayString = "${probe.interval.ms:86400000}")
@@ -383,10 +386,10 @@ public class NetworkProbeService {
     String runIperfCommand(String targetIP, boolean reverse) {
         try {
             List<String> command = new ArrayList<>(Arrays.asList(
-                    "iperf3", "-c", targetIP, "-n", Long.toString(probeTransferBytes), "-J"));
+                    "iperf3", "-c", targetIP, "-t", Integer.toString(probeTransferSeconds), "-J"));
             if (reverse) command.add("-R");
             Process process = Runtime.getRuntime().exec(command.toArray(new String[0]));
-            if (!process.waitFor(20, TimeUnit.SECONDS)) {
+            if (!process.waitFor(probeTransferSeconds + 15L, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
                 return null;
             }
