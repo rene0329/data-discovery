@@ -657,8 +657,9 @@ public class CommonController {
             edgeMap.put("id", "e-" + edge.getEdgeId());
             edgeMap.put("source", sourceName);
             edgeMap.put("target", targetName);
-            edgeMap.put("latency", edge.getLatency() != null ? edge.getLatency() : 0);
-            edgeMap.put("bandwidth", edge.getBandwidth() != null ? edge.getBandwidth() : 0);
+            // Unmeasured links stay null: a fake 0 would read as "no latency".
+            edgeMap.put("latency", edge.getLatency());
+            edgeMap.put("bandwidth", edge.getBandwidth());
             edgeMap.put("status", edge.getStatus() != null ? edge.getStatus() : "UNKNOWN");
             NodeManagement sourceNode = nodeList.stream()
                     .filter(node -> node.getNodeId().equals(edge.getSourceId())).findFirst().orElse(null);

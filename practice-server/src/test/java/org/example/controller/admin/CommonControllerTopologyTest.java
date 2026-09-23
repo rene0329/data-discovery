@@ -69,6 +69,15 @@ class CommonControllerTopologyTest {
         org.junit.jupiter.api.Assertions.assertNull(firstNode.get("memory"));
         Map<String, Object> edge = (Map<String, Object>) ((List<?>) managementData.get("edges")).get(0);
         assertFalse((Boolean) edge.get("active"));
+        assertEquals(5.0, edge.get("latency"));
+        assertEquals(10L, edge.get("bandwidth"));
+
+        when(edges.selectAllMetrics()).thenReturn(java.util.Collections.emptyList());
+        Map<String, Object> unmeasured = (Map<String, Object>) ((List<?>) controller.networkTopology(false)
+                .getBody().getData().get("edges")).get(0);
+        assertEquals("UNKNOWN", unmeasured.get("status"));
+        org.junit.jupiter.api.Assertions.assertNull(unmeasured.get("latency"));
+        org.junit.jupiter.api.Assertions.assertNull(unmeasured.get("bandwidth"));
 
         ResponseEntity<ApiResponse<Map<String, Object>>> runtime = controller.networkTopology(true);
         Map<String, Object> runtimeData = runtime.getBody().getData();
