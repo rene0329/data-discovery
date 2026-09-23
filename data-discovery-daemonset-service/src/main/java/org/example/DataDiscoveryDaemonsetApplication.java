@@ -18,6 +18,8 @@ import org.example.service.NodeReadCacheService;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
+import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
 import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableScheduling;  // 如果你的服务需要定时任务（如 @Scheduled），添加这个注解
 
@@ -28,8 +30,18 @@ import org.springframework.scheduling.annotation.EnableScheduling;  // 如果你
  * must never component-scan the control plane. Keep the automatic scan rooted
  * in an otherwise empty daemon package and explicitly import the small set of
  * node-owned components required at runtime.
+ *
+ * practice-server pulls in spring-boot-starter-security (for its own
+ * SecurityConfiguration, which this app deliberately does not scan). Spring
+ * Boot still auto-configures its default HTTP Basic login for any request
+ * once that starter is merely on the classpath, which would lock every
+ * endpoint here behind a per-JVM generated password. This app already
+ * enforces its own scoped-token checks (DatasetAccessScopeVerifier) on the
+ * operations that need them, so the default auto-configured security serves
+ * no purpose here and must be excluded.
  */
-@SpringBootApplication(scanBasePackageClasses = DaemonComponentRoot.class)
+@SpringBootApplication(scanBasePackageClasses = DaemonComponentRoot.class,
+        exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
 @Import({
         Knife4jConfig.class,
         DataDiscoveryController.class,
