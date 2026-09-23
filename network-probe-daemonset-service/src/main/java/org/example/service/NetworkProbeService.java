@@ -83,6 +83,12 @@ public class NetworkProbeService {
     @Value("${probe.external.cluster-id:zj-external-aliyun}")
     private String externalClusterId;
 
+    // Same-region pairs (e.g. two nodes in one Aliyun VPC) skip the SSH-tunnel overlay
+    // address and probe over the cloud's own private network instead.
+    // Format: node-name=vpc-private-ip,node-name=vpc-private-ip
+    @Value("${probe.node.lan-ip-overrides:}")
+    private String lanIpOverrides;
+
     @Value("${central.node-heartbeat.url:}")
     private String centralNodeHeartbeatUrl;
 
@@ -115,7 +121,7 @@ public class NetworkProbeService {
                 continue;
             }
 
-            String targetIP = getInternalIP(node);
+            String targetIP = resolveTargetIp(targetNodeName, node);
             if (targetIP == null) {
                 log.warn("节点 {} 无 InternalIP，跳过", targetNodeName);
                 continue;
@@ -222,6 +228,23 @@ public class NetworkProbeService {
             this.tunnelIp = tunnelIp;
             this.logicalLocalNode = logicalLocalNode;
         }
+    }
+
+    private String resolveTargetIp(String targetNodeName, Node targetNode) {
+        String override = parseIpOverrides(lanIpOverrides).get(targetNodeName);
+        return override != null ? override : getInternalIP(targetNode);
+    }
+
+    static Map<String, String> parseIpOverrides(String configured) {
+        Map<String, String> overrides = new HashMap<>();
+        if (configured == null || configured.trim().isEmpty()) return overrides;
+        for (String entry : configured.split(",")) {
+            String[] parts = entry.trim().split("=", 2);
+            if (parts.length == 2 && !parts[0].trim().isEmpty() && !parts[1].trim().isEmpty()) {
+                overrides.put(parts[0].trim(), parts[1].trim());
+            }
+        }
+        return overrides;
     }
 
     static boolean isTargetEdge(String firstNode, String secondNode, String configuredEdges) {

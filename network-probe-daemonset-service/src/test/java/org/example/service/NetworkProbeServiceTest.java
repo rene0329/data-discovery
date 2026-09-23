@@ -62,6 +62,17 @@ class NetworkProbeServiceTest {
     }
 
     @Test
+    void parsesLanIpOverridesAndSkipsMalformedEntries() {
+        java.util.Map<String, String> overrides = NetworkProbeService.parseIpOverrides(
+                "cluster-bj-1=172.28.115.14,bad,cluster-bj-2=172.28.115.13");
+        assertEquals(2, overrides.size());
+        assertEquals("172.28.115.14", overrides.get("cluster-bj-1"));
+        assertEquals("172.28.115.13", overrides.get("cluster-bj-2"));
+        assertEquals(0, NetworkProbeService.parseIpOverrides("").size());
+        assertEquals(0, NetworkProbeService.parseIpOverrides(null).size());
+    }
+
+    @Test
     void parsesExternalTunnelEdgesAndSkipsMalformedEntries() {
         java.util.List<NetworkProbeService.ExternalProbeTarget> targets =
                 NetworkProbeService.parseExternalTargets(
