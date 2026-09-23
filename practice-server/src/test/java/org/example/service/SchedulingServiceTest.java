@@ -164,7 +164,7 @@ class SchedulingServiceTest {
 
         // Manual scheduling is not bound to the logical topology: nodes 3 and 4 need no measured path.
         assertEquals(41L, service.submit(request).getPlanId());
-        verify(orchestrator).executeExternalPlan(any(), any(), any());
+        verify(planMapper).insertPlan(any());
     }
 
     @Test
