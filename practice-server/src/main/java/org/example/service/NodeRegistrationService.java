@@ -49,7 +49,6 @@ public class NodeRegistrationService {
     private final RestTemplate restTemplate;
     private final int discoveryPort;
     private final int offlineFailureThreshold;
-    private final int candidateRetentionDays;
     private final NodeAvailabilityService availabilityService;
     private final EdgeManagementMapper edgeMapper;
 
@@ -63,8 +62,7 @@ public class NodeRegistrationService {
                                    NodeAvailabilityService availabilityService,
                                    EdgeManagementMapper edgeMapper,
                                    @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
-                                   @Value("${app.node-sync.offline-failure-threshold:3}") int offlineFailureThreshold,
-                                   @Value("${app.node-registration.candidate-retention-days:7}") int candidateRetentionDays) {
+                                   @Value("${app.node-sync.offline-failure-threshold:3}") int offlineFailureThreshold) {
         this.k8sJobFactory = k8sJobFactory;
         this.k8sNodeMapper = k8sNodeMapper;
         this.registrationMapper = registrationMapper;
@@ -76,7 +74,6 @@ public class NodeRegistrationService {
         this.availabilityService = availabilityService;
         this.edgeMapper = edgeMapper;
         this.offlineFailureThreshold = Math.max(1, offlineFailureThreshold);
-        this.candidateRetentionDays = Math.max(1, candidateRetentionDays);
     }
 
     public OperationResult discover(Set<String> requestedClusterIds) {
@@ -204,19 +201,6 @@ public class NodeRegistrationService {
         return registrationMapper.listCandidates(query, clusterId, true).stream()
                 .map(candidate -> NodeCandidateView.from(candidate, readLabels(candidate.getLabelsJson())))
                 .collect(Collectors.toList());
-    }
-
-    @Transactional
-    public OperationResult purgeExpiredCandidates(Integer retentionDays, String requestId) {
-        int days = retentionDays == null ? candidateRetentionDays : retentionDays;
-        if (days < 1) {
-            throw RegistrationException.invalid("retentionDays must be at least 1");
-        }
-        LocalDateTime cutoff = LocalDateTime.now().minusDays(days);
-        int removed = registrationMapper.deleteExpiredCandidates(cutoff);
-        audit("NODE_CANDIDATE", null, "PURGE_EXPIRED", requestId,
-                "retentionDays=" + days + ",removed=" + removed);
-        return OperationResult.purge(removed);
     }
 
     public List<RegisteredNodeView> listNodes(String query, String status, Boolean enabled) {

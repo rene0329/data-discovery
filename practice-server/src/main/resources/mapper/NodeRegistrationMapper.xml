@@ -58,7 +58,7 @@
 
     <select id="listCandidates" resultMap="NodeCandidateMap">
         SELECT * FROM node_discovery_candidate
-        WHERE 1 = 1
+        WHERE observed_status = 'ONLINE'
         <if test="onlyUnregistered">
             AND registered_node_id IS NULL
         </if>
@@ -89,9 +89,4 @@
         SET registered_node_id = NULL, updated_at = UTC_TIMESTAMP(3)
         WHERE cluster_id = #{clusterId} AND k8s_uid = #{k8sUid}
     </update>
-
-    <delete id="deleteExpiredCandidates">
-        DELETE FROM node_discovery_candidate
-        WHERE registered_node_id IS NULL AND last_seen_at &lt; #{cutoff}
-    </delete>
 </mapper>

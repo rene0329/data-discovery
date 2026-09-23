@@ -211,9 +211,6 @@ app:
     stale-after-seconds: 300
     offline-failure-threshold: 3
 
-  node-registration:
-    candidate-retention-days: 7   # 待注册候选超过该天数未被观测到，视为过期，可清理
-
   heat-update:
     access-alpha: 0.90
     max-heat: 100

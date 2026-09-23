@@ -61,15 +61,6 @@ public class NodeRegistrationController {
         return ApiV1Response.ok(PageResult.of(candidates, page, pageSize));
     }
 
-    @DeleteMapping("/node-candidates/expired")
-    public ApiV1Response<OperationResult> purgeExpiredCandidates(
-            @RequestParam(required = false) Integer retentionDays,
-            @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
-        String id = requestId(requestId);
-        OperationResult result = service.purgeExpiredCandidates(retentionDays, id);
-        return ApiV1Response.ok(result);
-    }
-
     @GetMapping("/nodes")
     public ApiV1Response<PageResult<RegisteredNodeView>> nodes(
             @RequestParam(defaultValue = "1") int page,
