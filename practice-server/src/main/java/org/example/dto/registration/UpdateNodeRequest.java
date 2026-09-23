@@ -7,9 +7,11 @@ public class UpdateNodeRequest {
     private String role;
     private Map<String, String> labels;
     private Integer version;
-    // Manual override for the site/domain grouping used by IN_PLACE scheduling,
-    // for the rare node whose name doesn't match the cluster-<site>-<n> /
-    // master-<n> convention that NodeRegistrationService derives it from.
+    // Manual override for the site/domain grouping that IN_PLACE scheduling
+    // prefers (a same-site compute node wins before the cross-site nearest-node
+    // fallback), for the rare node whose name doesn't match the
+    // cluster-<site>-<n> / master-<n> convention that NodeRegistrationService
+    // derives it from.
     private String siteCode;
 
     public String getDisplayName() { return displayName; }

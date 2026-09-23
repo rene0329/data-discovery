@@ -56,6 +56,7 @@ class TaskV1ServiceTest {
     private NodeAvailabilityService nodeAvailabilityService;
     private NodeManagementMapper nodeMapper;
     private DatasetUsagePolicyService usagePolicy;
+    private NetworkTopologyService topology;
 
     @BeforeEach
     void setUp() {
@@ -67,10 +68,13 @@ class TaskV1ServiceTest {
         nodeAvailabilityService = mock(NodeAvailabilityService.class);
         nodeMapper = mock(NodeManagementMapper.class);
         usagePolicy = mock(DatasetUsagePolicyService.class);
+        topology = mock(NetworkTopologyService.class);
         when(usagePolicy.checkAndAuditTaskDatasets(any(), any())).thenReturn(Collections.emptyList());
         service = new TaskV1Service(datasetMapper, imageMapper, taskMapper,
                 mock(RegistrationAuditMapper.class), orchestrator, new ObjectMapper(), nodeMapper,
-                replicaAvailabilityService, nodeAvailabilityService, usagePolicy, "compute");
+                replicaAvailabilityService, nodeAvailabilityService, usagePolicy,
+                new InPlacePlacementService(nodeMapper, replicaAvailabilityService, nodeAvailabilityService, topology),
+                "compute");
     }
 
     @Test
@@ -337,24 +341,34 @@ class TaskV1ServiceTest {
     }
 
     @Test
-    void comparisonPreflightFailsWhenEitherModeCannotRun() {
-        // The replica sits on a storage node without a site-local compute node: CENTRALIZED
-        // can still run, IN_PLACE cannot, so the comparison task must be rejected.
-        RegisteredDataset dataset = RegisteredDataset.builder()
-                .datasetId(11L).name("catdog").status("ACTIVE").build();
-        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(7).build();
-        RuntimeImage image = RuntimeImage.builder().runtimeImageId(3L).name("image")
-                .status("READY").enabled(true).resolvedDigest("sha256:abc").build();
-        NodeManagement central = NodeManagement.builder().nodeId(3).nodeName("compute").build();
-        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
-        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
-        when(replicaAvailabilityService.evaluate(replica))
-                .thenReturn(new ReplicaAvailability("USABLE", true, null));
-        when(nodeMapper.getNodeById(7)).thenReturn(NodeManagement.builder().nodeId(7).nodeName("storage").build());
-        when(imageMapper.findById(3L)).thenReturn(image);
-        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(central));
-        when(nodeAvailabilityService.isSchedulable(central)).thenReturn(true);
-        when(nodeMapper.getNodeByName("compute")).thenReturn(central);
+    void comparisonPreflightPassesWhenTheReplicaSiteHasNoComputeNodeButOneIsReachable() {
+        // The replica sits on a storage node whose site has no compute node. Distributed
+        // placement falls back to the nearest reachable compute node in another site.
+        NodeManagement central = storageReplicaFixture();
+        Map<Integer, NetworkTopologyService.NetworkPath> paths = new HashMap<>();
+        paths.put(7, new NetworkTopologyService.NetworkPath(Collections.singletonList(7), 0.0, Long.MAX_VALUE));
+        paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(7, 3), 25.0, 100L));
+        when(topology.pathsFrom(7)).thenReturn(paths);
+        CreateTaskRequest request = request();
+        request.setExecutionMode("COMPARISON");
+
+        TaskPreflightResult result = service.preflight(request);
+
+        assertTrue(result.isValid());
+        TaskPreflightCheck inPlace = result.getChecks().stream()
+                .filter(check -> "IN_PLACE_DATASET".equals(check.getResourceType())).findFirst().get();
+        assertTrue(inPlace.isAvailable());
+        assertEquals("AVAILABLE", inPlace.getStatus());
+        assertNull(inPlace.getErrorCode());
+        assertEquals("cross-site: cluster-hz-1 -> " + central.getNodeName()
+                + " (nearest reachable compute node, 25.0 ms)", inPlace.getMessage());
+    }
+
+    @Test
+    void comparisonPreflightFailsWhenNoComputeNodeIsReachableFromTheReplica() {
+        // Same layout, but the storage node has no usable path to any compute node:
+        // CENTRALIZED can still run, IN_PLACE cannot, so the comparison task is rejected.
+        storageReplicaFixture();
         CreateTaskRequest request = request();
         request.setExecutionMode("COMPARISON");
 
@@ -366,12 +380,56 @@ class TaskV1ServiceTest {
         assertEquals(1, failed.size());
         assertEquals("IN_PLACE_DATASET", failed.get(0).getResourceType());
         assertEquals("IN_PLACE", failed.get(0).getExecutionMode());
+        assertTrue(failed.get(0).getMessage().contains("no reachable compute node from cluster-hz-1"),
+                failed.get(0).getMessage());
         assertTrue(result.getChecks().stream().anyMatch(check -> "CENTRAL_NODE".equals(check.getResourceType())
                 && check.isAvailable() && "CENTRALIZED".equals(check.getExecutionMode())));
         RegistrationException rejected = assertThrows(RegistrationException.class,
                 () -> service.create(request, "request-comparison-rejected"));
         assertEquals("DATASET_NO_IN_PLACE_COMPUTE_REPLICA", rejected.getErrorCode());
         verify(taskMapper, never()).submitData(any());
+    }
+
+    @Test
+    void inPlacePreflightPrefersASameSiteComputeNodeWithoutACrossSiteNote() {
+        NodeManagement central = storageReplicaFixture();
+        NodeManagement hzCompute = NodeManagement.builder().nodeId(8).nodeName("cluster-hz-2")
+                .type("compute").siteCode("hz").build();
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Arrays.asList(central, hzCompute));
+        when(nodeAvailabilityService.isSchedulable(hzCompute)).thenReturn(true);
+        CreateTaskRequest request = request();
+        request.setExecutionMode("IN_PLACE");
+
+        TaskPreflightResult result = service.preflight(request);
+
+        assertTrue(result.isValid());
+        TaskPreflightCheck inPlace = result.getChecks().stream()
+                .filter(check -> "IN_PLACE_DATASET".equals(check.getResourceType())).findFirst().get();
+        assertTrue(inPlace.isAvailable());
+        assertNull(inPlace.getMessage());
+        verify(topology, never()).pathsFrom(any());
+    }
+
+    /** Dataset 11 with one usable replica on storage-only cluster-hz-1 (site hz); compute node 3 is in site center. */
+    private NodeManagement storageReplicaFixture() {
+        RegisteredDataset dataset = RegisteredDataset.builder()
+                .datasetId(11L).name("catdog").status("ACTIVE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(7).build();
+        RuntimeImage image = RuntimeImage.builder().runtimeImageId(3L).name("image")
+                .status("READY").enabled(true).resolvedDigest("sha256:abc").build();
+        NodeManagement central = NodeManagement.builder().nodeId(3).nodeName("compute")
+                .type("compute-storage").siteCode("center").build();
+        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
+        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
+        when(replicaAvailabilityService.evaluate(replica))
+                .thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(nodeMapper.getNodeById(7)).thenReturn(NodeManagement.builder().nodeId(7)
+                .nodeName("cluster-hz-1").type("storage").siteCode("hz").build());
+        when(imageMapper.findById(3L)).thenReturn(image);
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(central));
+        when(nodeAvailabilityService.isSchedulable(central)).thenReturn(true);
+        when(nodeMapper.getNodeByName("compute")).thenReturn(central);
+        return central;
     }
 
     @Test

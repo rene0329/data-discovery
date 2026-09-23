@@ -124,7 +124,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, migrations, jobs, datasets, images,
                 new ObjectMapper(), "node-a", "", Runnable::run, availability,
                 mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization);
+                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
 
@@ -182,7 +182,7 @@ class K8sTaskOrchestratorServiceTest {
                 new ObjectMapper(), "node-a", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), mock(SchedulingPlanMapper.class),
                 mock(DatasetUploadClient.class), mock(NetworkTopologyService.class),
-                mock(DatasetAccessAuthorizationService.class));
+                mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class));
         DataItemResult first = evidence("2026-09-19T00:00:00Z", "2026-09-19T00:00:04Z",
                 "2026-09-19T00:00:04Z", "2026-09-19T00:00:08Z");
         DataItemResult second = evidence("2026-09-19T00:00:01Z", "2026-09-19T00:00:03Z",
@@ -233,7 +233,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization);
+                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "CENTRALIZED");
 
@@ -277,7 +277,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization);
+                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Arrays.asList(10L, 11L), 7L, null, "COMPARISON");
 
@@ -369,7 +369,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization);
+                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "COMPARISON");
 
@@ -536,6 +536,92 @@ class K8sTaskOrchestratorServiceTest {
                 && row.getRating() == null));
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void inPlaceRunsOnTheNearestComputeNodeWhenTheReplicaSiteHasNone() {
+        // cluster-hz-1 is a storage-only node and site 'hz' has no compute node, so the job
+        // runs on the compute node nearest to it on the network topology.
+        DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
+        NodeManagementMapper nodes = mock(NodeManagementMapper.class);
+        TaskManagementMapper tasks = mock(TaskManagementMapper.class);
+        RuntimeImageMapper images = mock(RuntimeImageMapper.class);
+        K8sJobFactory jobs = mock(K8sJobFactory.class);
+        DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
+        DatasetAccessAuthorizationService authorization = mock(DatasetAccessAuthorizationService.class);
+        NetworkTopologyService topology = mock(NetworkTopologyService.class);
+        NodeManagement hz = NodeManagement.builder().nodeId(5).nodeName("cluster-hz-1")
+                .type("storage").siteCode("hz").build();
+        NodeManagement master40 = NodeManagement.builder().nodeId(1).nodeName("master-40")
+                .type("compute-storage").siteCode("center").build();
+        NodeManagement master215 = NodeManagement.builder().nodeId(3).nodeName("master-215")
+                .type("compute").siteCode("center").build();
+        when(nodes.getComputeCapableNodes()).thenReturn(Arrays.asList(master40, master215));
+        when(nodes.getNodeById(5)).thenReturn(hz);
+        when(nodes.getNodeByName("master-215")).thenReturn(master215);
+        Map<Integer, NetworkTopologyService.NetworkPath> paths = new java.util.HashMap<>();
+        paths.put(5, new NetworkTopologyService.NetworkPath(Collections.singletonList(5), 0.0, Long.MAX_VALUE));
+        paths.put(1, new NetworkTopologyService.NetworkPath(Arrays.asList(5, 2, 1), 12.0, 100L));
+        paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(5, 2, 3), 8.0, 100L));
+        when(topology.pathsFrom(5)).thenReturn(paths);
+        registerDataset(datasets, availability, 10L, "test", 5);
+        RuntimeImage image = RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true)
+                .resolvedDigest("sha256:image").commandJson("[\"python\"]")
+                .argsTemplateJson("[\"run.py\"]").build();
+        when(images.findById(7L)).thenReturn(image);
+        AccessAuthorizationResult grant = new AccessAuthorizationResult();
+        grant.setToken("scoped-read-token");
+        when(authorization.issueInternal(any(), any())).thenReturn(grant);
+
+        KubernetesClient client = mock(KubernetesClient.class, RETURNS_DEEP_STUBS);
+        MixedOperation<Pod, PodList, PodResource> pods = mock(MixedOperation.class, RETURNS_SELF);
+        MixedOperation<Job, JobList, ScalableResource<Job>> jobApi = mock(MixedOperation.class, RETURNS_SELF);
+        ScalableResource<Job> jobResource = mock(ScalableResource.class);
+        PodResource podResource = mock(PodResource.class, RETURNS_DEEP_STUBS);
+        when(client.pods()).thenReturn(pods);
+        when(client.batch().v1().jobs()).thenReturn(jobApi);
+        doReturn(jobResource).when(jobApi).withName(anyString());
+        doReturn(podResource).when(pods).withName(anyString());
+        when(podResource.inContainer("data-transfer-container").getLog())
+                .thenReturn("TRANSFER_MS=1000\nINPUT_BYTES=100\nINPUT_SHA256=" + SHA256);
+        when(podResource.inContainer("processing-container").getLog()).thenReturn("result=ok");
+        doReturn(new PodListBuilder().withItems(completedPod("master-215")).build()).when(pods).list();
+        when(jobResource.get()).thenReturn(new JobBuilder().withNewStatus().addNewCondition()
+                .withType("Complete").withStatus("True").endCondition().endStatus().build());
+        when(jobs.createDataProcessingJob(startsWith("in-place-"), eq("cluster-hz-1"), eq("test.npz"),
+                eq("/dataset/test.npz"), eq("master-215"), isNull(), any(), any(), any(), same(image),
+                eq("scoped-read-token")))
+                .thenReturn(new JobCreationResult(new JobBuilder().build(), client, "master-215", "/data/test.npz"));
+        K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
+                mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
+                jobs, datasets, images, new ObjectMapper(), "master-40", "", Runnable::run,
+                availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
+                topology, authorization, placement(nodes, availability, topology));
+
+        service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
+
+        verify(jobs).createDataProcessingJob(startsWith("in-place-"), eq("cluster-hz-1"), eq("test.npz"),
+                eq("/dataset/test.npz"), eq("master-215"), isNull(), any(), any(), any(), same(image),
+                eq("scoped-read-token"));
+        verify(jobApi).create(any(Job.class));
+        verify(tasks).updateExecutionSummary(argThat(summary -> "已完成".equals(summary.getStatus())
+                && summary.getSchedule() != null
+                && summary.getSchedule().contains("test: cluster-hz-1 -> master-215")
+                && Boolean.TRUE.equals(summary.getExecutionEvidenceComplete())));
+    }
+
+    private static InPlacePlacementService placement(NodeManagementMapper nodes,
+                                                     DatasetReplicaAvailabilityService availability) {
+        return placement(nodes, availability, mock(NetworkTopologyService.class));
+    }
+
+    private static InPlacePlacementService placement(NodeManagementMapper nodes,
+                                                     DatasetReplicaAvailabilityService availability,
+                                                     NetworkTopologyService topology) {
+        NodeAvailabilityService nodeAvailability = mock(NodeAvailabilityService.class);
+        when(nodeAvailability.isSchedulable(any())).thenReturn(true);
+        return new InPlacePlacementService(nodes, availability, nodeAvailability, topology);
+    }
+
     private K8sTaskOrchestratorService aggregationService(DatasetRegistrationMapper datasets,
                                                           TaskManagementMapper tasks) {
         when(datasets.findDatasetById(10L)).thenReturn(RegisteredDataset.builder().datasetId(10L)
@@ -548,7 +634,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(RuntimeImageMapper.class), new ObjectMapper(), "node-a", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), mock(SchedulingPlanMapper.class),
                 mock(DatasetUploadClient.class), mock(NetworkTopologyService.class),
-                mock(DatasetAccessAuthorizationService.class));
+                mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class));
     }
 
     private DataItemResult moved(long preparationMs, String source, String target,

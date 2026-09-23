@@ -62,7 +62,7 @@ class ExternalPlanRuntimeImageTest {
         service = new K8sTaskOrchestratorService(mock(DataManagementMapper.class), nodes, tasks,
                 mock(MigrationTaskMapper.class), jobs, datasets, images, new ObjectMapper(), "", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), plans, uploads,
-                mock(NetworkTopologyService.class), authorization);
+                mock(NetworkTopologyService.class), authorization, mock(InPlacePlacementService.class));
         when(datasets.findDatasetById(10L)).thenReturn(RegisteredDataset.builder().datasetId(10L)
                 .datasetCode("test").datasetVersion("v1").defaultRuntimeImageId(8L).build());
         when(datasets.findReplicaById(20L)).thenReturn(DatasetReplica.builder().replicaId(20L)

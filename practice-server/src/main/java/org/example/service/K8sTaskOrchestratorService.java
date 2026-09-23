@@ -90,6 +90,7 @@ public class K8sTaskOrchestratorService {
     private final DatasetAccessAuthorizationService accessAuthorizationService;
 
     private final NetworkTopologyService networkTopologyService;
+    private final InPlacePlacementService inPlacePlacement;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
     /** 等待单个 K8s Job 完成的超时时间（分钟）。 */
@@ -125,7 +126,8 @@ public class K8sTaskOrchestratorService {
             SchedulingPlanMapper schedulingPlanMapper,
             DatasetUploadClient datasetUploadClient,
             NetworkTopologyService networkTopologyService,
-            DatasetAccessAuthorizationService accessAuthorizationService
+            DatasetAccessAuthorizationService accessAuthorizationService,
+            InPlacePlacementService inPlacePlacement
     ) {
         this.dataManagementMapper = dataManagementMapper;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -143,6 +145,7 @@ public class K8sTaskOrchestratorService {
         this.datasetUploadClient = datasetUploadClient;
         this.networkTopologyService = networkTopologyService;
         this.accessAuthorizationService = accessAuthorizationService;
+        this.inPlacePlacement = inPlacePlacement;
     }
 
 
@@ -433,11 +436,6 @@ public class K8sTaskOrchestratorService {
 
 
 
-    private boolean siteHasComputeNode(NodeManagement replicaNode, List<NodeManagement> computeNodes) {
-        return replicaNode != null && replicaNode.getSiteCode() != null && computeNodes.stream()
-                .anyMatch(cn -> Objects.equals(cn.getSiteCode(), replicaNode.getSiteCode()));
-    }
-
     private DataItemResult processRegisteredDataItem(Integer taskId, Long datasetId,
                                                      Long explicitRuntimeImageId,
                                                      ResourceRequirements overrides,
@@ -446,41 +444,29 @@ public class K8sTaskOrchestratorService {
         if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
             throw new IllegalStateException("数据集不存在或不再处于 ACTIVE: " + datasetId);
         }
-        List<DatasetReplica> usableReplicas = datasetRegistrationMapper.listReplicas(datasetId).stream()
-                .filter(item -> replicaAvailabilityService.evaluate(item).isUsable())
-                .collect(Collectors.toList());
-        List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
-        Set<Integer> computeNodeIds = computeNodes == null ? Collections.emptySet() : computeNodes.stream()
-                .map(NodeManagement::getNodeId).collect(Collectors.toSet());
+        List<DatasetReplica> replicas = datasetRegistrationMapper.listReplicas(datasetId);
         String targetNodeName;
         DatasetReplica replica;
         if (TaskV1Service.MODE_IN_PLACE.equals(executionMode)) {
-            // "原位" means same physical site, not the same node_id: a replica on a
-            // storage-only node is fine as long as some compute node shares its
-            // site_code (see TaskV1Service.preflightValidated for the matching
-            // precondition check). Prefer a replica whose own node is already
-            // compute-capable (keeps the old zero-hop fast path) before falling
-            // back to any same-site replica + compute node pair.
-            replica = usableReplicas.stream()
-                    .filter(item -> computeNodeIds.contains(item.getNodeId()))
-                    .findFirst()
-                    .orElseGet(() -> usableReplicas.stream()
-                            .filter(item -> siteHasComputeNode(
-                                    nodeManagementMapper.getNodeById(item.getNodeId()), computeNodes))
-                            .findFirst()
-                            .orElseThrow(() -> new IllegalStateException(
-                                    "数据集没有位于可用计算节点或其所在站点的原位副本: " + datasetId)));
-            NodeManagement replicaNode = nodeManagementMapper.getNodeById(replica.getNodeId());
-            if (replicaNode == null) throw new IllegalStateException("原位副本节点不存在: " + replica.getNodeId());
-            NodeManagement inPlaceComputeNode = computeNodeIds.contains(replicaNode.getNodeId())
-                    ? replicaNode
-                    : computeNodes.stream()
-                            .filter(cn -> Objects.equals(cn.getSiteCode(), replicaNode.getSiteCode()))
-                            .findFirst()
-                            .orElseThrow(() -> new IllegalStateException(
-                                    "站点 '" + replicaNode.getSiteCode() + "' 没有可用计算节点: " + datasetId));
-            targetNodeName = inPlaceComputeNode.getNodeName();
+            // Same helper as TaskV1Service preflight: the replica's own compute node, else a
+            // compute node in the replica's site, else the nearest reachable compute node in
+            // any site (by network latency, then bandwidth).
+            InPlacePlacementService.Placement placement = inPlacePlacement.place(replicas);
+            if (!placement.isFound()) {
+                throw new IllegalStateException("数据集没有可到达计算节点的可用副本: " + datasetId
+                        + " (" + String.join("; ", placement.getRejectedReasons()) + ")");
+            }
+            replica = placement.getReplica();
+            targetNodeName = placement.getComputeNode().getNodeName();
+            if (placement.getTier() == InPlacePlacementService.Tier.NEAREST) {
+                log.info("数据集 {} 分布式执行跨站点回退: {} -> {} ({} ms)", datasetId,
+                        placement.getReplicaNode().getNodeName(), targetNodeName,
+                        placement.getPath().getLatencyMs());
+            }
         } else {
+            List<DatasetReplica> usableReplicas = replicas.stream()
+                    .filter(item -> replicaAvailabilityService.evaluate(item).isUsable())
+                    .collect(Collectors.toList());
             targetNodeName = resolveCentralNodeName();
             NodeManagement central = nodeManagementMapper.getNodeByName(targetNodeName);
             if (central == null) throw new IllegalStateException("中心计算节点不存在: " + targetNodeName);
