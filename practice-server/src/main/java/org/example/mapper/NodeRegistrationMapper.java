@@ -4,6 +4,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.example.entity.NodeDiscoveryCandidate;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Mapper
@@ -21,4 +22,5 @@ public interface NodeRegistrationMapper {
                              @Param("k8sUid") String k8sUid);
     int clearCandidateRegistration(@Param("clusterId") String clusterId,
                                    @Param("k8sUid") String k8sUid);
+    int deleteExpiredCandidates(@Param("cutoff") LocalDateTime cutoff);
 }

@@ -1,5 +1,6 @@
 package org.example.service;
 
+import org.example.dto.registration.OperationResult;
 import org.example.entity.NodeManagement;
 import org.example.exception.RegistrationException;
 import org.example.mapper.EdgeManagementMapper;
@@ -9,9 +10,13 @@ import org.example.mapper.RegistrationAuditMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDateTime;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -76,6 +81,31 @@ class NodeRegistrationServiceTest {
         service.enable(4, "enable-fixed-topology");
         verify(nodes).updateRegistrationState(4, "ACTIVE", true, false);
         org.mockito.Mockito.verifyNoInteractions(edges);
+    }
+
+    @Test
+    void purgeExpiredCandidatesUsesConfiguredDefaultRetention() {
+        NodeRegistrationMapper registration = mock(NodeRegistrationMapper.class);
+        RegistrationAuditMapper audits = mock(RegistrationAuditMapper.class);
+        NodeRegistrationService service = serviceWith(mock(NodeManagementMapper.class),
+                registration, mock(EdgeManagementMapper.class), audits);
+        ReflectionTestUtils.setField(service, "candidateRetentionDays", 7);
+        when(registration.deleteExpiredCandidates(any(LocalDateTime.class))).thenReturn(3);
+
+        OperationResult result = service.purgeExpiredCandidates(null, "purge-1");
+
+        assertEquals(3, result.getProcessedCount());
+        verify(registration).deleteExpiredCandidates(any(LocalDateTime.class));
+    }
+
+    @Test
+    void purgeExpiredCandidatesRejectsNonPositiveRetention() {
+        NodeRegistrationService service = serviceWith(mock(NodeManagementMapper.class),
+                mock(NodeRegistrationMapper.class), mock(EdgeManagementMapper.class),
+                mock(RegistrationAuditMapper.class));
+
+        assertThrows(RegistrationException.class,
+                () -> service.purgeExpiredCandidates(0, "purge-2"));
     }
 
     private NodeRegistrationService serviceWith(NodeManagementMapper nodes,

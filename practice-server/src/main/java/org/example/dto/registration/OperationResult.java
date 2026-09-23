@@ -31,6 +31,13 @@ public class OperationResult {
         return new OperationResult(true, operationId, message);
     }
 
+    public static OperationResult purge(int removedCount) {
+        OperationResult result = new OperationResult(true, null,
+                removedCount == 0 ? "no expired candidate found" : "expired candidates removed");
+        result.processedCount = removedCount;
+        return result;
+    }
+
     public static OperationResult discovery(String operationId, int requestedCount,
                                             int processedCount, List<String> failedResources) {
         OperationResult result = new OperationResult();
