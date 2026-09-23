@@ -14,6 +14,7 @@ public class RegisteredNodeView {
     private String k8sNodeName;
     private String displayName;
     private String role;
+    private String siteCode;
     private String registrationStatus;
     private Boolean enabled;
     private String observedStatus;
@@ -42,6 +43,7 @@ public class RegisteredNodeView {
         view.k8sNodeName = entity.getNodeName();
         view.displayName = entity.getDisplayName() == null ? entity.getNodeName() : entity.getDisplayName();
         view.role = toApiRole(entity.getType());
+        view.siteCode = entity.getSiteCode();
         view.registrationStatus = entity.getRegistrationStatus();
         view.enabled = entity.getEnabled();
         view.observedStatus = entity.getObservedStatus();
@@ -72,6 +74,7 @@ public class RegisteredNodeView {
     public String getK8sNodeName() { return k8sNodeName; }
     public String getDisplayName() { return displayName; }
     public String getRole() { return role; }
+    public String getSiteCode() { return siteCode; }
     public String getRegistrationStatus() { return registrationStatus; }
     public Boolean getEnabled() { return enabled; }
     public String getObservedStatus() { return observedStatus; }

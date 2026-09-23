@@ -30,9 +30,12 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -247,6 +250,7 @@ public class NodeRegistrationService {
                 .internalIp(candidate.getInternalIp())
                 .type(toDatabaseRole(request.getRole()))
                 .cluster(candidate.getClusterId())
+                .siteCode(deriveSiteCode(candidate.getK8sNodeName()))
                 .k8sUid(candidate.getK8sUid())
                 .maxCpu(candidate.getMaxCpu())
                 .maxMemory(candidate.getMaxMemory())
@@ -285,6 +289,8 @@ public class NodeRegistrationService {
         existing.setType(request.getRole() == null ? existing.getType() : toDatabaseRole(request.getRole()));
         existing.setLabelsJson(request.getLabels() == null
                 ? existing.getLabelsJson() : writeJson(request.getLabels()));
+        existing.setSiteCode(request.getSiteCode() == null
+                ? existing.getSiteCode() : request.getSiteCode().trim());
         existing.setRowVersion(request.getVersion());
         if (nodeMapper.updateRegistrationMetadata(existing) != 1) {
             throw RegistrationException.conflict("node was modified by another request");
@@ -478,6 +484,21 @@ public class NodeRegistrationService {
             case "WORKER": return "worker";
             default: throw RegistrationException.invalid("unsupported node role: " + role);
         }
+    }
+
+    // Same convention as the V20260924_1__node_site_code.sql backfill:
+    // cluster-<site>-<n> for the Aliyun edge nodes, master-<n> for the core ZJ
+    // nodes. Anything else is left for an operator to set via update()'s
+    // siteCode override rather than guessed.
+    private static final Pattern SITE_NODE_NAME = Pattern.compile("^cluster-([a-zA-Z]+)-[0-9]+$");
+    private static final Pattern CORE_NODE_NAME = Pattern.compile("^master-[0-9]+$");
+
+    private String deriveSiteCode(String nodeName) {
+        if (nodeName == null) return null;
+        Matcher siteMatch = SITE_NODE_NAME.matcher(nodeName);
+        if (siteMatch.matches()) return siteMatch.group(1).toLowerCase(Locale.ROOT);
+        if (CORE_NODE_NAME.matcher(nodeName).matches()) return "core";
+        return null;
     }
 
     private String writeJson(Object value) {

@@ -152,17 +152,23 @@
     <insert id="insertRegisteredNode" parameterType="org.example.entity.NodeManagement"
             useGeneratedKeys="true" keyProperty="nodeId">
         INSERT INTO node_management (
-            node_name, display_name, external_ip, internal_ip, type, cluster, k8s_uid,
+            node_name, display_name, external_ip, internal_ip, type, cluster, site_code, k8s_uid,
             max_cpu, max_memory, current_cpu, current_memory, num_dataset, last_update_time,
             registration_status, enabled, observed_status, observed_status_reason,
             offline_observation_count, labels_json, last_seen_at, verified_at, row_version
         ) VALUES (
-            #{nodeName}, #{displayName}, #{externalIp}, #{internalIp}, #{type}, #{cluster}, #{k8sUid},
+            #{nodeName}, #{displayName}, #{externalIp}, #{internalIp}, #{type}, #{cluster}, #{siteCode}, #{k8sUid},
             #{maxCpu}, #{maxMemory}, #{currentCpu}, #{currentMemory}, #{numDataset}, #{lastUpdateTime},
             #{registrationStatus}, #{enabled}, #{observedStatus}, #{observedStatusReason},
             #{offlineObservationCount}, #{labelsJson}, #{lastSeenAt}, #{verifiedAt}, 0
         )
     </insert>
+
+    <update id="updateNodeSiteCode">
+        UPDATE node_management
+        SET site_code = #{siteCode}
+        WHERE node_id = #{nodeId} AND deleted_at IS NULL
+    </update>
 
     <update id="updateNodeObservation" parameterType="org.example.entity.NodeManagement">
         UPDATE node_management
@@ -215,6 +221,7 @@
     <update id="updateRegistrationMetadata" parameterType="org.example.entity.NodeManagement">
         UPDATE node_management
         SET display_name = #{displayName}, type = #{type}, labels_json = #{labelsJson},
+            site_code = #{siteCode},
             row_version = row_version + 1
         WHERE node_id = #{nodeId} AND row_version = #{rowVersion} AND deleted_at IS NULL
     </update>
@@ -251,7 +258,12 @@
     </update>
 
     <select id="countDatasetReplicasByNode" resultType="int">
-        SELECT COUNT(*) FROM dataset_replica WHERE node_id = #{nodeId}
+        <!-- A MISSING replica is evidence the file is gone from this node, not
+             a reason to block unregistering it (see V20260919_1__strong_replica_integrity.sql
+             and the ZJ node-rename history: a decommissioned/renamed node
+             otherwise can never be unregistered once any of its files ever
+             went missing). -->
+        SELECT COUNT(*) FROM dataset_replica WHERE node_id = #{nodeId} AND availability != 'MISSING'
     </select>
 
     <!-- 更新现有节点，支持所有字段（基于 node_name） -->

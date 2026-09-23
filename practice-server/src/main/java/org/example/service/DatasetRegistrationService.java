@@ -326,6 +326,11 @@ public class DatasetRegistrationService {
     public RegisteredDatasetView verify(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
         requireDatasetMutation(dataset);
+        // Re-verifying an already-ACTIVE dataset must not demote it to DRAFT:
+        // that would make it fail the ACTIVE-status precondition on task
+        // preflight (TaskV1Service.requireActiveDataset) even though the data
+        // itself just proved fine. Only DRAFT/VERIFY_FAILED land back in DRAFT.
+        String statusIfVerified = "ACTIVE".equals(dataset.getStatus()) ? "ACTIVE" : "DRAFT";
         mapper.updateDatasetStatus(datasetId, "VERIFYING", null, false);
         DatasetMetadata metadata = mapper.findDatasetMetadata(datasetId);
         String authoritativeDigest = metadata == null ? null : normalizeSha256(metadata.getDigestValue());
@@ -393,7 +398,7 @@ public class DatasetRegistrationService {
             audit("DATASET", String.valueOf(datasetId), "VERIFY_FAILED", requestId, "no valid replica");
             throw RegistrationException.invalid("dataset verification failed: no valid replica");
         }
-        mapper.updateDatasetStatus(datasetId, "DRAFT", "verified", true);
+        mapper.updateDatasetStatus(datasetId, statusIfVerified, "verified", true);
         audit("DATASET", String.valueOf(datasetId), "VERIFY", requestId, "success");
         return getDataset(datasetId);
     }

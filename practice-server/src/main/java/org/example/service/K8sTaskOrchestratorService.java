@@ -51,6 +51,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -335,6 +336,11 @@ public class K8sTaskOrchestratorService {
 
 
 
+    private boolean siteHasComputeNode(NodeManagement replicaNode, List<NodeManagement> computeNodes) {
+        return replicaNode != null && replicaNode.getSiteCode() != null && computeNodes.stream()
+                .anyMatch(cn -> Objects.equals(cn.getSiteCode(), replicaNode.getSiteCode()));
+    }
+
     private DataItemResult processRegisteredDataItem(Integer taskId, Long datasetId,
                                                      Long explicitRuntimeImageId,
                                                      ResourceRequirements overrides,
@@ -352,14 +358,31 @@ public class K8sTaskOrchestratorService {
         String targetNodeName;
         DatasetReplica replica;
         if (TaskV1Service.MODE_IN_PLACE.equals(executionMode)) {
+            // "原位" means same physical site, not the same node_id: a replica on a
+            // storage-only node is fine as long as some compute node shares its
+            // site_code (see TaskV1Service.preflightValidated for the matching
+            // precondition check). Prefer a replica whose own node is already
+            // compute-capable (keeps the old zero-hop fast path) before falling
+            // back to any same-site replica + compute node pair.
             replica = usableReplicas.stream()
                     .filter(item -> computeNodeIds.contains(item.getNodeId()))
                     .findFirst()
-                    .orElseThrow(() -> new IllegalStateException(
-                            "数据集没有位于可用计算节点上的原位副本: " + datasetId));
-            NodeManagement inPlaceNode = nodeManagementMapper.getNodeById(replica.getNodeId());
-            if (inPlaceNode == null) throw new IllegalStateException("原位副本节点不存在: " + replica.getNodeId());
-            targetNodeName = inPlaceNode.getNodeName();
+                    .orElseGet(() -> usableReplicas.stream()
+                            .filter(item -> siteHasComputeNode(
+                                    nodeManagementMapper.getNodeById(item.getNodeId()), computeNodes))
+                            .findFirst()
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "数据集没有位于可用计算节点或其所在站点的原位副本: " + datasetId)));
+            NodeManagement replicaNode = nodeManagementMapper.getNodeById(replica.getNodeId());
+            if (replicaNode == null) throw new IllegalStateException("原位副本节点不存在: " + replica.getNodeId());
+            NodeManagement inPlaceComputeNode = computeNodeIds.contains(replicaNode.getNodeId())
+                    ? replicaNode
+                    : computeNodes.stream()
+                            .filter(cn -> Objects.equals(cn.getSiteCode(), replicaNode.getSiteCode()))
+                            .findFirst()
+                            .orElseThrow(() -> new IllegalStateException(
+                                    "站点 '" + replicaNode.getSiteCode() + "' 没有可用计算节点: " + datasetId));
+            targetNodeName = inPlaceComputeNode.getNodeName();
         } else {
             targetNodeName = resolveCentralNodeName();
             NodeManagement central = nodeManagementMapper.getNodeByName(targetNodeName);

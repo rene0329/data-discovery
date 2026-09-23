@@ -176,6 +176,16 @@ public class FileDiscoveryService {
 
     private Integer nodeId; // 当前节点的数据库 ID
 
+    @Value("${file.discovery.missing-confirm-scans:3}")
+    private int missingConfirmScans;
+
+    // In-memory consecutive-absence counter per candidate path, scoped to this
+    // pod's own scan loop. A single missed scan (mount hiccup, a large file
+    // still being written, a transient stat() error) must not permanently
+    // demote an already-verified replica to UNVERIFIED for the file's whole
+    // lifetime — see upsertCandidate's CASE in DatasetRegistrationMapper.xml.
+    private final Map<String, Integer> missingStreaks = new HashMap<>();
+
     /**
      * 初始化：获取当前节点的数据库 ID
      */
@@ -273,7 +283,11 @@ public class FileDiscoveryService {
                         }
                     });
         } catch (IOException e) {
-            log.error("遍历数据目录失败 {}: {}", DATA_DIRECTORY, e.getMessage());
+            // Same reasoning as the missing-directory check above: a walk failure
+            // is not "the directory is empty". Swallowing it here previously let
+            // syncToDatabase see an empty file list and mark every known replica
+            // on this node MISSING for what may be a transient mount hiccup.
+            throw new IllegalStateException("遍历数据目录失败: " + DATA_DIRECTORY, e);
         }
 
         return fileList;
@@ -329,18 +343,29 @@ public class FileDiscoveryService {
                 datasetRegistrationMapper.listCandidates(null, nodeId, false);
         int missingCount = 0;
         for (DatasetDiscoveryCandidate candidate : knownCandidates) {
-            if (!discoveredPaths.contains(candidate.getFilePath())
-                    && !"MISSING".equals(candidate.getAvailability())) {
-                datasetRegistrationMapper.markCandidateAvailability(
-                        nodeId, candidate.getFilePath(), "MISSING");
-                DatasetReplica replica = datasetRegistrationMapper.findReplicaByNodePath(
-                        nodeId, candidate.getFilePath());
-                if (replica != null) {
-                    datasetRegistrationMapper.updateReplicaAvailability(
-                            replica.getReplicaId(), "MISSING", false);
-                }
-                missingCount++;
+            String path = candidate.getFilePath();
+            if (discoveredPaths.contains(path)) {
+                missingStreaks.remove(path);
+                continue;
             }
+            if ("MISSING".equals(candidate.getAvailability())) {
+                continue;
+            }
+            int streak = missingStreaks.merge(path, 1, Integer::sum);
+            if (streak < missingConfirmScans) {
+                log.warn("文件 '{}' 本轮未观测到（连续 {}/{} 次），暂不标记为 MISSING", path, streak, missingConfirmScans);
+                continue;
+            }
+            missingStreaks.remove(path);
+            datasetRegistrationMapper.markCandidateAvailability(
+                    nodeId, path, "MISSING");
+            DatasetReplica replica = datasetRegistrationMapper.findReplicaByNodePath(
+                    nodeId, path);
+            if (replica != null) {
+                datasetRegistrationMapper.updateReplicaAvailability(
+                        replica.getReplicaId(), "MISSING", false);
+            }
+            missingCount++;
         }
 
         LocalDateTime now = LocalDateTime.now();

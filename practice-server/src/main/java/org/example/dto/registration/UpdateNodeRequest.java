@@ -7,6 +7,10 @@ public class UpdateNodeRequest {
     private String role;
     private Map<String, String> labels;
     private Integer version;
+    // Manual override for the site/domain grouping used by IN_PLACE scheduling,
+    // for the rare node whose name doesn't match the cluster-<site>-<n> /
+    // master-<n> convention that NodeRegistrationService derives it from.
+    private String siteCode;
 
     public String getDisplayName() { return displayName; }
     public void setDisplayName(String displayName) { this.displayName = displayName; }
@@ -16,4 +20,6 @@ public class UpdateNodeRequest {
     public void setLabels(Map<String, String> labels) { this.labels = labels; }
     public Integer getVersion() { return version; }
     public void setVersion(Integer version) { this.version = version; }
+    public String getSiteCode() { return siteCode; }
+    public void setSiteCode(String siteCode) { this.siteCode = siteCode; }
 }

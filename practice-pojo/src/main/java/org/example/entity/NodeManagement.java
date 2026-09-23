@@ -22,6 +22,12 @@ public class NodeManagement {
     private String type;
     private String cluster;
     private String k8sUid;
+    // Physical site grouping used for IN_PLACE scheduling ("same domain compute
+    // node"): a storage-only replica node and the compute node that reads it
+    // only need to share this, not be the same node_id/type. Derived from
+    // node_name at registration; nullable so a name that doesn't match the
+    // convention is flagged for a manual value instead of silently mis-tagged.
+    private String siteCode;
 
     private Double maxCpu;
     private Double maxMemory;

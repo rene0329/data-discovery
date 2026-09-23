@@ -134,6 +134,11 @@ public class DatasetSchedulingExecutor {
         datasetMapper.updateReplicaIntegrity(replica.getReplicaId(), sourceIntegrity.getSizeBytes(),
                 "SHA-256", sourceIntegrity.getDigest(), "AVAILABLE",
                 "verified against dataset-version authority", true);
+        // Keep the discovery candidate in step, or the next scan's upsert CASE
+        // (DatasetRegistrationMapper.xml:upsertCandidate) will see a non-SHA-256
+        // candidate row and demote this replica right back to UNVERIFIED.
+        datasetMapper.updateCandidateIntegrity(source.getNodeId(), replica.getFilePath(),
+                sourceIntegrity.getSizeBytes(), "SHA-256", sourceIntegrity.getDigest(), "AVAILABLE", true);
 
         boolean targetExisted = targetReplica != null;
         if (!targetExisted) {
@@ -159,6 +164,8 @@ public class DatasetSchedulingExecutor {
                     datasetMapper.updateReplicaIntegrity(targetReplica.getReplicaId(), existing.getSizeBytes(),
                             "SHA-256", existing.getDigest(), "AVAILABLE",
                             "verified against dataset-version authority", true);
+                    datasetMapper.updateCandidateIntegrity(target.getNodeId(), replica.getFilePath(),
+                            existing.getSizeBytes(), "SHA-256", existing.getDigest(), "AVAILABLE", true);
                 }
             } catch (RuntimeException ignored) {
                 targetValid = false;

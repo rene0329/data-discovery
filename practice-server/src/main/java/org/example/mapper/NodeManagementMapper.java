@@ -78,6 +78,8 @@ public interface NodeManagementMapper {
 
     int insertRegisteredNode(NodeManagement node);
 
+    int updateNodeSiteCode(@Param("nodeId") Integer nodeId, @Param("siteCode") String siteCode);
+
     int updateNodeObservation(NodeManagement node);
 
     int updateObservedPublicIp(@Param("cluster") String cluster,
