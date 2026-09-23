@@ -520,6 +520,84 @@ public class DatasetRegistrationService {
         audit("DATASET", String.valueOf(datasetId), "UNREGISTER", requestId, null);
     }
 
+    /**
+     * Deletes one replica selected in 数据集管理: the physical file on its node
+     * first (while the dataset and node rows are locked), then the replica row
+     * and the node's discovery candidate for that path. A node failure aborts
+     * before any row changes. The last usable replica can never be removed.
+     */
+    @Transactional
+    public OperationResult removeReplica(Long datasetId, Long replicaId, String requestId) {
+        RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
+        DatasetReplica replica = requireDatasetReplica(datasetId, replicaId);
+
+        mapper.lockDataset(datasetId);
+        mapper.lockStorageNode(replica.getNodeId());
+        // Re-read under the locks: a concurrent removal may have won the race.
+        replica = requireDatasetReplica(datasetId, replicaId);
+        if (mapper.countActiveTaskReferences(datasetId, dataset.getName()) > 0
+                || mapper.countActiveMigrationReferences(datasetId, dataset.getLegacyDataId()) > 0
+                || mapper.countActiveSchedulingReferences(datasetId) > 0) {
+            throw RegistrationException.conflict("DATASET_IN_USE",
+                    "数据集存在进行中的任务、迁移或调度，暂不能删除副本");
+        }
+        if (replicaAvailabilityService.evaluate(replica).isUsable()) {
+            Long removedId = replica.getReplicaId();
+            boolean anotherUsable = mapper.listReplicas(datasetId).stream()
+                    .filter(other -> !removedId.equals(other.getReplicaId()))
+                    .anyMatch(other -> replicaAvailabilityService.evaluate(other).isUsable());
+            if (!anotherUsable) {
+                throw RegistrationException.conflict("LAST_USABLE_REPLICA", "不能删除数据集最后一个可用副本");
+            }
+        }
+
+        NodeManagement node = nodeMapper.getNodeById(replica.getNodeId());
+        boolean physicalDelete = !"MISSING".equals(replica.getAvailability());
+        if (physicalDelete) {
+            if (node == null) {
+                throw RegistrationException.conflict("REPLICA_NODE_UNAVAILABLE",
+                        "副本所在节点未注册，无法删除节点上的副本文件");
+            }
+            try {
+                // The node agent uses Files.deleteIfExists: an already-absent file is a 2xx success.
+                uploadClient.delete(node, replica.getFilePath(), datasetId, dataset.getDatasetVersion(),
+                        replicaDeleteAccessRequestId(replicaId, requestId), null);
+            } catch (RegistrationException ex) {
+                throw new RegistrationException(ex.getStatus(), "REPLICA_FILE_DELETE_FAILED",
+                        "删除节点上的副本文件失败: " + ex.getMessage());
+            }
+        }
+
+        mapper.deleteReplica(replicaId, datasetId);
+        int candidates = mapper.deleteCandidateByNodePath(replica.getNodeId(), replica.getFilePath());
+        Map<String, Object> detail = new java.util.LinkedHashMap<>();
+        detail.put("replicaId", replicaId);
+        detail.put("nodeId", replica.getNodeId());
+        detail.put("nodeName", node == null ? null : node.getNodeName());
+        detail.put("filePath", replica.getFilePath());
+        detail.put("previousAvailability", replica.getAvailability());
+        detail.put("physicalFileDeleted", physicalDelete);
+        detail.put("candidateRowsDeleted", candidates);
+        audit("DATASET", String.valueOf(datasetId), "REMOVE_REPLICA", requestId, writeJson(detail));
+        return OperationResult.completed(physicalDelete
+                ? "副本已删除，节点上的文件已删除"
+                : "副本已删除，文件此前已确认缺失，未调用节点删除");
+    }
+
+    private DatasetReplica requireDatasetReplica(Long datasetId, Long replicaId) {
+        DatasetReplica replica = mapper.findReplicaById(replicaId);
+        if (replica == null || !datasetId.equals(replica.getDatasetId())) {
+            throw RegistrationException.notFound("REPLICA_NOT_FOUND", "dataset replica not found");
+        }
+        return replica;
+    }
+
+    private String replicaDeleteAccessRequestId(Long replicaId, String requestId) {
+        String value = "replica-delete-" + replicaId + "-" + requestId;
+        return value.length() <= 128 ? value : value.substring(0, 128);
+    }
+
     private RegisteredDataset requireDataset(Long datasetId) {
         RegisteredDataset dataset = mapper.findDatasetById(datasetId);
         if (dataset == null) throw RegistrationException.notFound("registered dataset not found");

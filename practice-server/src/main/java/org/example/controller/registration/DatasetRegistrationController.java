@@ -178,6 +178,19 @@ public class DatasetRegistrationController {
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiV1Response.ok(replica));
     }
 
+    @DeleteMapping("/datasets/{datasetId}/replicas/{replicaId}")
+    public ApiV1Response<OperationResult> removeReplica(
+            @PathVariable Long datasetId,
+            @PathVariable Long replicaId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String requestId) {
+        String id = requestId(requestId);
+        OperationResult result = idempotency.execute("DATASET", "REMOVE_REPLICA", id,
+                datasetId + "/" + replicaId, null, OperationResult.class,
+                () -> service.removeReplica(datasetId, replicaId, id),
+                item -> String.valueOf(replicaId));
+        return ApiV1Response.ok(result);
+    }
+
     @PutMapping("/datasets/{datasetId}/runtime-image")
     public ApiV1Response<RegisteredDatasetView> bindRuntimeImage(
             @PathVariable Long datasetId,

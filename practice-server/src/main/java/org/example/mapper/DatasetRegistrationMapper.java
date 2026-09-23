@@ -84,6 +84,8 @@ public interface DatasetRegistrationMapper {
                                @Param("verificationMessage") String verificationMessage,
                                @Param("verified") boolean verified);
     int countAvailableReplicas(Long datasetId);
+    int deleteReplica(@Param("replicaId") Long replicaId, @Param("datasetId") Long datasetId);
+    int deleteCandidateByNodePath(@Param("nodeId") Integer nodeId, @Param("filePath") String filePath);
 
     int upsertDatasetMetadata(DatasetMetadata metadata);
     DatasetMetadata findDatasetMetadata(Long datasetId);

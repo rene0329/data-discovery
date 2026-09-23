@@ -367,6 +367,18 @@
           AND verified_at IS NOT NULL
     </select>
 
+    <!-- Replica removal (数据集管理): hard-deletes only the replica row and the node's
+         discovery candidate for that path. No FK references dataset_replica; historical
+         rows (scheduling_assignment.replica_id, dataset_access_event.source_replica_id)
+         keep the plain id and are intentionally left untouched. -->
+    <delete id="deleteReplica">
+        DELETE FROM dataset_replica WHERE replica_id = #{replicaId} AND dataset_id = #{datasetId}
+    </delete>
+
+    <delete id="deleteCandidateByNodePath">
+        DELETE FROM dataset_discovery_candidate WHERE node_id = #{nodeId} AND file_path = #{filePath}
+    </delete>
+
     <insert id="upsertDatasetMetadata" parameterType="org.example.entity.DatasetMetadata">
         INSERT INTO dataset_metadata (
             dataset_id, metadata_version, authoritative_size_bytes, digest_algorithm, digest_value,
