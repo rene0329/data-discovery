@@ -810,7 +810,7 @@ public class PrivacyComputeService {
         value.setInitiatorUserId(row.getInitiatorUserId());
         value.setParticipants(spec.getParticipants());
         Map<String, PrivacyComputeModels.ParticipantSpec> byParty = new LinkedHashMap<>();
-        for (PrivacyComputeModels.ParticipantSpec participant : spec.getParticipants()) {
+        if (spec.getParticipants() != null) for (PrivacyComputeModels.ParticipantSpec participant : spec.getParticipants()) {
             if (participant != null && participant.getPartyId() != null) byParty.put(participant.getPartyId(), participant);
         }
         List<ApprovalView> approvalViews = new ArrayList<>();
