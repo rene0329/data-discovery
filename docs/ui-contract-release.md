@@ -9,6 +9,7 @@
 - `/common/updateNodeSettings` returns 410. Use `PATCH /api/v1/nodes/{nodeId}` with `version` for supported metadata fields.
 - Data selection uses logical `/api/v1/datasets` IDs and `replicas[].nodeId`. These IDs are not interchangeable with `/common` physical `dataId`.
 - Task flow: POST `/api/v1/tasks/preflight`, then POST `/api/v1/tasks` with a stable `Idempotency-Key`; returns the persisted taskId. Existing `/common/taskList` remains the query endpoint.
+  - `executionMode` (added 2026-09-24): `IN_PLACE` (default), `CENTRALIZED`, or `COMPARISON`. `COMPARISON` creates one taskId that runs every selected dataset in both modes and writes `T1`/`T2`/`rating` (summed per-dataset data-movement seconds) back to that task; preflight returns the union of both modes' checks, each tagged with `executionMode` (`null` when mode-independent).
 - Health endpoint: `/actuator/health`.
 - Node/task/current-page polling remains approximately 1 second. Full dataset catalogs used in topology/settings refresh separately every 10 seconds, paginated at 100. Failed regions retain last-known data with an error message.
 - Template login is intentionally retained by user request; it is not backend authentication. No business mock handler or XMLHttpRequest interception is included in the production build. Do not expose unauthenticated backend mutation APIs to untrusted networks.

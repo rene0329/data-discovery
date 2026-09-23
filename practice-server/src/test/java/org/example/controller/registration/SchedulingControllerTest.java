@@ -44,10 +44,12 @@ class SchedulingControllerTest {
 
     @Test
     void explicitComputeRoutePassesTheSelectedImageAndRequiresIt() throws Exception {
-        when(service.submit(any())).thenReturn(new SchedulingPlanAccepted(41L, "manual-2", "manual-2", "ACCEPTED"));
+        when(service.submit(any())).thenReturn(new SchedulingPlanAccepted(41L, "manual-2", "manual-2", "ACCEPTED", 30));
         mvc.perform(post("/api/v1/scheduling/compute-plans").contentType("application/json")
                         .content("{\"externalPlanId\":\"manual-2\",\"taskId\":\"manual-2\",\"runtimeImageId\":7,\"assignments\":[{\"datasetId\":10,\"replicaId\":20,\"sourceNodeId\":3,\"targetNodeId\":3,\"action\":\"USE_IN_PLACE\"}]}"))
-                .andExpect(status().isAccepted()).andExpect(jsonPath("$.data.planId").value(41));
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.data.planId").value(41))
+                .andExpect(jsonPath("$.data.taskId").value("manual-2"))
+                .andExpect(jsonPath("$.data.internalTaskId").value(30));
         verify(service).submit(argThat(request -> Long.valueOf(7L).equals(request.getRuntimeImageId())));
         mvc.perform(post("/api/v1/scheduling/compute-plans").contentType("application/json").content("{}"))
                 .andExpect(status().isUnprocessableEntity());

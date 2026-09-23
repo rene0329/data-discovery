@@ -3,6 +3,8 @@ package org.example.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.dto.registration.CreateTaskRequest;
 import org.example.dto.registration.TaskCreated;
+import org.example.dto.registration.TaskPreflightCheck;
+import org.example.dto.registration.TaskPreflightResult;
 import org.example.entity.RegisteredDataset;
 import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
@@ -16,9 +18,16 @@ import org.example.mapper.TaskManagementMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.Collections;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,7 +38,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 class TaskV1ServiceTest {
@@ -195,6 +207,154 @@ class TaskV1ServiceTest {
 
         assertFalse(result.isComparable());
         assertNull(result.getCentralizedToInPlaceRatio());
+    }
+
+    @Test
+    void comparisonCreateProducesOneTaskThatRunsBothModes() {
+        RegisteredDataset first = RegisteredDataset.builder()
+                .datasetId(11L).name("sales.csv").status("ACTIVE").build();
+        RegisteredDataset second = RegisteredDataset.builder()
+                .datasetId(12L).name("orders.csv").status("ACTIVE").build();
+        DatasetReplica firstReplica = DatasetReplica.builder().replicaId(1L).nodeId(3).build();
+        DatasetReplica secondReplica = DatasetReplica.builder().replicaId(2L).nodeId(3).build();
+        when(datasetMapper.findDatasetById(11L)).thenReturn(first);
+        when(datasetMapper.findDatasetById(12L)).thenReturn(second);
+        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(firstReplica));
+        when(datasetMapper.listReplicas(12L)).thenReturn(Collections.singletonList(secondReplica));
+        when(replicaAvailabilityService.evaluate(any())).thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(imageMapper.findById(3L)).thenReturn(RuntimeImage.builder()
+                .runtimeImageId(3L).status("READY").enabled(true).resolvedDigest("sha256:abc").build());
+        NodeManagement compute = NodeManagement.builder().nodeId(3).nodeName("compute").build();
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(compute));
+        when(nodeAvailabilityService.isSchedulable(compute)).thenReturn(true);
+        when(nodeMapper.getNodeByName("compute")).thenReturn(compute);
+        doAnswer(invocation -> {
+            invocation.<TaskManagement>getArgument(0).setTaskId(42);
+            return null;
+        }).when(taskMapper).submitData(any(TaskManagement.class));
+        CreateTaskRequest request = request();
+        request.setDatasetIds(Arrays.asList(11L, 12L));
+        request.setExecutionMode("comparison");
+
+        TaskCreated created = service.create(request, "request-comparison");
+
+        assertEquals(42, created.getTaskId());
+        assertEquals("COMPARISON", created.getExecutionMode());
+        ArgumentCaptor<TaskManagement> saved = ArgumentCaptor.forClass(TaskManagement.class);
+        verify(taskMapper, times(1)).submitData(saved.capture());
+        assertEquals("COMPARISON", saved.getValue().getExecutionMode());
+        verify(orchestrator, times(1)).executeRegisteredTask(eq(42), eq(Arrays.asList(11L, 12L)), eq(3L),
+                eq(null), eq("COMPARISON"));
+        verifyNoMoreInteractions(orchestrator);
+    }
+
+    @Test
+    void comparisonPreflightReturnsTheUnionOfBothModesTaggedByMode() throws Exception {
+        RegisteredDataset dataset = RegisteredDataset.builder()
+                .datasetId(11L).name("catdog").status("ACTIVE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(3).build();
+        RuntimeImage image = RuntimeImage.builder().runtimeImageId(3L).name("image")
+                .status("READY").enabled(true).resolvedDigest("sha256:abc").build();
+        NodeManagement compute = NodeManagement.builder().nodeId(3).nodeName("compute").build();
+        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
+        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
+        when(replicaAvailabilityService.evaluate(replica))
+                .thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(imageMapper.findById(3L)).thenReturn(image);
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(compute));
+        when(nodeAvailabilityService.isSchedulable(compute)).thenReturn(true);
+        when(nodeMapper.getNodeByName("compute")).thenReturn(compute);
+        CreateTaskRequest request = request();
+        request.setExecutionMode("COMPARISON");
+
+        TaskPreflightResult result = service.preflight(request);
+
+        assertTrue(result.isValid());
+        assertEquals("COMPARISON", result.getExecutionMode());
+        Map<String, String> modeByType = new HashMap<>();
+        for (TaskPreflightCheck check : result.getChecks()) modeByType.put(check.getResourceType(), check.getExecutionMode());
+        assertEquals(new HashSet<>(Arrays.asList("DATASET", "RUNTIME_IMAGE", "COMPUTE_POOL",
+                "CENTRAL_NODE", "IN_PLACE_DATASET")), modeByType.keySet());
+        assertNull(modeByType.get("DATASET"));
+        assertNull(modeByType.get("RUNTIME_IMAGE"));
+        assertNull(modeByType.get("COMPUTE_POOL"));
+        assertEquals("CENTRALIZED", modeByType.get("CENTRAL_NODE"));
+        assertEquals("IN_PLACE", modeByType.get("IN_PLACE_DATASET"));
+
+        TaskPreflightCheck inPlaceCheck = result.getChecks().stream()
+                .filter(check -> "IN_PLACE_DATASET".equals(check.getResourceType())).findFirst().get();
+        TaskPreflightCheck poolCheck = result.getChecks().stream()
+                .filter(check -> "COMPUTE_POOL".equals(check.getResourceType())).findFirst().get();
+        ObjectMapper json = new ObjectMapper();
+        assertTrue(json.writeValueAsString(inPlaceCheck).contains("\"executionMode\":\"IN_PLACE\""));
+        assertTrue(json.writeValueAsString(poolCheck).contains("\"executionMode\":null"));
+    }
+
+    @Test
+    void comparisonPreflightFailsWhenEitherModeCannotRun() {
+        // The replica sits on a storage node without a site-local compute node: CENTRALIZED
+        // can still run, IN_PLACE cannot, so the comparison task must be rejected.
+        RegisteredDataset dataset = RegisteredDataset.builder()
+                .datasetId(11L).name("catdog").status("ACTIVE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(7).build();
+        RuntimeImage image = RuntimeImage.builder().runtimeImageId(3L).name("image")
+                .status("READY").enabled(true).resolvedDigest("sha256:abc").build();
+        NodeManagement central = NodeManagement.builder().nodeId(3).nodeName("compute").build();
+        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
+        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
+        when(replicaAvailabilityService.evaluate(replica))
+                .thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(nodeMapper.getNodeById(7)).thenReturn(NodeManagement.builder().nodeId(7).nodeName("storage").build());
+        when(imageMapper.findById(3L)).thenReturn(image);
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(central));
+        when(nodeAvailabilityService.isSchedulable(central)).thenReturn(true);
+        when(nodeMapper.getNodeByName("compute")).thenReturn(central);
+        CreateTaskRequest request = request();
+        request.setExecutionMode("COMPARISON");
+
+        TaskPreflightResult result = service.preflight(request);
+
+        assertFalse(result.isValid());
+        List<TaskPreflightCheck> failed = result.getChecks().stream()
+                .filter(check -> !check.isAvailable()).collect(Collectors.toList());
+        assertEquals(1, failed.size());
+        assertEquals("IN_PLACE_DATASET", failed.get(0).getResourceType());
+        assertEquals("IN_PLACE", failed.get(0).getExecutionMode());
+        assertTrue(result.getChecks().stream().anyMatch(check -> "CENTRAL_NODE".equals(check.getResourceType())
+                && check.isAvailable() && "CENTRALIZED".equals(check.getExecutionMode())));
+        RegistrationException rejected = assertThrows(RegistrationException.class,
+                () -> service.create(request, "request-comparison-rejected"));
+        assertEquals("DATASET_NO_IN_PLACE_COMPUTE_REPLICA", rejected.getErrorCode());
+        verify(taskMapper, never()).submitData(any());
+    }
+
+    @Test
+    void singleModePreflightKeepsOnlyItsOwnModeChecks() {
+        RegisteredDataset dataset = RegisteredDataset.builder()
+                .datasetId(11L).name("catdog").status("ACTIVE").build();
+        DatasetReplica replica = DatasetReplica.builder().replicaId(1L).nodeId(3).build();
+        NodeManagement compute = NodeManagement.builder().nodeId(3).nodeName("compute").build();
+        when(datasetMapper.findDatasetById(11L)).thenReturn(dataset);
+        when(datasetMapper.listReplicas(11L)).thenReturn(Collections.singletonList(replica));
+        when(replicaAvailabilityService.evaluate(replica))
+                .thenReturn(new ReplicaAvailability("USABLE", true, null));
+        when(imageMapper.findById(3L)).thenReturn(RuntimeImage.builder().runtimeImageId(3L)
+                .status("READY").enabled(true).resolvedDigest("sha256:abc").build());
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Collections.singletonList(compute));
+        when(nodeAvailabilityService.isSchedulable(compute)).thenReturn(true);
+        when(nodeMapper.getNodeByName("compute")).thenReturn(compute);
+        CreateTaskRequest request = request();
+
+        request.setExecutionMode("CENTRALIZED");
+        assertEquals(Collections.singleton("CENTRALIZED"), service.preflight(request).getChecks().stream()
+                .map(TaskPreflightCheck::getExecutionMode).filter(Objects::nonNull).collect(Collectors.toSet()));
+        request.setExecutionMode(null);
+        TaskPreflightResult defaulted = service.preflight(request);
+        assertEquals("IN_PLACE", defaulted.getExecutionMode());
+        assertEquals(Collections.singleton("IN_PLACE"), defaulted.getChecks().stream()
+                .map(TaskPreflightCheck::getExecutionMode).filter(Objects::nonNull).collect(Collectors.toSet()));
+        request.setExecutionMode("BOTH");
+        assertThrows(RegistrationException.class, () -> service.preflight(request));
     }
 
     private CreateTaskRequest request() {

@@ -7,7 +7,10 @@ public class CreateTaskRequest {
     private List<Long> datasetIds;
     private Long runtimeImageId;
     private ResourceRequirements resourceOverrides;
-    /** CENTRALIZED or IN_PLACE. Missing values keep old clients working and default to IN_PLACE. */
+    /**
+     * CENTRALIZED, IN_PLACE or COMPARISON. COMPARISON runs every dataset in both modes under
+     * one task ID. Missing values keep old clients working and default to IN_PLACE.
+     */
     private String executionMode;
     /** Groups independent centralized/in-place runs that use the same acceptance input. */
     private String acceptanceRunId;

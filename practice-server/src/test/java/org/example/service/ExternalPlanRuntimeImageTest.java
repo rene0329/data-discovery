@@ -198,6 +198,74 @@ class ExternalPlanRuntimeImageTest {
         verifyNoInteractions(uploads);
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void externalPlanScheduleIsGroupedByTargetNodeAndStaysOutOfPerformanceAnalysis() {
+        KubernetesClient client = mock(KubernetesClient.class, RETURNS_DEEP_STUBS);
+        MixedOperation<Pod, PodList, PodResource> pods = mock(MixedOperation.class, RETURNS_SELF);
+        MixedOperation<Job, JobList, ScalableResource<Job>> jobApi = mock(MixedOperation.class, RETURNS_SELF);
+        ScalableResource<Job> jobResource = mock(ScalableResource.class);
+        PodResource podResource = mock(PodResource.class, RETURNS_DEEP_STUBS);
+        when(client.pods()).thenReturn(pods);
+        when(client.batch().v1().jobs()).thenReturn(jobApi);
+        doReturn(jobResource).when(jobApi).withName(anyString());
+        doReturn(podResource).when(pods).withName(anyString());
+        when(podResource.inContainer("data-transfer-container").getLog())
+                .thenReturn("TRANSFER_MS=1000\nINPUT_BYTES=100\nINPUT_SHA256=" + SHA256);
+        when(podResource.inContainer("processing-container").getLog()).thenReturn("result=ok");
+        doReturn(new PodListBuilder().withItems(new PodBuilder()
+                        .withNewMetadata().withName("test-pod").endMetadata()
+                        .withNewSpec().withNodeName("source").endSpec()
+                        .withNewStatus().addNewInitContainerStatus().withName("data-transfer-container")
+                        .withNewState().withNewTerminated().withExitCode(0)
+                        .withStartedAt("2026-09-03T00:00:00Z").withFinishedAt("2026-09-03T00:00:01Z")
+                        .endTerminated().endState().endInitContainerStatus()
+                        .addNewContainerStatus().withName("processing-container")
+                        .withNewState().withNewTerminated().withExitCode(0)
+                        .withStartedAt("2026-09-03T00:00:01Z").withFinishedAt("2026-09-03T00:00:02Z")
+                        .endTerminated().endState().endContainerStatus().endStatus().build()).build()).when(pods).list();
+        when(jobResource.get()).thenReturn(new JobBuilder().withNewStatus().addNewCondition()
+                .withType("Complete").withStatus("True").endCondition().endStatus().build());
+        doAnswer(invocation -> new JobCreationResult(new JobBuilder().build(), client, invocation.getArgument(4)))
+                .when(jobs).createDataProcessingJob(anyString(), anyString(), anyString(), anyString(), anyString(),
+                        isNull(), any(), any(), any(), any(), eq("scoped-read-token"));
+        // A second dataset whose replica has disappeared: its assignment fails before any job.
+        when(datasets.findDatasetById(11L)).thenReturn(RegisteredDataset.builder().datasetId(11L)
+                .datasetCode("second").datasetVersion("v1").defaultRuntimeImageId(8L).build());
+        SchedulingAssignment inPlace = assignment("USE_IN_PLACE");
+        inPlace.setAssignmentId(60L);
+        SchedulingAssignment copy = assignment("COPY_AND_USE");
+        SchedulingAssignment failedMove = SchedulingAssignment.builder().planId(40L).assignmentId(70L)
+                .datasetId(11L).replicaId(21L).sourceNodeId(3).targetNodeId(4).action("MOVE_AND_USE").build();
+
+        service.executeExternalPlan(40L, 30, java.util.Arrays.asList(inPlace, copy, failedMove));
+
+        verify(plans).updatePlanStatus(eq(40L), eq("PARTIAL_COMPLETED"), any());
+        org.mockito.ArgumentCaptor<TaskManagement> row = org.mockito.ArgumentCaptor.forClass(TaskManagement.class);
+        verify(tasks).updateTask(row.capture());
+        assertEquals("调度目标节点 source:\n"
+                + "test: source -> source [原位]\n"
+                + "调度目标节点 target:\n"
+                + "test: source -> target [复制]\n"
+                + "second: 执行失败", row.getValue().getSchedule());
+        assertEquals("部分完成", row.getValue().getStatus());
+        assertEquals(2.0, row.getValue().getT1());
+        assertNull(row.getValue().getT2());
+        assertNull(row.getValue().getRating());
+        assertFalse(row.getValue().getSchedule().contains("中心化调度方案:"));
+    }
+
+    @Test
+    void externalActionLabelsDescribeTheActualDataMovement() {
+        assertEquals("复制", K8sTaskOrchestratorService.externalActionLabel("COPY_AND_USE", false));
+        assertEquals("迁移", K8sTaskOrchestratorService.externalActionLabel("MOVE_AND_USE", false));
+        assertEquals("远程读取", K8sTaskOrchestratorService.externalActionLabel("REMOTE_READ", false));
+        assertEquals("原位", K8sTaskOrchestratorService.externalActionLabel("USE_IN_PLACE", true));
+        // COPY/MOVE onto the source node itself skips the transfer, so it runs in place.
+        assertEquals("原位", K8sTaskOrchestratorService.externalActionLabel("COPY_AND_USE", true));
+        assertEquals("原位", K8sTaskOrchestratorService.externalActionLabel("REMOTE_READ", true));
+    }
+
     private SchedulingAssignment assignment(String action) {
         return SchedulingAssignment.builder().planId(40L).assignmentId(50L)
                 .datasetId(10L).replicaId(20L).sourceNodeId(3)

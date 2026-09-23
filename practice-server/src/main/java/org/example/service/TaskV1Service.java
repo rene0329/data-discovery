@@ -48,6 +48,8 @@ public class TaskV1Service {
 
     static final String MODE_CENTRALIZED = "CENTRALIZED";
     static final String MODE_IN_PLACE = "IN_PLACE";
+    /** One task that runs every selected dataset in both IN_PLACE and CENTRALIZED mode. */
+    static final String MODE_COMPARISON = "COMPARISON";
 
     public TaskV1Service(DatasetRegistrationMapper datasetMapper,
                          RuntimeImageMapper imageMapper,
@@ -250,72 +252,85 @@ public class TaskV1Service {
                 availableComputeNodes > 0, availableComputeNodes > 0 ? "AVAILABLE" : "UNAVAILABLE",
                 availableComputeNodes > 0 ? null : "NO_AVAILABLE_COMPUTE_NODE",
                 availableComputeNodes > 0 ? null : "no available compute node"));
-        if (MODE_CENTRALIZED.equals(executionMode)) {
-            NodeManagement centralNode = centralNodeName.isEmpty()
-                    ? null : nodeMapper.getNodeByName(centralNodeName);
-            boolean available = !centralNodeName.isEmpty() && centralNode != null
-                    && nodeAvailabilityService.isSchedulable(centralNode)
-                    && availableNodes.stream().anyMatch(node -> Objects.equals(
-                            node.getNodeId(), centralNode.getNodeId()));
-            checks.add(new TaskPreflightCheck("CENTRAL_NODE",
-                    centralNode == null ? null : String.valueOf(centralNode.getNodeId()), centralNodeName,
-                    available, available ? "AVAILABLE" : "UNAVAILABLE",
-                    available ? null : "CENTRAL_NODE_NOT_AVAILABLE",
-                    available ? null : "central compute node is not available: " + centralNodeName));
-        } else {
-            // IN_PLACE means "same physical site", not "same node_id": a
-            // replica sitting on a storage-only node is fine as long as a
-            // schedulable compute node exists in that node's site_code.
-            Set<Integer> availableComputeNodeIds = availableNodes.stream()
-                    .map(NodeManagement::getNodeId).collect(Collectors.toSet());
-            Set<String> availableComputeSites = availableNodes.stream()
-                    .map(NodeManagement::getSiteCode).filter(Objects::nonNull).collect(Collectors.toSet());
-            for (Long datasetId : request.getDatasetIds()) {
-                RegisteredDataset dataset = datasetMapper.findDatasetById(datasetId);
-                List<DatasetReplica> replicas = dataset == null || !"ACTIVE".equals(dataset.getStatus())
-                        ? Collections.emptyList() : datasetMapper.listReplicas(datasetId);
-                boolean hasInPlaceReplica = false;
-                List<String> replicaReasons = new ArrayList<>();
-                for (DatasetReplica replica : replicas) {
-                    ReplicaAvailability usability = replicaAvailabilityService.evaluate(replica);
-                    NodeManagement replicaNode = nodeMapper.getNodeById(replica.getNodeId());
-                    String nodeLabel = replicaNode == null
-                            ? "node " + replica.getNodeId() : replicaNode.getNodeName();
-                    if (!usability.isUsable()) {
-                        replicaReasons.add(nodeLabel + ": " + usability.getReason());
-                        continue;
-                    }
-                    if (availableComputeNodeIds.contains(replica.getNodeId())) {
-                        // Fast path: the replica already sits on an available compute
-                        // node, so no site_code lookup is needed at all.
-                        hasInPlaceReplica = true;
-                        break;
-                    }
-                    String siteCode = replicaNode == null ? null : replicaNode.getSiteCode();
-                    if (siteCode == null) {
-                        replicaReasons.add(nodeLabel + ": node has no site_code set, cannot match a compute node");
-                        continue;
-                    }
-                    if (!availableComputeSites.contains(siteCode)) {
-                        replicaReasons.add(nodeLabel + ": no available compute node in site '" + siteCode + "'");
-                        continue;
-                    }
+        // COMPARISON runs both modes, so it needs the union of both modes' checks.
+        if (MODE_CENTRALIZED.equals(executionMode) || MODE_COMPARISON.equals(executionMode)) {
+            checks.add(centralNodeCheck(availableNodes));
+        }
+        if (MODE_IN_PLACE.equals(executionMode) || MODE_COMPARISON.equals(executionMode)) {
+            checks.addAll(inPlaceChecks(request.getDatasetIds(), availableNodes));
+        }
+        return new TaskPreflightResult(checks, executionMode);
+    }
+
+    private TaskPreflightCheck centralNodeCheck(List<NodeManagement> availableNodes) {
+        NodeManagement centralNode = centralNodeName.isEmpty()
+                ? null : nodeMapper.getNodeByName(centralNodeName);
+        boolean available = !centralNodeName.isEmpty() && centralNode != null
+                && nodeAvailabilityService.isSchedulable(centralNode)
+                && availableNodes.stream().anyMatch(node -> Objects.equals(
+                        node.getNodeId(), centralNode.getNodeId()));
+        return new TaskPreflightCheck("CENTRAL_NODE",
+                centralNode == null ? null : String.valueOf(centralNode.getNodeId()), centralNodeName,
+                available, available ? "AVAILABLE" : "UNAVAILABLE",
+                available ? null : "CENTRAL_NODE_NOT_AVAILABLE",
+                available ? null : "central compute node is not available: " + centralNodeName,
+                MODE_CENTRALIZED);
+    }
+
+    private List<TaskPreflightCheck> inPlaceChecks(List<Long> datasetIds, List<NodeManagement> availableNodes) {
+        // IN_PLACE means "same physical site", not "same node_id": a
+        // replica sitting on a storage-only node is fine as long as a
+        // schedulable compute node exists in that node's site_code.
+        List<TaskPreflightCheck> checks = new ArrayList<>();
+        Set<Integer> availableComputeNodeIds = availableNodes.stream()
+                .map(NodeManagement::getNodeId).collect(Collectors.toSet());
+        Set<String> availableComputeSites = availableNodes.stream()
+                .map(NodeManagement::getSiteCode).filter(Objects::nonNull).collect(Collectors.toSet());
+        for (Long datasetId : datasetIds) {
+            RegisteredDataset dataset = datasetMapper.findDatasetById(datasetId);
+            List<DatasetReplica> replicas = dataset == null || !"ACTIVE".equals(dataset.getStatus())
+                    ? Collections.emptyList() : datasetMapper.listReplicas(datasetId);
+            boolean hasInPlaceReplica = false;
+            List<String> replicaReasons = new ArrayList<>();
+            for (DatasetReplica replica : replicas) {
+                ReplicaAvailability usability = replicaAvailabilityService.evaluate(replica);
+                NodeManagement replicaNode = nodeMapper.getNodeById(replica.getNodeId());
+                String nodeLabel = replicaNode == null
+                        ? "node " + replica.getNodeId() : replicaNode.getNodeName();
+                if (!usability.isUsable()) {
+                    replicaReasons.add(nodeLabel + ": " + usability.getReason());
+                    continue;
+                }
+                if (availableComputeNodeIds.contains(replica.getNodeId())) {
+                    // Fast path: the replica already sits on an available compute
+                    // node, so no site_code lookup is needed at all.
                     hasInPlaceReplica = true;
                     break;
                 }
-                String reason = hasInPlaceReplica ? null
-                        : dataset == null ? "registered dataset not found: " + datasetId
-                        : replicaReasons.isEmpty()
-                            ? "dataset has no replicas: " + datasetId
-                            : "dataset has no usable replica on an available compute node: " + datasetId
-                                + " (" + String.join("; ", replicaReasons) + ")";
-                checks.add(check("IN_PLACE_DATASET", datasetId,
-                        dataset == null ? null : dataset.getName(), hasInPlaceReplica,
-                        hasInPlaceReplica ? "AVAILABLE" : "UNAVAILABLE",
-                        "DATASET_NO_IN_PLACE_COMPUTE_REPLICA", reason));
+                String siteCode = replicaNode == null ? null : replicaNode.getSiteCode();
+                if (siteCode == null) {
+                    replicaReasons.add(nodeLabel + ": node has no site_code set, cannot match a compute node");
+                    continue;
+                }
+                if (!availableComputeSites.contains(siteCode)) {
+                    replicaReasons.add(nodeLabel + ": no available compute node in site '" + siteCode + "'");
+                    continue;
+                }
+                hasInPlaceReplica = true;
+                break;
             }
+            String reason = hasInPlaceReplica ? null
+                    : dataset == null ? "registered dataset not found: " + datasetId
+                    : replicaReasons.isEmpty()
+                        ? "dataset has no replicas: " + datasetId
+                        : "dataset has no usable replica on an available compute node: " + datasetId
+                            + " (" + String.join("; ", replicaReasons) + ")";
+            checks.add(check("IN_PLACE_DATASET", datasetId,
+                    dataset == null ? null : dataset.getName(), hasInPlaceReplica,
+                    hasInPlaceReplica ? "AVAILABLE" : "UNAVAILABLE",
+                    "DATASET_NO_IN_PLACE_COMPUTE_REPLICA", reason, MODE_IN_PLACE));
         }
-        return new TaskPreflightResult(checks, executionMode);
+        return checks;
     }
 
     public TaskExecutionDetail getExecution(Integer taskId) {
@@ -377,8 +392,9 @@ public class TaskV1Service {
     private String normalizeExecutionMode(String value) {
         String mode = value == null || value.trim().isEmpty()
                 ? MODE_IN_PLACE : value.trim().toUpperCase();
-        if (!MODE_CENTRALIZED.equals(mode) && !MODE_IN_PLACE.equals(mode)) {
-            throw RegistrationException.invalid("executionMode must be CENTRALIZED or IN_PLACE");
+        if (!MODE_CENTRALIZED.equals(mode) && !MODE_IN_PLACE.equals(mode)
+                && !MODE_COMPARISON.equals(mode)) {
+            throw RegistrationException.invalid("executionMode must be CENTRALIZED, IN_PLACE or COMPARISON");
         }
         return mode;
     }
@@ -395,8 +411,14 @@ public class TaskV1Service {
 
     private TaskPreflightCheck check(String type, Object id, String name, boolean available,
                                      String status, String errorCode, String message) {
+        return check(type, id, name, available, status, errorCode, message, null);
+    }
+
+    private TaskPreflightCheck check(String type, Object id, String name, boolean available,
+                                     String status, String errorCode, String message,
+                                     String executionMode) {
         return new TaskPreflightCheck(type, id == null ? null : String.valueOf(id), name,
-                available, status, available ? null : errorCode, message);
+                available, status, available ? null : errorCode, message, executionMode);
     }
 
     private boolean negative(Double value) { return value != null && value < 0; }

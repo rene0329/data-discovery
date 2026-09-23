@@ -396,7 +396,7 @@ public class SchedulingService {
 
     private SchedulingPlanAccepted accepted(SchedulingPlan plan) {
         return new SchedulingPlanAccepted(plan.getPlanId(), plan.getExternalPlanId(),
-                plan.getTaskId(), plan.getStatus());
+                plan.getTaskId(), plan.getStatus(), plan.getInternalTaskId());
     }
 
     private Set<Long> parseDatasetIds(String value) {

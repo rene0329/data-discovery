@@ -29,7 +29,6 @@ import org.mockito.ArgumentCaptor;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -209,7 +208,9 @@ class SchedulingServiceTest {
 
         assertEquals(40L, accepted.getPlanId());
         assertEquals("ACCEPTED", accepted.getStatus());
-        assertNotNull(accepted.getTaskId());
+        // taskId echoes the caller's correlation ID; internalTaskId is task_management.task_id.
+        assertEquals("task-1", accepted.getTaskId());
+        assertEquals(30, accepted.getInternalTaskId());
         verify(topology).requirePath(3, 3);
         verify(orchestrator).executeExternalPlan(any(), any(), any());
         verifyNoInteractions(dataExecutor);
@@ -222,6 +223,7 @@ class SchedulingServiceTest {
         SchedulingPlanAccepted accepted = service.submitDataPlan(request);
 
         assertEquals(40L, accepted.getPlanId());
+        assertNull(accepted.getInternalTaskId());
         ArgumentCaptor<SchedulingPlan> saved = ArgumentCaptor.forClass(SchedulingPlan.class);
         verify(planMapper).insertPlan(saved.capture());
         assertNull(saved.getValue().getInternalTaskId());

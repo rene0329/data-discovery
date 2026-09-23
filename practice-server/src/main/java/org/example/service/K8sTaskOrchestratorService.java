@@ -49,8 +49,11 @@ import java.time.ZoneOffset;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -157,14 +160,13 @@ public class K8sTaskOrchestratorService {
         running.setExecutionEvidenceComplete(false);
         taskManagementMapper.updateExecutionSummary(running);
         try {
+            if (TaskV1Service.MODE_COMPARISON.equals(normalizedMode)) {
+                executeComparisonTask(taskId, datasetIds, explicitRuntimeImageId, overrides);
+                return;
+            }
             List<CompletableFuture<DataItemResult>> futures = datasetIds.stream()
-                    .map(datasetId -> CompletableFuture.supplyAsync(
-                            () -> processRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
-                                    overrides, normalizedMode),
-                            dataProcessingExecutor).exceptionally(ex -> {
-                        log.error("注册数据集 {} 处理失败: {}", datasetId, ex.getMessage());
-                        return null;
-                    }))
+                    .map(datasetId -> submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
+                            overrides, normalizedMode))
                     .collect(Collectors.toList());
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
@@ -184,21 +186,61 @@ public class K8sTaskOrchestratorService {
         }
     }
 
+    /**
+     * 对比任务：同一个 taskId 下，每个数据集分别以分布式（IN_PLACE）和集中式（CENTRALIZED）各执行一个 Job。
+     * 2N 个 Job 一次性提交到 dataProcessingExecutor 并发执行，与此前两个单模式任务同时运行的行为一致。
+     */
+    private void executeComparisonTask(Integer taskId, List<Long> datasetIds,
+                                       Long explicitRuntimeImageId,
+                                       ResourceRequirements overrides) {
+        List<CompletableFuture<DataItemResult>> inPlaceFutures = new ArrayList<>();
+        List<CompletableFuture<DataItemResult>> centralizedFutures = new ArrayList<>();
+        // 按数据集交替提交两种模式：线程池排队时，两种模式获得同等的启动机会。
+        for (Long datasetId : datasetIds) {
+            inPlaceFutures.add(submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
+                    overrides, TaskV1Service.MODE_IN_PLACE));
+            centralizedFutures.add(submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
+                    overrides, TaskV1Service.MODE_CENTRALIZED));
+        }
+        List<CompletableFuture<DataItemResult>> all = new ArrayList<>(inPlaceFutures);
+        all.addAll(centralizedFutures);
+        CompletableFuture.allOf(all.toArray(new CompletableFuture[0])).join();
+        updateComparisonTaskStatus(taskId, datasetIds,
+                inPlaceFutures.stream().map(CompletableFuture::join).collect(Collectors.toList()),
+                centralizedFutures.stream().map(CompletableFuture::join).collect(Collectors.toList()));
+    }
+
+    private CompletableFuture<DataItemResult> submitRegisteredDataItem(Integer taskId, Long datasetId,
+                                                                       Long explicitRuntimeImageId,
+                                                                       ResourceRequirements overrides,
+                                                                       String executionMode) {
+        return CompletableFuture.supplyAsync(
+                () -> processRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
+                        overrides, executionMode),
+                dataProcessingExecutor).exceptionally(ex -> {
+            log.error("注册数据集 {} ({}) 处理失败: {}", datasetId, executionMode, ex.getMessage());
+            return null;
+        });
+    }
+
     @Async
     public void executeExternalPlan(Long planId, Integer taskId,
                                     List<SchedulingAssignment> assignments) {
         schedulingPlanMapper.updatePlanStatus(planId, "RUNNING", null);
-        List<String> schedules = new ArrayList<>();
+        // 调度结果页按目标节点展示：每个目标节点一个分组，保持 assignment 提交顺序。
+        Map<String, List<String>> schedulesByTarget = new LinkedHashMap<>();
         double totalSeconds = 0.0;
         int successCount = 0;
         String lastError = null;
         for (SchedulingAssignment assignment : assignments) {
+            List<String> targetLines = schedulesByTarget.computeIfAbsent(
+                    nodeLabel(assignment.getTargetNodeId()), key -> new ArrayList<>());
             try {
                 schedulingPlanMapper.updateAssignmentStatus(
                         assignment.getAssignmentId(), "RUNNING", null);
                 DataItemResult result = processExternalAssignment(taskId, assignment);
                 if (result == null) throw new IllegalStateException("assignment execution failed");
-                schedules.add(result.getScheduleT1());
+                targetLines.add(result.getScheduleT1());
                 totalSeconds += result.getT1Seconds();
                 successCount++;
                 schedulingPlanMapper.updateAssignmentStatus(
@@ -207,6 +249,7 @@ public class K8sTaskOrchestratorService {
                 lastError = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
                 log.error("外部调度方案 {} 的 assignment {} 执行失败",
                         planId, assignment.getAssignmentId(), ex);
+                targetLines.add(datasetLabel(assignment.getDatasetId()) + ": 执行失败");
                 schedulingPlanMapper.updateAssignmentStatus(
                         assignment.getAssignmentId(), "FAILED", lastError);
             }
@@ -214,8 +257,57 @@ public class K8sTaskOrchestratorService {
         String status = successCount == assignments.size() ? "COMPLETED"
                 : successCount == 0 ? "FAILED" : "PARTIAL_COMPLETED";
         schedulingPlanMapper.updatePlanStatus(planId, status, lastError);
-        updateFinalTaskStatus(taskId, totalSeconds, totalSeconds, schedules,
-                Collections.<String>emptyList(), successCount, assignments.size());
+        List<String> scheduleLines = new ArrayList<>();
+        for (Map.Entry<String, List<String>> target : schedulesByTarget.entrySet()) {
+            scheduleLines.add("调度目标节点 " + target.getKey() + ":");
+            scheduleLines.addAll(target.getValue());
+        }
+        updateFinalTaskStatus(taskId, totalSeconds, String.join("\n", scheduleLines),
+                successCount, assignments.size());
+    }
+
+    /**
+     * 外部方案的动作标签：源、目标为同一节点时不发生跨节点搬运，统一记为“原位”。
+     */
+    static String externalActionLabel(String action, boolean sameNode) {
+        if (sameNode) return "原位";
+        if ("COPY_AND_USE".equals(action)) return "复制";
+        if ("MOVE_AND_USE".equals(action)) return "迁移";
+        if ("REMOTE_READ".equals(action)) return "远程读取";
+        return action;
+    }
+
+    /** 仅用于展示文本；查询失败时退回到 ID，不影响任务状态回写。 */
+    private String nodeLabel(Integer nodeId) {
+        NodeManagement node = null;
+        try {
+            node = nodeId == null ? null : nodeManagementMapper.getNodeById(nodeId);
+        } catch (Exception e) {
+            log.warn("查询节点 {} 名称失败: {}", nodeId, e.getMessage());
+        }
+        return node == null || node.getNodeName() == null || node.getNodeName().trim().isEmpty()
+                ? "节点#" + nodeId : node.getNodeName();
+    }
+
+    /** 仅用于展示文本；查询失败时退回到 ID，不影响任务状态回写。 */
+    private String datasetLabel(Long datasetId) {
+        RegisteredDataset dataset = null;
+        try {
+            dataset = datasetId == null ? null : datasetRegistrationMapper.findDatasetById(datasetId);
+        } catch (Exception e) {
+            log.warn("查询数据集 {} 编码失败: {}", datasetId, e.getMessage());
+        }
+        return datasetLabel(dataset, datasetId);
+    }
+
+    private static String datasetLabel(RegisteredDataset dataset, Long datasetId) {
+        if (dataset != null && dataset.getDatasetCode() != null && !dataset.getDatasetCode().trim().isEmpty()) {
+            return dataset.getDatasetCode();
+        }
+        if (dataset != null && dataset.getName() != null && !dataset.getName().trim().isEmpty()) {
+            return dataset.getName();
+        }
+        return "数据集#" + datasetId;
     }
 
     private DataItemResult processExternalAssignment(Integer taskId,
@@ -329,8 +421,13 @@ public class K8sTaskOrchestratorService {
         DataItemResult result = new DataItemResult();
         result.setT1Seconds(durationMs / 1000.0);
         result.setT2Seconds(durationMs / 1000.0);
-        result.setScheduleT1(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
-                + " -> " + selectedNode.get() + " [" + assignment.getAction() + "]");
+        result.setPreparationMs(durationMs);
+        result.setSourceNodeName(sourceNode.getNodeName());
+        result.setTargetNodeName(selectedNode.get());
+        result.setScheduleT1(datasetLabel(dataset, dataset.getDatasetId()) + ": " + sourceNode.getNodeName()
+                + " -> " + selectedNode.get() + " ["
+                + externalActionLabel(assignment.getAction(),
+                        sourceNode.getNodeId().equals(targetNode.getNodeId())) + "]");
         return result;
     }
 
@@ -442,6 +539,9 @@ public class K8sTaskOrchestratorService {
 
         DataItemResult result = new DataItemResult();
         result.setT1Seconds(preparationMs / 1000.0);
+        result.setPreparationMs(preparationMs);
+        result.setSourceNodeName(sourceNode.getNodeName());
+        result.setTargetNodeName(selectedNodeOut.get());
         result.setScheduleT1(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
                 + " -> " + selectedNodeOut.get() + " [" + executionMode + "]");
         result.setPreparationStartedAt(evidence.preparationStartedAt);
@@ -1075,10 +1175,7 @@ public class K8sTaskOrchestratorService {
         Instant computeFinished = null;
         boolean completeEvidence = successful.size() == expectedCount;
         for (DataItemResult result : successful) {
-            if (result.getPreparationStartedAt() == null || result.getPreparationReadyAt() == null
-                    || result.getComputeStartedAt() == null || result.getComputeFinishedAt() == null
-                    || result.getActualNodeName() == null || result.getInputBytes() == null
-                    || result.getInputChecksumSha256() == null || result.getOutputChecksumSha256() == null) {
+            if (!hasCompleteEvidence(result)) {
                 completeEvidence = false;
                 continue;
             }
@@ -1116,27 +1213,107 @@ public class K8sTaskOrchestratorService {
                 taskId, executionMode, summary.getStatus(), preparationMs, computeMs);
     }
 
+    /**
+     * 对比任务结果回写到同一行（沿用旧字段语义，单位为秒）：
+     * T1 = Σ 各数据集分布式搬运耗时，T2 = Σ 各数据集集中式搬运耗时，rating = T2 / T1。
+     * 只有 2N 个 Job 全部成功且证据完整时，两组求和才可比较；否则 T1/T2/rating 均置空，不做推算。
+     *
+     * @param inPlaceResults     与 datasetIds 一一对应，失败的 Job 为 null
+     * @param centralizedResults 与 datasetIds 一一对应，失败的 Job 为 null
+     */
+    private void updateComparisonTaskStatus(Integer taskId, List<Long> datasetIds,
+                                            List<DataItemResult> inPlaceResults,
+                                            List<DataItemResult> centralizedResults) {
+        int expectedCount = datasetIds.size() * 2;
+        int successCount = 0;
+        boolean completeEvidence = true;
+        long inPlaceMs = 0L;
+        long centralizedMs = 0L;
+        List<String> inPlaceLines = new ArrayList<>();
+        List<String> centralizedLines = new ArrayList<>();
+        for (int i = 0; i < datasetIds.size(); i++) {
+            String label = datasetLabel(datasetIds.get(i));
+            DataItemResult inPlace = inPlaceResults.get(i);
+            DataItemResult centralized = centralizedResults.get(i);
+            inPlaceLines.add(comparisonScheduleLine(label, inPlace));
+            centralizedLines.add(comparisonScheduleLine(label, centralized));
+            for (DataItemResult result : Arrays.asList(inPlace, centralized)) {
+                if (result == null) {
+                    completeEvidence = false;
+                    continue;
+                }
+                successCount++;
+                if (!hasCompleteEvidence(result) || result.getPreparationMs() == null
+                        || result.getPreparationMs() < 0) {
+                    completeEvidence = false;
+                }
+            }
+            if (inPlace != null && inPlace.getPreparationMs() != null) inPlaceMs += inPlace.getPreparationMs();
+            if (centralized != null && centralized.getPreparationMs() != null) {
+                centralizedMs += centralized.getPreparationMs();
+            }
+        }
+        completeEvidence = completeEvidence && successCount == expectedCount;
+        Double t1 = completeEvidence ? inPlaceMs / 1000.0 : null;
+        Double t2 = completeEvidence ? centralizedMs / 1000.0 : null;
+        Double rating = t1 != null && t1 > 0 ? t2 / t1 : null;
+
+        List<String> scheduleLines = new ArrayList<>();
+        scheduleLines.add("分布式调度方案:");
+        scheduleLines.addAll(inPlaceLines);
+        scheduleLines.add("中心化调度方案:");
+        scheduleLines.addAll(centralizedLines);
+
+        TaskManagement summary = new TaskManagement();
+        summary.setTaskId(taskId);
+        summary.setT1(t1);
+        summary.setT2(t2);
+        summary.setRating(rating);
+        summary.setSchedule(String.join("\n", scheduleLines));
+        summary.setExecutionEvidenceComplete(completeEvidence);
+        summary.setFinishedAt(LocalDateTime.now(ZoneOffset.UTC));
+        if (completeEvidence) summary.setStatus("已完成");
+        else if (successCount == 0) summary.setStatus("执行失败");
+        else summary.setStatus("部分完成");
+        taskManagementMapper.updateTask(summary);
+        log.info("对比任务 {} 执行结束: status={}, 成功 {}/{}, 分布式总搬运时间={}s, 集中式总搬运时间={}s, 加速比={}",
+                taskId, summary.getStatus(), successCount, expectedCount,
+                t1 == null ? "不可比较" : String.format("%.3f", t1),
+                t2 == null ? "不可比较" : String.format("%.3f", t2),
+                rating == null ? "不可计算" : String.format("%.3f", rating));
+    }
+
+    private String comparisonScheduleLine(String datasetLabel, DataItemResult result) {
+        return result == null
+                ? datasetLabel + ": 执行失败"
+                : datasetLabel + ": " + result.getSourceNodeName() + " -> " + result.getTargetNodeName();
+    }
+
+    private boolean hasCompleteEvidence(DataItemResult result) {
+        return result.getPreparationStartedAt() != null && result.getPreparationReadyAt() != null
+                && result.getComputeStartedAt() != null && result.getComputeFinishedAt() != null
+                && result.getActualNodeName() != null && result.getInputBytes() != null
+                && result.getInputChecksumSha256() != null && result.getOutputChecksumSha256() != null;
+    }
+
     private String normalizeExecutionMode(String mode) {
         if (TaskV1Service.MODE_CENTRALIZED.equalsIgnoreCase(mode)) return TaskV1Service.MODE_CENTRALIZED;
         if (TaskV1Service.MODE_IN_PLACE.equalsIgnoreCase(mode)) return TaskV1Service.MODE_IN_PLACE;
+        if (TaskV1Service.MODE_COMPARISON.equalsIgnoreCase(mode)) return TaskV1Service.MODE_COMPARISON;
         throw new IllegalArgumentException("unsupported execution mode: " + mode);
     }
 
-    // ... updateFinalTaskStatus 和 updateTaskStatusToFailed 方法无需修改 ...
-    private void updateFinalTaskStatus(Integer taskId, double totalT1, double totalT2,
-                                       List<String> scheduleT1List, List<String> scheduleT2List,
+    /**
+     * 外部（手动）调度方案只有一条执行路径：T1 为各 assignment 搬运耗时之和，T2/rating 保持为空，
+     * 因而不会进入性能分析页。schedule 按调度目标节点分组展示。
+     */
+    private void updateFinalTaskStatus(Integer taskId, double totalT1, String finalSchedule,
                                        int successCount, int expectedCount) {
         TaskManagement finalTask = taskManagementMapper.getTaskByTaskId(taskId);
         if (finalTask != null) {
-            boolean hasComparisonPath = scheduleT2List != null && !scheduleT2List.isEmpty();
-            Double comparisonT2 = hasComparisonPath ? totalT2 : null;
-            Double rating = hasComparisonPath && totalT1 > 0 ? (totalT2 / totalT1) : null;
-            String finalSchedule = "分布式调度方案:" + String.join("\n", scheduleT1List) +
-                    "\n中心化调度方案:" + String.join("\n", scheduleT2List);
-
             finalTask.setT1(totalT1);
-            finalTask.setT2(comparisonT2);
-            finalTask.setRating(rating);
+            finalTask.setT2(null);
+            finalTask.setRating(null);
             finalTask.setSchedule(finalSchedule);
             if (successCount == 0) {
                 finalTask.setStatus("执行失败");
@@ -1149,10 +1326,8 @@ public class K8sTaskOrchestratorService {
 
             log.info("==================== 任务 {} 完成 ====================", taskId);
             log.info("调度方案:\n{}", finalSchedule);
-            log.info("亲和性调度总时间: {}s, 中心化调度总时间: {}, 性能比: {}",
-                    String.format("%.3f", totalT1),
-                    comparisonT2 == null ? "未执行" : String.format("%.3fs", comparisonT2),
-                    rating == null ? "不可计算" : String.format("%.3f", rating));
+            log.info("外部调度方案总搬运时间: {}s, 成功 {}/{}",
+                    String.format("%.3f", totalT1), successCount, expectedCount);
             log.info("===============================================================");
         }
     }
