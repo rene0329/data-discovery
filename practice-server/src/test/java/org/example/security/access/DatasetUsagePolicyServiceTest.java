@@ -101,9 +101,9 @@ class DatasetUsagePolicyServiceTest {
         locations.node(GZ_1, "gz");
         locations.node(NO_SITE, null);
         // 1 is located in A, 2 in B, 3 nowhere (no replica at all).
-        grants.dataset(1L, "v1", null, null);
-        grants.dataset(2L, "v2", null, null);
-        grants.dataset(3L, "v3", null, null);
+        grants.dataset(1L, "v1");
+        grants.dataset(2L, "v2");
+        grants.dataset(3L, "v3");
         locations.replica(1L, SH_1, "AVAILABLE");
         locations.replica(2L, SZ_1, "AVAILABLE");
         DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
@@ -154,7 +154,7 @@ class DatasetUsagePolicyServiceTest {
 
     @Test
     void datasetInTwoDomainsServesBothDomainsAndNobodyElse() {
-        grants.dataset(4L, "v4", null, null);
+        grants.dataset(4L, "v4");
         locations.replica(4L, SH_2, "AVAILABLE");
         locations.replica(4L, SZ_1, "AVAILABLE");
         locations.replica(4L, SH_1, "AVAILABLE");
@@ -179,7 +179,7 @@ class DatasetUsagePolicyServiceTest {
 
     @Test
     void missingAndVerifyFailedReplicasDoNotLocateADataset() {
-        grants.dataset(4L, "v4", null, null);
+        grants.dataset(4L, "v4");
         locations.replica(4L, SH_1, "MISSING");
         locations.replica(4L, SH_2, "VERIFY_FAILED");
 
@@ -196,7 +196,7 @@ class DatasetUsagePolicyServiceTest {
         String[] states = {"AVAILABLE", "VERIFYING", "UNVERIFIED", "UNAVAILABLE"};
         for (int i = 0; i < states.length; i++) {
             long datasetId = 10L + i;
-            grants.dataset(datasetId, "v", null, null);
+            grants.dataset(datasetId, "v");
             locations.replica(datasetId, SH_1, states[i]);
         }
 
@@ -213,7 +213,7 @@ class DatasetUsagePolicyServiceTest {
     @Test
     void movedDatasetFollowsItsReplicasToTheTargetDomain() {
         // After a MOVE from sh to sz the source row stays behind as MISSING.
-        grants.dataset(4L, "v4", null, null);
+        grants.dataset(4L, "v4");
         locations.replica(4L, SH_1, "MISSING");
         locations.replica(4L, SZ_1, "AVAILABLE");
 
@@ -233,7 +233,7 @@ class DatasetUsagePolicyServiceTest {
 
     @Test
     void disabledDomainDoesNotCount() {
-        grants.dataset(4L, "v4", null, null);
+        grants.dataset(4L, "v4");
         locations.replica(4L, HZ_1, "AVAILABLE");
         locations.replica(4L, BJ_1, "AVAILABLE");
 
@@ -247,11 +247,11 @@ class DatasetUsagePolicyServiceTest {
 
     @Test
     void replicasOutsideEveryDomainSiteOrOnUnregisteredNodesDoNotLocateADataset() {
-        grants.dataset(4L, "v4", null, null);
+        grants.dataset(4L, "v4");
         locations.replica(4L, GZ_1, "AVAILABLE");
         locations.replica(4L, NO_SITE, "AVAILABLE");
         locations.replica(4L, 99, "AVAILABLE");
-        grants.dataset(5L, "v5", null, null);
+        grants.dataset(5L, "v5");
         locations.node(71, "sh");
         locations.deletedNodes.add(71);
         locations.replica(5L, 71, "AVAILABLE");
@@ -263,11 +263,12 @@ class DatasetUsagePolicyServiceTest {
     }
 
     @Test
-    void ownerDomainIdNoLongerInfluencesTheDecision() {
-        // Held by domain A (数据归属) but located in B, and the reverse.
-        grants.dataset(4L, "v4", 1L, "Domain A");
+    void onlyTheReplicaLocationDecidesTheDomain() {
+        // Registered by a domain-A user but now stored in B, and the reverse: there is
+        // no per-dataset holder any more, only where the replicas are.
+        grants.dataset(4L, "v4");
         locations.replica(4L, SZ_1, "AVAILABLE");
-        grants.dataset(5L, "v5", 2L, "Domain B");
+        grants.dataset(5L, "v5");
         locations.replica(5L, SH_1, "AVAILABLE");
 
         login(OWNER_A);
@@ -277,15 +278,15 @@ class DatasetUsagePolicyServiceTest {
         assertEquals(Collections.singletonList(2L), items.get(4L).getDomainIds());
         assertEquals("OWN_DOMAIN", items.get(5L).getBasis());
         assertEquals(Collections.singletonList(1L), items.get(5L).getDomainIds());
-        // Not "already accessible": the holder domain does not count.
-        assertNotNull(service.issueGrant(new DatasetUsageModels.GrantRequest(4L, "held by A, stored in B"),
+        // Not "already accessible": only the location counts.
+        assertNotNull(service.issueGrant(new DatasetUsageModels.GrantRequest(4L, "stored in B"),
                 "req-own", null).getGrantId());
         assertEquals(Collections.emptyList(), service.inaccessibleDatasetIds(Collections.singletonList(4L)));
     }
 
     @Test
     void softDeletedDatasetsAreIgnored() {
-        grants.dataset(4L, "v4", null, null);
+        grants.dataset(4L, "v4");
         locations.replica(4L, SZ_1, "AVAILABLE");
         grants.deleted.add(4L);
 
@@ -578,7 +579,7 @@ class DatasetUsagePolicyServiceTest {
 
     @Test
     void alreadyAccessibleFollowsTheCurrentLocation() {
-        grants.dataset(4L, "v4", null, null);
+        grants.dataset(4L, "v4");
         locations.replica(4L, SH_1, "MISSING");
         locations.replica(4L, SZ_1, "AVAILABLE");
 
@@ -711,10 +712,9 @@ class DatasetUsagePolicyServiceTest {
         Integer lastLogLimit;
         private long nextId = 100L;
 
-        void dataset(Long id, String version, Long ownerDomainId, String ownerDomainName) {
+        void dataset(Long id, String version) {
             datasets.put(id, RegisteredDataset.builder().datasetId(id).name("dataset-" + id)
-                    .datasetCode("ds-" + id).datasetVersion(version).status("ACTIVE")
-                    .ownerDomainId(ownerDomainId).ownerDomainName(ownerDomainName).build());
+                    .datasetCode("ds-" + id).datasetVersion(version).status("ACTIVE").build());
         }
 
         DatasetAccessGrant grant(Long userId, Long datasetId, String reason, LocalDateTime expiresAt) {

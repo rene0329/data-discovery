@@ -12,10 +12,11 @@ import org.example.exception.RegistrationException;
 import org.example.mapper.DatasetRegistrationMapper;
 import org.example.privacy.PrivacyComputeModels.InputSnapshotRecord;
 import org.example.privacy.PrivacyComputeModels.InputSpec;
-import org.example.privacy.PrivacyComputeModels.DatasetOwnershipRecord;
 import org.example.privacy.PrivacyComputeModels.JobSpec;
 import org.example.privacy.PrivacyComputeModels.ParticipantSpec;
 import org.example.privacy.PrivacyComputeModels.TemplateDefinition;
+import org.example.security.access.DatasetDomainLocation;
+import org.example.security.access.DatasetDomainMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -31,25 +32,32 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
-/** Resolves caller references to immutable, catalog-owned dataset version metadata. */
+/**
+ * Resolves caller references to immutable, catalog-owned dataset version metadata.
+ *
+ * <p>Each input's party is the collaboration domain the dataset is located in
+ * ({@link DatasetDomainMapper}, the same rule as dataset usage): it must be
+ * exactly one enabled domain, and every input must come from a different one.
+ */
 @Component
 public class PrivacyJobSpecResolver {
     private final DatasetRegistrationMapper datasets;
-    private final PrivacyComputeMapper privacyMapper;
+    private final DatasetDomainMapper locations;
     private final ObjectMapper objectMapper;
 
     @Autowired
-    public PrivacyJobSpecResolver(DatasetRegistrationMapper datasets, PrivacyComputeMapper privacyMapper,
+    public PrivacyJobSpecResolver(DatasetRegistrationMapper datasets, DatasetDomainMapper locations,
                                   ObjectMapper objectMapper) {
         this.datasets = datasets;
-        this.privacyMapper = privacyMapper;
+        this.locations = locations;
         this.objectMapper = objectMapper;
     }
 
     /** Compatibility constructor used only by legacy unit tests and stored-spec utilities. */
     PrivacyJobSpecResolver(DatasetRegistrationMapper datasets, ObjectMapper objectMapper) {
-        this(datasets, null, objectMapper);
+        this(datasets, (DatasetDomainMapper) null, objectMapper);
     }
 
     public ResolvedSpec resolve(JobSpec request, TemplateDefinition template, AuthenticatedUser initiator) {
@@ -65,7 +73,7 @@ public class PrivacyJobSpecResolver {
         }
         if (request.getParticipants() != null && !request.getParticipants().isEmpty()) {
             throw RegistrationException.invalid("PARTICIPANTS_SERVER_MANAGED",
-                    "participants and runtime parties are resolved from dataset ownership");
+                    "participants and runtime parties are resolved from dataset locations");
         }
         List<InputSpec> supplied = request.getInputs();
         if (supplied == null || supplied.size() != template.getParticipantCount()) {
@@ -106,26 +114,22 @@ public class PrivacyJobSpecResolver {
             if (!datasetsSeen.add(input.getDatasetId())) {
                 throw RegistrationException.invalid("DATASET_DUPLICATE", "a dataset can be selected only once");
             }
-            DatasetOwnershipRecord ownership = privacyMapper == null ? null
-                    : privacyMapper.findDatasetOwnership(input.getDatasetId());
-            validateOwnership(ownership, input.getDatasetId());
-            if (!domains.add(ownership.getOwnerDomainId())) {
-                throw RegistrationException.invalid("PARTICIPANT_DOMAIN_DUPLICATE",
-                        "each input must belong to a different collaboration domain");
-            }
             ParticipantSpec source = new ParticipantSpec();
             source.setDatasetId(String.valueOf(input.getDatasetId()));
             source.setDatasetVersion(input.getDatasetVersion());
             source.setFields(input.getFields());
             ResolvedParticipant resolved = resolveParticipant(party, runtimeRoles.get(party), source);
+            DatasetDomainLocation domain = participantDomain(resolved.snapshot.getDatasetId(), slot);
+            if (!domains.add(domain.getDomainId())) {
+                throw RegistrationException.invalid("PARTICIPANT_DOMAIN_DUPLICATE",
+                        "each input must belong to a different collaboration domain");
+            }
             resolved.participant.setSlotId(slot);
-            resolved.participant.setOwnerUserId(ownership.getOwnerUserId());
-            resolved.participant.setOwnerUsername(ownership.getOwnerUsername());
-            resolved.participant.setOwnerDomainId(ownership.getOwnerDomainId());
-            resolved.participant.setOwnerDomainCode(ownership.getOwnerDomainCode());
+            resolved.participant.setOwnerDomainId(domain.getDomainId());
+            resolved.participant.setOwnerDomainCode(domain.getDomainCode());
+            resolved.participant.setOwnerDomainName(domain.getDomainName());
             resolved.snapshot.setSlotId(slot);
-            resolved.snapshot.setOwnerUserId(ownership.getOwnerUserId());
-            resolved.snapshot.setOwnerDomainId(ownership.getOwnerDomainId());
+            resolved.snapshot.setOwnerDomainId(domain.getDomainId());
             normalized.getParticipants().add(resolved.participant);
             snapshots.add(resolved.snapshot);
             InputSpec frozenInput = new InputSpec();
@@ -141,17 +145,37 @@ public class PrivacyJobSpecResolver {
         return new ResolvedSpec(normalized, snapshots, specJson, sha256(specJson));
     }
 
-    private void validateOwnership(DatasetOwnershipRecord ownership, Long datasetId) {
-        if (ownership == null || ownership.getOwnerUserId() == null || ownership.getOwnerDomainId() == null) {
-            throw RegistrationException.conflict("DATASET_OWNER_REQUIRED",
-                    "dataset " + datasetId + " has no assigned owner and collaboration domain");
+    /**
+     * The single enabled domain the dataset is located in; that domain is the
+     * input's party and its domain users approve the input.
+     */
+    private DatasetDomainLocation participantDomain(Long datasetId, String slot) {
+        List<DatasetDomainLocation> located = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        if (locations != null) {
+            for (DatasetDomainLocation row : locations.findLocationDomains(Collections.singletonList(datasetId))) {
+                if (datasetId.equals(row.getDatasetId()) && row.getDomainId() != null && seen.add(row.getDomainId())) {
+                    located.add(row);
+                }
+            }
         }
-        if (!Boolean.TRUE.equals(ownership.getOwnerEnabled())) {
-            throw RegistrationException.conflict("DATASET_OWNER_DISABLED", "dataset owner is disabled");
+        if (located.isEmpty()) {
+            throw RegistrationException.conflict("PARTICIPANT_DOMAIN_MISSING",
+                    "dataset " + datasetId + " for " + slot + " is not located in any enabled collaboration domain;"
+                            + " a privacy input must be located in exactly one domain");
         }
-        if (!Boolean.TRUE.equals(ownership.getDomainEnabled())) {
-            throw RegistrationException.conflict("DATASET_DOMAIN_DISABLED", "dataset owner domain is disabled");
+        if (located.size() > 1) {
+            throw RegistrationException.conflict("PARTICIPANT_DOMAIN_AMBIGUOUS",
+                    "dataset " + datasetId + " for " + slot + " is located in " + located.size()
+                            + " collaboration domains (" + located.stream().map(this::domainLabel)
+                            .collect(Collectors.joining(", "))
+                            + "); a privacy input must be located in exactly one domain");
         }
+        return located.get(0);
+    }
+
+    private String domainLabel(DatasetDomainLocation location) {
+        return blank(location.getDomainName()) ? String.valueOf(location.getDomainId()) : location.getDomainName();
     }
 
     public ResolvedSpec resolve(JobSpec request, TemplateDefinition template, String initiator) {

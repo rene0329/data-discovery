@@ -27,12 +27,6 @@ public class RegisteredDataset {
     private Double requiredMemoryGi;
     private Double requiredGpu;
     private String status;
-    private Long ownerUserId;
-    private Long ownerDomainId;
-    private String ownerUsername;
-    private String ownerDisplayName;
-    private String ownerDomainCode;
-    private String ownerDomainName;
     private Double dataHeat;
     private LocalDateTime heatUpdatedAt;
     private Long defaultRuntimeImageId;

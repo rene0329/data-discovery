@@ -2,6 +2,7 @@ package org.example.privacy;
 
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.LocalDateTime;
@@ -172,14 +173,24 @@ public final class PrivacyComputeModels {
         }
     }
 
+    /**
+     * One runtime party. {@code ownerDomainId/Code/Name} identify the collaboration
+     * domain that contributes this input: the single enabled domain the dataset
+     * was located in when the job was created (frozen into the spec). Any enabled
+     * DATA_OWNER of that domain may approve the input.
+     *
+     * <p>Specs frozen before the domain model also carry the retired per-dataset
+     * holder ({@code ownerUserId}, {@code ownerUsername}); those keys are accepted
+     * and dropped so stored jobs and idempotent replays still deserialize.
+     */
+    @JsonIgnoreProperties({"ownerUserId", "ownerUsername"})
     public static class ParticipantSpec {
         private String slotId;
         private String partyId;
         private String role;
-        private Long ownerUserId;
-        private String ownerUsername;
         private Long ownerDomainId;
         private String ownerDomainCode;
+        private String ownerDomainName;
         private String datasetId;
         private String datasetVersion;
         private String datasetSha256;
@@ -194,14 +205,12 @@ public final class PrivacyComputeModels {
         public void setPartyId(String partyId) { this.partyId = partyId; }
         public String getRole() { return role; }
         public void setRole(String role) { this.role = role; }
-        public Long getOwnerUserId() { return ownerUserId; }
-        public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
-        public String getOwnerUsername() { return ownerUsername; }
-        public void setOwnerUsername(String ownerUsername) { this.ownerUsername = ownerUsername; }
         public Long getOwnerDomainId() { return ownerDomainId; }
         public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
         public String getOwnerDomainCode() { return ownerDomainCode; }
         public void setOwnerDomainCode(String ownerDomainCode) { this.ownerDomainCode = ownerDomainCode; }
+        public String getOwnerDomainName() { return ownerDomainName; }
+        public void setOwnerDomainName(String ownerDomainName) { this.ownerDomainName = ownerDomainName; }
         public String getDatasetId() { return datasetId; }
         public void setDatasetId(String datasetId) { this.datasetId = datasetId; }
         public String getDatasetVersion() { return datasetVersion; }
@@ -473,10 +482,18 @@ public final class PrivacyComputeModels {
         public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     }
 
+    /**
+     * One participant's decision for one attempt. The approver is whoever decided
+     * (the initiator for an auto-approved own-domain input); it is null while the
+     * decision is PENDING. ownerDomainId/Code is the participant's domain, whose
+     * enabled DATA_OWNER users may decide.
+     */
     public static class ApprovalRecord {
         private String jobId;
         private String attemptId;
         private String participantId;
+        private Long ownerDomainId;
+        private String ownerDomainCode;
         private Long approverUserId;
         private String approverUsername;
         private String inputSnapshotDigest;
@@ -490,6 +507,10 @@ public final class PrivacyComputeModels {
         public void setAttemptId(String attemptId) { this.attemptId = attemptId; }
         public String getParticipantId() { return participantId; }
         public void setParticipantId(String participantId) { this.participantId = participantId; }
+        public Long getOwnerDomainId() { return ownerDomainId; }
+        public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
+        public String getOwnerDomainCode() { return ownerDomainCode; }
+        public void setOwnerDomainCode(String ownerDomainCode) { this.ownerDomainCode = ownerDomainCode; }
         public Long getApproverUserId() { return approverUserId; }
         public void setApproverUserId(Long approverUserId) { this.approverUserId = approverUserId; }
         public String getApproverUsername() { return approverUsername; }
@@ -506,8 +527,12 @@ public final class PrivacyComputeModels {
         public void setDecidedAt(LocalDateTime decidedAt) { this.decidedAt = decidedAt; }
     }
 
+    /** See {@link ApprovalRecord}: approver fields stay null until someone decides. */
     public static class ApprovalView {
         private String participantId;
+        private Long ownerDomainId;
+        private String ownerDomainCode;
+        private String ownerDomainName;
         private Long approverUserId;
         private String approverUsername;
         private String inputSnapshotDigest;
@@ -516,6 +541,12 @@ public final class PrivacyComputeModels {
         private LocalDateTime decidedAt;
         public String getParticipantId() { return participantId; }
         public void setParticipantId(String participantId) { this.participantId = participantId; }
+        public Long getOwnerDomainId() { return ownerDomainId; }
+        public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
+        public String getOwnerDomainCode() { return ownerDomainCode; }
+        public void setOwnerDomainCode(String ownerDomainCode) { this.ownerDomainCode = ownerDomainCode; }
+        public String getOwnerDomainName() { return ownerDomainName; }
+        public void setOwnerDomainName(String ownerDomainName) { this.ownerDomainName = ownerDomainName; }
         public Long getApproverUserId() { return approverUserId; }
         public void setApproverUserId(Long approverUserId) { this.approverUserId = approverUserId; }
         public String getApproverUsername() { return approverUsername; }
@@ -535,7 +566,6 @@ public final class PrivacyComputeModels {
         private String jobId;
         private String partyId;
         private String slotId;
-        private Long ownerUserId;
         private Long ownerDomainId;
         private Long datasetId;
         private String datasetCode;
@@ -554,8 +584,6 @@ public final class PrivacyComputeModels {
         public void setPartyId(String partyId) { this.partyId = partyId; }
         public String getSlotId() { return slotId; }
         public void setSlotId(String slotId) { this.slotId = slotId; }
-        public Long getOwnerUserId() { return ownerUserId; }
-        public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
         public Long getOwnerDomainId() { return ownerDomainId; }
         public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
         public Long getDatasetId() { return datasetId; }
@@ -576,30 +604,6 @@ public final class PrivacyComputeModels {
         public void setSchemaDigest(String schemaDigest) { this.schemaDigest = schemaDigest; }
         public String getFieldsJson() { return fieldsJson; }
         public void setFieldsJson(String fieldsJson) { this.fieldsJson = fieldsJson; }
-    }
-
-    public static class DatasetOwnershipRecord {
-        private Long datasetId;
-        private Long ownerUserId;
-        private String ownerUsername;
-        private Boolean ownerEnabled;
-        private Long ownerDomainId;
-        private String ownerDomainCode;
-        private Boolean domainEnabled;
-        public Long getDatasetId() { return datasetId; }
-        public void setDatasetId(Long datasetId) { this.datasetId = datasetId; }
-        public Long getOwnerUserId() { return ownerUserId; }
-        public void setOwnerUserId(Long ownerUserId) { this.ownerUserId = ownerUserId; }
-        public String getOwnerUsername() { return ownerUsername; }
-        public void setOwnerUsername(String ownerUsername) { this.ownerUsername = ownerUsername; }
-        public Boolean getOwnerEnabled() { return ownerEnabled; }
-        public void setOwnerEnabled(Boolean ownerEnabled) { this.ownerEnabled = ownerEnabled; }
-        public Long getOwnerDomainId() { return ownerDomainId; }
-        public void setOwnerDomainId(Long ownerDomainId) { this.ownerDomainId = ownerDomainId; }
-        public String getOwnerDomainCode() { return ownerDomainCode; }
-        public void setOwnerDomainCode(String ownerDomainCode) { this.ownerDomainCode = ownerDomainCode; }
-        public Boolean getDomainEnabled() { return domainEnabled; }
-        public void setDomainEnabled(Boolean domainEnabled) { this.domainEnabled = domainEnabled; }
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

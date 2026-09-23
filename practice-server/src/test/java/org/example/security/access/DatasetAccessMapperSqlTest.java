@@ -86,7 +86,7 @@ class DatasetAccessMapperSqlTest {
 
     @Test
     void locationDomainsFollowLocatedReplicasThroughNodeSitesToEnabledDomains() {
-        String expected = "SELECT DISTINCT r.dataset_id, d.domain_id, d.name AS domain_name "
+        String expected = "SELECT DISTINCT r.dataset_id, d.domain_id, d.domain_code, d.name AS domain_name "
                 + "FROM dataset_replica r "
                 + "JOIN registered_dataset rd ON rd.dataset_id = r.dataset_id AND rd.deleted_at IS NULL "
                 + "JOIN node_management n ON n.node_id = r.node_id AND n.deleted_at IS NULL "

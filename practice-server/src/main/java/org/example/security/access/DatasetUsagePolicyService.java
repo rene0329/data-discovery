@@ -46,8 +46,8 @@ import java.util.stream.Collectors;
  * nodes currently holding its replicas ({@link DatasetDomainMapper}), so it
  * follows copy/move scheduling; a dataset in two domains serves both. Datasets
  * located in no enabled domain are reachable by non-admins only through a
- * grant. registered_dataset.owner_domain_id (the 数据归属 holder used by privacy
- * computing) does not influence this decision.
+ * grant. The retired per-dataset holder (registered_dataset.owner_user_id /
+ * owner_domain_id) does not influence this decision.
  *
  * <p>A request whose principal is not a JWT user (anonymous, internal Agent,
  * background thread) has no roles, no domain and no grants, so every

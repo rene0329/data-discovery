@@ -1,7 +1,5 @@
 package org.example.auth;
 
-import org.example.dto.registration.RegisteredDatasetView;
-import org.example.service.DatasetRegistrationService;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,13 +26,10 @@ public class AdminIdentityService {
 
     private final AuthMapper mapper;
     private final PasswordEncoder passwordEncoder;
-    private final DatasetRegistrationService datasets;
 
-    public AdminIdentityService(AuthMapper mapper, PasswordEncoder passwordEncoder,
-                                DatasetRegistrationService datasets) {
+    public AdminIdentityService(AuthMapper mapper, PasswordEncoder passwordEncoder) {
         this.mapper = mapper;
         this.passwordEncoder = passwordEncoder;
-        this.datasets = datasets;
     }
 
     public List<CollaborationDomain> listDomains() { return mapper.listDomains(); }
@@ -122,13 +117,9 @@ public class AdminIdentityService {
         Set<String> roles = request.getRoles() == null
                 ? new LinkedHashSet<>(mapper.listRoleCodes(id)) : normalizeRoles(request.getRoles());
         Long domainId = request.getDomainId() == null ? user.getDomainId() : request.getDomainId();
+        // No dataset-holder guard: datasets belong to the domain their replicas are
+        // in, never to a user, so a user's role or domain can change freely.
         CollaborationDomain domain = validateDomainForRoles(domainId, roles);
-        boolean ownershipBindingChanged = !roles.contains("DATA_OWNER")
-                || !java.util.Objects.equals(user.getDomainId(), domain == null ? null : domain.getId());
-        if (ownershipBindingChanged && mapper.countOwnedDatasets(id) > 0) {
-            throw new AuthException(HttpStatus.CONFLICT, "DATASET_OWNERSHIP_EXISTS",
-                    "reassign the user's datasets before changing its DATA_OWNER role or domain");
-        }
         if (request.getDisplayName() != null) user.setDisplayName(required(request.getDisplayName(), "display name"));
         user.setDomainId(domain == null ? null : domain.getId());
         if (request.getEnabled() != null) user.setEnabled(request.getEnabled());
@@ -144,22 +135,6 @@ public class AdminIdentityService {
         validatePassword(password);
         mapper.resetPassword(id, passwordEncoder.encode(password));
         return view(mapper.findUserById(id));
-    }
-
-    @Transactional
-    public RegisteredDatasetView assignDatasetOwner(Long datasetId, AuthDtos.DatasetOwnerRequest request) {
-        if (request == null || request.getUserId() == null) invalid("userId is required");
-        AuthUserRecord owner = requireUser(request.getUserId());
-        Set<String> roles = new LinkedHashSet<>(mapper.listRoleCodes(owner.getUserId()));
-        if (!Boolean.TRUE.equals(owner.getEnabled()) || !roles.contains("DATA_OWNER")) {
-            throw new AuthException(HttpStatus.CONFLICT, "INVALID_DATA_OWNER",
-                    "dataset owner must be an enabled DATA_OWNER user");
-        }
-        CollaborationDomain domain = validateDomainForRoles(owner.getDomainId(), roles);
-        if (mapper.assignDatasetOwner(datasetId, owner.getUserId(), domain.getId()) != 1) {
-            throw new AuthException(HttpStatus.NOT_FOUND, "DATASET_NOT_FOUND", "dataset was not found");
-        }
-        return datasets.getDataset(datasetId);
     }
 
     @Transactional

@@ -91,10 +91,9 @@ class ProviderExecutionRequestContractTest {
         source.setSlotId("P0");
         source.setPartyId("A");
         source.setRole("RECEIVER");
-        source.setOwnerUserId(12L);
-        source.setOwnerUsername("owner-a");
         source.setOwnerDomainId(34L);
         source.setOwnerDomainCode("domain-a");
+        source.setOwnerDomainName("上海域（A）");
         source.setDatasetId("34");
         source.setDatasetVersion("v1");
 
@@ -108,6 +107,7 @@ class ProviderExecutionRequestContractTest {
         assertFalse(participant.has("ownerUsername"));
         assertFalse(participant.has("ownerDomainId"));
         assertFalse(participant.has("ownerDomainCode"));
+        assertFalse(participant.has("ownerDomainName"));
     }
 
     private String repeat(char value, int count) {

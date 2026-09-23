@@ -7,7 +7,6 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.example.privacy.PrivacyComputeModels.ApprovalRecord;
 import org.example.privacy.PrivacyComputeModels.EventRecord;
-import org.example.privacy.PrivacyComputeModels.DatasetOwnershipRecord;
 import org.example.privacy.PrivacyComputeModels.EvidenceRecord;
 import org.example.privacy.PrivacyComputeModels.InputSnapshotRecord;
 import org.example.privacy.PrivacyComputeModels.JobRecord;
@@ -16,6 +15,14 @@ import org.example.privacy.PrivacyComputeModels.ResultRecord;
 
 import java.util.List;
 
+/**
+ * Privacy control-plane persistence. A participant's party is a collaboration
+ * domain (privacy_compute_participant.owner_domain_id / owner_domain_code, frozen
+ * at creation from the dataset's location); approvals are addressed to that
+ * domain, and approver_user_id / approver_username record who actually decided.
+ * The owner_user_id / owner_username columns of the retired per-dataset holder
+ * are no longer written or read.
+ */
 @Mapper
 public interface PrivacyComputeMapper {
     @Insert("INSERT INTO privacy_compute_job (job_id,request_id,current_attempt_id,current_attempt_no," +
@@ -27,15 +34,15 @@ public interface PrivacyComputeMapper {
     int insertJob(JobRecord job);
 
     @Insert("INSERT INTO privacy_compute_participant " +
-            "(job_id,party_id,slot_id,role,owner_user_id,owner_username,owner_domain_id,owner_domain_code,created_at) " +
-            "VALUES (#{jobId},#{p.partyId},#{p.slotId},#{p.role},#{p.ownerUserId},#{p.ownerUsername}," +
+            "(job_id,party_id,slot_id,role,owner_domain_id,owner_domain_code,created_at) " +
+            "VALUES (#{jobId},#{p.partyId},#{p.slotId},#{p.role}," +
             "#{p.ownerDomainId},#{p.ownerDomainCode},UTC_TIMESTAMP(3))")
     int insertParticipant(@Param("jobId") String jobId, @Param("p") ParticipantSpec participant);
 
     @Insert("INSERT INTO privacy_compute_input_snapshot " +
-            "(job_id,party_id,slot_id,owner_user_id,owner_domain_id,dataset_id,dataset_code,dataset_version,digest_algorithm,digest_value," +
+            "(job_id,party_id,slot_id,owner_domain_id,dataset_id,dataset_code,dataset_version,digest_algorithm,digest_value," +
             "size_bytes,schema_json,schema_digest,fields_json,created_at) VALUES " +
-            "(#{jobId},#{partyId},#{slotId},#{ownerUserId},#{ownerDomainId},#{datasetId},#{datasetCode},#{datasetVersion},#{digestAlgorithm}," +
+            "(#{jobId},#{partyId},#{slotId},#{ownerDomainId},#{datasetId},#{datasetCode},#{datasetVersion},#{digestAlgorithm}," +
             "#{digestValue},#{sizeBytes},#{schemaJson},#{schemaDigest},#{fieldsJson},UTC_TIMESTAMP(3))")
     int insertInputSnapshot(InputSnapshotRecord snapshot);
 
@@ -45,15 +52,16 @@ public interface PrivacyComputeMapper {
     int insertAttempt(@Param("attemptId") String attemptId, @Param("jobId") String jobId,
                       @Param("attemptNo") int attemptNo, @Param("randomContextId") String randomContextId);
 
+    /** approverUserId/approverUsername: the initiator for an auto-approved row, otherwise null. */
     @Insert("INSERT INTO privacy_compute_approval " +
             "(job_id,attempt_id,participant_id,approver_user_id,approver_username,input_snapshot_digest," +
             "decision,decision_signature,created_at,decided_at) VALUES " +
-            "(#{jobId},#{attemptId},#{participantId},#{ownerUserId},#{ownerUsername},#{snapshotDigest},#{decision}," +
+            "(#{jobId},#{attemptId},#{participantId},#{approverUserId},#{approverUsername},#{snapshotDigest},#{decision}," +
             "#{decisionSignature},UTC_TIMESTAMP(3),CASE WHEN #{decision}='APPROVED' THEN UTC_TIMESTAMP(3) ELSE NULL END)")
     int insertPendingApproval(@Param("jobId") String jobId, @Param("attemptId") String attemptId,
                               @Param("participantId") String participantId,
-                              @Param("ownerUserId") Long ownerUserId,
-                              @Param("ownerUsername") String ownerUsername,
+                              @Param("approverUserId") Long approverUserId,
+                              @Param("approverUsername") String approverUsername,
                               @Param("snapshotDigest") String snapshotDigest,
                               @Param("decision") String decision,
                               @Param("decisionSignature") String decisionSignature);
@@ -69,12 +77,15 @@ public interface PrivacyComputeMapper {
             "ORDER BY created_at DESC LIMIT #{limit}", "</script>"})
     List<JobRecord> listJobs(@Param("status") String status, @Param("limit") int limit);
 
-    @Select({"<script>", "SELECT DISTINCT j.* FROM privacy_compute_job j",
-            "LEFT JOIN privacy_compute_participant p ON p.job_id=j.job_id",
-            "WHERE (j.initiator_user_id=#{userId} OR p.owner_user_id=#{userId})",
+    /** Jobs the user initiated or in which the user's domain (null: none) is a participant. */
+    @Select({"<script>", "SELECT j.* FROM privacy_compute_job j",
+            "WHERE (j.initiator_user_id=#{userId}",
+            "<if test='domainId != null'> OR EXISTS (SELECT 1 FROM privacy_compute_participant p",
+            "WHERE p.job_id=j.job_id AND p.owner_domain_id=#{domainId})</if>)",
             "<if test='status != null and status != \"\"'> AND j.status=#{status}</if>",
             "ORDER BY j.created_at DESC LIMIT #{limit}", "</script>"})
     List<JobRecord> listJobsForParticipant(@Param("userId") Long userId,
+                                           @Param("domainId") Long domainId,
                                            @Param("status") String status,
                                            @Param("limit") int limit);
 
@@ -84,22 +95,19 @@ public interface PrivacyComputeMapper {
     @Select("SELECT * FROM privacy_compute_participant WHERE job_id=#{jobId} ORDER BY party_id")
     List<ParticipantSpec> findParticipants(@Param("jobId") String jobId);
 
-    @Select("SELECT * FROM privacy_compute_participant WHERE job_id=#{jobId} AND owner_user_id=#{userId} LIMIT 1")
-    ParticipantSpec findParticipantForOwner(@Param("jobId") String jobId, @Param("userId") Long userId);
+    /** The job's participant contributed by {@code domainId}; the resolver keeps domains distinct per job. */
+    @Select("SELECT * FROM privacy_compute_participant WHERE job_id=#{jobId} AND owner_domain_id=#{domainId} " +
+            "ORDER BY party_id LIMIT 1")
+    ParticipantSpec findParticipantForDomain(@Param("jobId") String jobId, @Param("domainId") Long domainId);
 
-    @Select("SELECT j.* FROM privacy_compute_job j JOIN privacy_compute_approval a " +
-            "ON a.job_id=j.job_id AND a.attempt_id=j.current_attempt_id " +
-            "WHERE a.approver_user_id=#{userId} AND a.decision='PENDING' AND j.status='AWAITING_APPROVAL' " +
+    /** 待我审批: jobs whose current attempt still waits for a participant of {@code domainId}. */
+    @Select("SELECT j.* FROM privacy_compute_job j WHERE j.status='AWAITING_APPROVAL' AND EXISTS (" +
+            "SELECT 1 FROM privacy_compute_approval a JOIN privacy_compute_participant p " +
+            "ON p.job_id=a.job_id AND p.party_id=a.participant_id " +
+            "WHERE a.job_id=j.job_id AND a.attempt_id=j.current_attempt_id AND a.decision='PENDING' " +
+            "AND p.owner_domain_id=#{domainId}) " +
             "ORDER BY j.created_at DESC LIMIT #{limit}")
-    List<JobRecord> listPendingApprovals(@Param("userId") Long userId, @Param("limit") int limit);
-
-    @Select("SELECT d.dataset_id,d.owner_user_id,u.username owner_username," +
-            "u.enabled owner_enabled," +
-            "d.owner_domain_id,c.domain_code owner_domain_code," +
-            "c.enabled domain_enabled " +
-            "FROM registered_dataset d LEFT JOIN app_user u ON u.user_id=d.owner_user_id " +
-            "LEFT JOIN collaboration_domain c ON c.domain_id=d.owner_domain_id WHERE d.dataset_id=#{datasetId}")
-    DatasetOwnershipRecord findDatasetOwnership(@Param("datasetId") Long datasetId);
+    List<JobRecord> listPendingApprovals(@Param("domainId") Long domainId, @Param("limit") int limit);
 
     @Select("SELECT COUNT(*) FROM app_user WHERE user_id=#{userId} AND enabled=TRUE")
     int countEnabledUser(@Param("userId") Long userId);
@@ -107,18 +115,30 @@ public interface PrivacyComputeMapper {
     @Select("SELECT * FROM privacy_compute_input_snapshot WHERE job_id=#{jobId} ORDER BY party_id")
     List<InputSnapshotRecord> findInputSnapshots(@Param("jobId") String jobId);
 
+    /** Records the decider; the caller has already checked it is a domain user of the participant. */
     @Update("UPDATE privacy_compute_approval SET decision=#{decision},reason=#{reason}," +
-            "decision_signature=#{decisionSignature},approver_username=#{approverUsername},decided_at=UTC_TIMESTAMP(3) " +
+            "decision_signature=#{decisionSignature},approver_user_id=#{approverUserId}," +
+            "approver_username=#{approverUsername},decided_at=UTC_TIMESTAMP(3) " +
             "WHERE job_id=#{jobId} AND attempt_id=#{attemptId} AND participant_id=#{participantId} " +
-            "AND approver_user_id=#{approverUserId} AND decision='PENDING'")
+            "AND decision='PENDING'")
     int decide(@Param("jobId") String jobId, @Param("attemptId") String attemptId,
                @Param("participantId") String participantId, @Param("decision") String decision,
                @Param("reason") String reason, @Param("decisionSignature") String decisionSignature,
                @Param("approverUserId") Long approverUserId,
                @Param("approverUsername") String approverUsername);
 
-    @Select("SELECT * FROM privacy_compute_approval WHERE job_id=#{jobId} " +
-            "AND attempt_id=#{attemptId} ORDER BY participant_id")
+    /**
+     * Approvals with their participant's domain. Rows created before the domain
+     * model pre-filled approver_* with the dataset holder while still PENDING, so
+     * the approver is reported only once a decision exists.
+     */
+    @Select("SELECT a.job_id,a.attempt_id,a.participant_id,p.owner_domain_id,p.owner_domain_code," +
+            "CASE WHEN a.decision='PENDING' THEN NULL ELSE a.approver_user_id END approver_user_id," +
+            "CASE WHEN a.decision='PENDING' THEN NULL ELSE a.approver_username END approver_username," +
+            "a.input_snapshot_digest,a.decision,a.reason,a.decision_signature,a.decided_at " +
+            "FROM privacy_compute_approval a LEFT JOIN privacy_compute_participant p " +
+            "ON p.job_id=a.job_id AND p.party_id=a.participant_id " +
+            "WHERE a.job_id=#{jobId} AND a.attempt_id=#{attemptId} ORDER BY a.participant_id")
     List<ApprovalRecord> findApprovals(@Param("jobId") String jobId,
                                        @Param("attemptId") String attemptId);
 

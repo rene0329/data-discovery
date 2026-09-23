@@ -3,6 +3,7 @@ package org.example.dto.registration;
 import org.example.entity.DatasetReplica;
 import org.example.entity.RegisteredDataset;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -16,12 +17,10 @@ public class RegisteredDatasetView {
     private String category;
     private String format;
     private String status;
-    private Long ownerUserId;
-    private String ownerUsername;
-    private String ownerDisplayName;
-    private Long ownerDomainId;
-    private String ownerDomainCode;
-    private String ownerDomainName;
+    /** Enabled domains the dataset is located in (DatasetDomainMapper), ordered by domain id. */
+    private List<Long> domainIds = new ArrayList<>();
+    /** Names of {@link #domainIds}, in the same order. */
+    private List<String> domainNames = new ArrayList<>();
     private Double dataHeat;
     @com.fasterxml.jackson.annotation.JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss'Z'")
     private java.time.LocalDateTime heatUpdatedAt;
@@ -51,12 +50,6 @@ public class RegisteredDatasetView {
         view.category = entity.getCategory();
         view.format = entity.getDataFormat();
         view.status = entity.getStatus();
-        view.ownerUserId = entity.getOwnerUserId();
-        view.ownerUsername = entity.getOwnerUsername();
-        view.ownerDisplayName = entity.getOwnerDisplayName();
-        view.ownerDomainId = entity.getOwnerDomainId();
-        view.ownerDomainCode = entity.getOwnerDomainCode();
-        view.ownerDomainName = entity.getOwnerDomainName();
         view.dataHeat = entity.getDataHeat();
         view.heatUpdatedAt = entity.getHeatUpdatedAt();
         view.labels = labels;
@@ -80,12 +73,8 @@ public class RegisteredDatasetView {
     public String getCategory() { return category; }
     public String getFormat() { return format; }
     public String getStatus() { return status; }
-    public Long getOwnerUserId() { return ownerUserId; }
-    public String getOwnerUsername() { return ownerUsername; }
-    public String getOwnerDisplayName() { return ownerDisplayName; }
-    public Long getOwnerDomainId() { return ownerDomainId; }
-    public String getOwnerDomainCode() { return ownerDomainCode; }
-    public String getOwnerDomainName() { return ownerDomainName; }
+    public List<Long> getDomainIds() { return domainIds; }
+    public List<String> getDomainNames() { return domainNames; }
     public Double getDataHeat() { return dataHeat; }
     public java.time.LocalDateTime getHeatUpdatedAt() { return heatUpdatedAt; }
     public Map<String, String> getLabels() { return labels; }
@@ -101,6 +90,12 @@ public class RegisteredDatasetView {
     public Long getAuthoritativeSizeBytes() { return authoritativeSizeBytes; }
     public Object getSchema() { return schema; }
     public String getSchemaDigest() { return schemaDigest; }
+
+    /** Replaces the location domains; null lists become empty so the JSON never carries null. */
+    public void setLocationDomains(List<Long> domainIds, List<String> domainNames) {
+        this.domainIds = domainIds == null ? new ArrayList<>() : new ArrayList<>(domainIds);
+        this.domainNames = domainNames == null ? new ArrayList<>() : new ArrayList<>(domainNames);
+    }
 
     public void setReplicaHealth(String healthStatus, int availableReplicaCount,
                                  int totalReplicaCount, String statusReason) {

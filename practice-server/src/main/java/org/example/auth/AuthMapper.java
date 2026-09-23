@@ -73,13 +73,4 @@ public interface AuthMapper {
     @Insert("INSERT INTO app_user_role(user_id,role_id) "
             + "SELECT #{userId}, role_id FROM app_role WHERE role_code=#{roleCode}")
     int insertUserRole(@Param("userId") Long userId, @Param("roleCode") String roleCode);
-
-    @Update("UPDATE registered_dataset SET owner_user_id=#{userId}, owner_domain_id=#{domainId}, "
-            + "row_version=row_version+1 WHERE dataset_id=#{datasetId} AND deleted_at IS NULL")
-    int assignDatasetOwner(@Param("datasetId") Long datasetId,
-                           @Param("userId") Long userId,
-                           @Param("domainId") Long domainId);
-
-    @Select("SELECT COUNT(*) FROM registered_dataset WHERE owner_user_id=#{userId} AND deleted_at IS NULL")
-    int countOwnedDatasets(Long userId);
 }

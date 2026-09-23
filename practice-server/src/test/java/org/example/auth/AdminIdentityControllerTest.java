@@ -25,6 +25,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -116,6 +117,14 @@ class AdminIdentityControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.errorCode").value("INVALID_ARGUMENT"));
+    }
+
+    @Test
+    void theDatasetHolderEndpointIsGone() throws Exception {
+        mvc.perform(put("/api/v1/admin/datasets/5/owner").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"userId\":7}"))
+                .andExpect(status().isNotFound());
+        org.mockito.Mockito.verifyNoInteractions(service);
     }
 
     private static CollaborationDomain domain(Long id, String code, String name, String siteCode) {

@@ -1,12 +1,16 @@
 package org.example.auth;
 
-import org.example.service.DatasetRegistrationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+
+import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -27,8 +31,7 @@ class AdminIdentityServiceTest {
     @BeforeEach
     void setUp() {
         mapper = mock(AuthMapper.class);
-        service = new AdminIdentityService(mapper, new BCryptPasswordEncoder(4),
-                mock(DatasetRegistrationService.class));
+        service = new AdminIdentityService(mapper, new BCryptPasswordEncoder(4));
         doAnswer(inv -> {
             inv.<CollaborationDomain>getArgument(0).setId(9L);
             return 1;
@@ -202,7 +205,56 @@ class AdminIdentityServiceTest {
         assertEquals("DOMAIN_SITE_TAKEN", error.getErrorCode());
     }
 
+    // ---- users: no dataset-holder guard ------------------------------------------------
+
+    @Test
+    void aDomainUsersDomainAndRoleChangeFreelyBecauseUsersHoldNoDatasets() {
+        AuthUserRecord user = userRecord(7L, 1L);
+        when(mapper.findUserById(7L)).thenReturn(user);
+        when(mapper.listRoleCodes(7L)).thenReturn(Collections.singletonList("DATA_OWNER"));
+        when(mapper.findDomainById(1L)).thenReturn(domain(1L, "domain-a", "sh"));
+        when(mapper.findDomainById(2L)).thenReturn(domain(2L, "domain-b", "sz"));
+
+        AuthDtos.UserRequest move = new AuthDtos.UserRequest();
+        move.setDomainId(2L);
+        service.updateUser(7L, move);
+        ArgumentCaptor<AuthUserRecord> moved = ArgumentCaptor.forClass(AuthUserRecord.class);
+        verify(mapper).updateUser(moved.capture());
+        assertEquals(Long.valueOf(2L), moved.getValue().getDomainId());
+
+        AuthDtos.UserRequest demote = new AuthDtos.UserRequest();
+        demote.setRoles(Collections.singleton("AUDITOR"));
+        demote.setEnabled(false);
+        service.updateUser(7L, demote);
+        verify(mapper).deleteUserRoles(7L);
+        verify(mapper).insertUserRole(7L, "AUDITOR");
+    }
+
+    @Test
+    void authMapperNoLongerReadsOrWritesDatasetHolders() {
+        for (Method method : AuthMapper.class.getMethods()) {
+            for (Annotation annotation : method.getAnnotations()) {
+                String sql = annotation.toString();
+                assertTrue(!sql.contains("registered_dataset") && !sql.contains("owner_user_id"),
+                        method.getName() + ": " + sql);
+            }
+        }
+        assertTrue(Arrays.stream(AdminIdentityService.class.getMethods())
+                .noneMatch(method -> method.getName().toLowerCase().contains("owner")));
+    }
+
     // ---- helpers -------------------------------------------------------------------
+
+    private static AuthUserRecord userRecord(Long id, Long domainId) {
+        AuthUserRecord user = new AuthUserRecord();
+        user.setUserId(id);
+        user.setUsername("user-" + id);
+        user.setDisplayName("User " + id);
+        user.setDomainId(domainId);
+        user.setEnabled(true);
+        user.setTokenVersion(0);
+        return user;
+    }
 
     private CollaborationDomain insertedDomain() {
         ArgumentCaptor<CollaborationDomain> captor = ArgumentCaptor.forClass(CollaborationDomain.class);

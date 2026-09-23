@@ -92,10 +92,11 @@ public class ReplicaReverifyWorker {
     }
 
     /**
-     * DatasetRegistrationService.verify() enforces owner/admin authorization
-     * (requireDatasetMutation) through the request-scoped SecurityContext,
-     * which does not exist on this scheduler thread. Run under a synthetic
-     * ADMIN principal, the same "system" actor the audit log already uses for
+     * DatasetRegistrationService.verify() enforces admin / dataset-domain
+     * authorization (requireDatasetMutation) through the request-scoped
+     * SecurityContext, which does not exist on this scheduler thread. Run under
+     * a synthetic ADMIN principal (no user id, no domain; ADMIN is never
+     * domain-limited), the same "system" actor the audit log already uses for
      * automated writes, and always clear it afterward.
      */
     private void runAsSystem(Runnable action) {

@@ -4,7 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import org.example.auth.AuthMapper;
 import org.example.auth.AuthenticatedUser;
+import org.example.auth.CollaborationDomain;
 import org.example.auth.CurrentUserService;
 import org.example.dto.registration.RegisterDatasetRequest;
 import org.example.dto.registration.OperationResult;
@@ -24,6 +26,8 @@ import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.RegistrationAuditMapper;
 import org.example.mapper.RuntimeImageMapper;
 import org.example.model.FileIntegrityResult;
+import org.example.security.access.DatasetDomainLocation;
+import org.example.security.access.DatasetDomainMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -42,7 +46,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -51,8 +57,21 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * Dataset catalog registration and management.
+ *
+ * <p>Authorization follows the business-domain model: ADMIN may register and
+ * manage every dataset; a DATA_OWNER bound to a domain may register datasets
+ * only onto nodes of that domain (node_management.site_code equals the
+ * domain's site_code) and may manage a dataset only while it is located in
+ * that domain ({@link DatasetDomainMapper}, the same rule as dataset usage).
+ * Everyone else gets 403 DATASET_DOMAIN_REQUIRED. The retired per-dataset
+ * holder (registered_dataset.owner_user_id / owner_domain_id) is neither
+ * written nor consulted.
+ */
 @Service
 public class DatasetRegistrationService {
+    public static final String DOMAIN_REQUIRED_CODE = "DATASET_DOMAIN_REQUIRED";
     private static final Pattern DATASET_CODE = Pattern.compile("^[a-zA-Z0-9._-]+$");
     private static final TypeReference<Map<String, String>> STRING_MAP =
             new TypeReference<Map<String, String>>() { };
@@ -67,6 +86,8 @@ public class DatasetRegistrationService {
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     private final DatasetUploadClient uploadClient;
     private final NodeAvailabilityService nodeAvailabilityService;
+    private final DatasetDomainMapper locations;
+    private final AuthMapper domains;
     private final String dataDirectory;
     private final TransactionTemplate transactionTemplate;
     @Autowired(required = false)
@@ -81,6 +102,8 @@ public class DatasetRegistrationService {
                                       DatasetReplicaAvailabilityService replicaAvailabilityService,
                                       DatasetUploadClient uploadClient,
                                       NodeAvailabilityService nodeAvailabilityService,
+                                      DatasetDomainMapper locations,
+                                      AuthMapper domains,
                                       PlatformTransactionManager transactionManager,
                                       @Value("${dispatch.data-discovery.port:8080}") int discoveryPort,
                                       @Value("${dispatch.data-discovery.data-directory:/dataset}") String dataDirectory) {
@@ -94,6 +117,8 @@ public class DatasetRegistrationService {
         this.replicaAvailabilityService = replicaAvailabilityService;
         this.uploadClient = uploadClient;
         this.nodeAvailabilityService = nodeAvailabilityService;
+        this.locations = locations;
+        this.domains = domains;
         this.dataDirectory = dataDirectory;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
@@ -140,12 +165,19 @@ public class DatasetRegistrationService {
         validateQuery(query);
         validateDatasetStatus(status);
         String normalizedStatus = status == null ? null : status.trim().toUpperCase();
-        return mapper.listDatasets(query, normalizedStatus).stream()
-                .map(this::toView).collect(Collectors.toList());
+        List<RegisteredDataset> datasets = mapper.listDatasets(query, normalizedStatus);
+        // One location query for the whole list instead of one per row.
+        Map<Long, List<DatasetDomainLocation>> located = locationsByDataset(datasets.stream()
+                .map(RegisteredDataset::getDatasetId).collect(Collectors.toList()));
+        return datasets.stream()
+                .map(dataset -> toView(dataset, located.get(dataset.getDatasetId())))
+                .collect(Collectors.toList());
     }
 
     public RegisteredDatasetView getDataset(Long datasetId) {
-        return toView(requireDataset(datasetId));
+        RegisteredDataset dataset = requireDataset(datasetId);
+        return toView(dataset, locationsByDataset(Collections.singletonList(dataset.getDatasetId()))
+                .get(dataset.getDatasetId()));
     }
 
     @Transactional
@@ -171,6 +203,7 @@ public class DatasetRegistrationService {
         }
         NodeManagement node = nodeMapper.getNodeById(candidate.getNodeId());
         if (node == null) throw RegistrationException.invalid("candidate node is not registered");
+        requireRegistrationNode(node);
         if (mapper.findDatasetByCodeAndVersion(request.getDatasetCode(), request.getVersion()) != null) {
             throw RegistrationException.conflict("dataset code and version already exist");
         }
@@ -179,7 +212,6 @@ public class DatasetRegistrationService {
                 metadataDigest(metadataJson), null, request.getVersion(), requestId);
 
         ResourceRequirements resources = request.getRequiredResources();
-        AuthenticatedUser owner = registrationOwner();
         RegisteredDataset dataset = RegisteredDataset.builder()
                 .datasetCode(request.getDatasetCode())
                 .name(request.getName())
@@ -193,8 +225,6 @@ public class DatasetRegistrationService {
                 .requiredMemoryGi(resources == null ? null : resources.getMemoryGi())
                 .requiredGpu(resources == null ? null : resources.getGpu())
                 .status("DRAFT")
-                .ownerUserId(owner == null ? null : owner.getUserId())
-                .ownerDomainId(owner == null ? null : owner.getDomainId())
                 .rowVersion(0)
                 .build();
         mapper.insertDataset(dataset);
@@ -229,6 +259,8 @@ public class DatasetRegistrationService {
         validateUploadRequest(request, file);
         NodeManagement node = nodeMapper.getNodeById(request.getNodeId());
         if (node == null) throw RegistrationException.notFound("target node is not registered");
+        // Checked before any byte is sent; register() repeats it for the discovered candidate.
+        requireRegistrationNode(node);
         if (!isStorageRole(node.getType())) {
             throw RegistrationException.invalid("UPLOAD_NODE_NOT_STORAGE",
                     "dataset files can only be uploaded to STORAGE or COMPUTE_STORAGE nodes");
@@ -631,22 +663,68 @@ public class DatasetRegistrationService {
         }
     }
 
-    private AuthenticatedUser registrationOwner() {
-        if (currentUsers == null) return null;
+    /**
+     * Registering (from a discovered candidate or by upload) writes the first
+     * replica onto {@code node}, which decides the new dataset's domain. ADMIN
+     * may target any node; a DATA_OWNER only a node of its own enabled domain.
+     */
+    private void requireRegistrationNode(NodeManagement node) {
+        if (currentUsers == null) return;
         AuthenticatedUser user = currentUsers.currentUser();
-        return user.hasRole("DATA_OWNER") && user.getDomainId() != null ? user : null;
+        if (user.hasRole("ADMIN")) return;
+        if (isDomainUser(user) && !blank(node.getSiteCode())) {
+            CollaborationDomain domain = domains.findDomainBySiteCode(node.getSiteCode().trim());
+            if (domain != null && Boolean.TRUE.equals(domain.getEnabled())
+                    && user.getDomainId().equals(domain.getId())) {
+                return;
+            }
+        }
+        throw new RegistrationException(HttpStatus.FORBIDDEN, DOMAIN_REQUIRED_CODE,
+                "only administrators or domain users of the node's domain can register datasets on this node");
     }
 
+    /**
+     * Managing a dataset (update, verify, activate, disable, add replica, bind
+     * image, unregister) requires ADMIN or a DATA_OWNER whose domain the dataset
+     * is currently located in, so the right follows copy/move scheduling.
+     */
     private void requireDatasetMutation(RegisteredDataset dataset) {
         if (currentUsers == null) return;
         AuthenticatedUser user = currentUsers.currentUser();
         if (user.hasRole("ADMIN")) return;
-        if (user.hasRole("DATA_OWNER") && user.getUserId().equals(dataset.getOwnerUserId())) return;
-        throw new RegistrationException(HttpStatus.FORBIDDEN, "DATASET_OWNER_REQUIRED",
-                "only the assigned data owner or an administrator can modify this dataset");
+        if (isDomainUser(user)) {
+            List<DatasetDomainLocation> located = locationsByDataset(
+                    Collections.singletonList(dataset.getDatasetId())).get(dataset.getDatasetId());
+            if (located != null && located.stream()
+                    .anyMatch(location -> user.getDomainId().equals(location.getDomainId()))) {
+                return;
+            }
+        }
+        throw new RegistrationException(HttpStatus.FORBIDDEN, DOMAIN_REQUIRED_CODE,
+                "only administrators or domain users of the dataset's domain can modify this dataset");
     }
 
-    private RegisteredDatasetView toView(RegisteredDataset dataset) {
+    private static boolean isDomainUser(AuthenticatedUser user) {
+        return user.hasRole("DATA_OWNER") && user.getDomainId() != null;
+    }
+
+    /** Location rows grouped by dataset, each list in domain-id order (the mapper's order). */
+    private Map<Long, List<DatasetDomainLocation>> locationsByDataset(List<Long> datasetIds) {
+        List<Long> ids = datasetIds.stream().filter(java.util.Objects::nonNull).distinct()
+                .collect(Collectors.toList());
+        Map<Long, List<DatasetDomainLocation>> result = new HashMap<>();
+        if (ids.isEmpty()) return result;
+        for (DatasetDomainLocation row : locations.findLocationDomains(ids)) {
+            if (row.getDatasetId() == null || row.getDomainId() == null) continue;
+            List<DatasetDomainLocation> rows = result.computeIfAbsent(row.getDatasetId(), id -> new ArrayList<>());
+            if (rows.stream().noneMatch(existing -> existing.getDomainId().equals(row.getDomainId()))) {
+                rows.add(row);
+            }
+        }
+        return result;
+    }
+
+    private RegisteredDatasetView toView(RegisteredDataset dataset, List<DatasetDomainLocation> located) {
         List<DatasetReplica> replicas = mapper.listReplicas(dataset.getDatasetId());
         int usable = 0;
         String reason = null;
@@ -657,6 +735,15 @@ public class DatasetRegistrationService {
         }
         RegisteredDatasetView view = RegisteredDatasetView.from(dataset,
                 readLabels(dataset.getLabelsJson()), replicas);
+        List<Long> domainIds = new ArrayList<>();
+        List<String> domainNames = new ArrayList<>();
+        if (located != null) {
+            for (DatasetDomainLocation location : located) {
+                domainIds.add(location.getDomainId());
+                domainNames.add(location.getDomainName());
+            }
+        }
+        view.setLocationDomains(domainIds, domainNames);
         String health = usable == 0 ? "UNAVAILABLE"
                 : usable < replicas.size() ? "DEGRADED" : "HEALTHY";
         view.setReplicaHealth(health, usable, replicas.size(),

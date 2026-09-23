@@ -49,6 +49,15 @@ import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
 
+/**
+ * Privacy-computing control plane.
+ *
+ * <p>Parties are collaboration domains: each input's party is the domain its
+ * dataset is located in (frozen at creation, see {@link PrivacyJobSpecResolver}).
+ * Any enabled DATA_OWNER of a participant's domain may approve or reject that
+ * input; inputs of the initiator's own domain are approved automatically. The
+ * approval row records who actually decided.
+ */
 @Service
 public class PrivacyComputeService {
     private static final int MAX_ATTEMPTS = 3;
@@ -166,13 +175,8 @@ public class PrivacyComputeService {
         for (PrivacyComputeModels.ParticipantSpec participant : resolved.getSpec().getParticipants()) {
             mapper.insertParticipant(jobId, participant);
             String snapshotDigest = snapshotDigest(resolved.getSnapshots(), participant.getPartyId());
-            boolean ownInput = principal.getUserId().equals(participant.getOwnerUserId());
-            String autoSignature = ownInput ? approvalSigner.sign(jobId + "\n" + attemptId + "\n"
-                    + participant.getPartyId() + "\n" + principal.getUserId() + "\nAPPROVED\n\n"
-                    + job.getSpecDigest() + "\n" + snapshotDigest) : null;
-            mapper.insertPendingApproval(jobId, attemptId, participant.getPartyId(),
-                    participant.getOwnerUserId(), participant.getOwnerUsername(), snapshotDigest,
-                    ownInput ? "APPROVED" : "PENDING", autoSignature);
+            boolean ownInput = insertApproval(jobId, attemptId, job.getSpecDigest(), participant,
+                    snapshotDigest, principal);
             if (ownInput) {
                 event(jobId, attemptId, participant.getPartyId(), "APPROVAL", "APPROVED",
                         "INITIATOR_INPUT_AUTO_APPROVED", null, snapshotDigest, null);
@@ -224,15 +228,19 @@ public class PrivacyComputeService {
         List<JobView> result = new ArrayList<>();
         List<JobRecord> rows = canAuditAll(principal)
                 ? mapper.listJobs(normalized, limit)
-                : mapper.listJobsForParticipant(principal.getUserId(), normalized, limit);
+                : mapper.listJobsForParticipant(principal.getUserId(), domainOf(principal), normalized, limit);
         for (JobRecord row : rows) result.add(toView(row));
         return result;
     }
 
+    /** 待我审批: jobs whose current attempt still waits for an input of the caller's domain. */
     public List<JobView> pendingApprovals(Integer requestedLimit, AuthenticatedUser principal) {
         requireDataOwner(principal);
+        int limit = normalizeLimit(requestedLimit);
         List<JobView> result = new ArrayList<>();
-        for (JobRecord row : mapper.listPendingApprovals(principal.getUserId(), normalizeLimit(requestedLimit))) {
+        Long domainId = domainOf(principal);
+        if (domainId == null) return result;
+        for (JobRecord row : mapper.listPendingApprovals(domainId, limit)) {
             result.add(toView(row));
         }
         return result;
@@ -263,14 +271,16 @@ public class PrivacyComputeService {
         JobRecord job = requireRecord(jobId);
         requireAwaitingApproval(job);
         requireApprovalOwner(principal);
-        PrivacyComputeModels.ParticipantSpec owned = mapper.findParticipantForOwner(jobId, principal.getUserId());
+        Long domainId = domainOf(principal);
+        PrivacyComputeModels.ParticipantSpec owned = domainId == null ? null
+                : mapper.findParticipantForDomain(jobId, domainId);
         if (owned == null) {
-            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_OWNER_MISMATCH",
-                    "only the frozen dataset owner can decide this approval");
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_DOMAIN_MISMATCH",
+                    "only a domain user of the participant's domain can decide this approval");
         }
         if (mapper.countEnabledUser(principal.getUserId()) != 1) {
-            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_OWNER_DISABLED",
-                    "disabled dataset owner cannot approve or reject");
+            throw new RegistrationException(HttpStatus.FORBIDDEN, "APPROVAL_USER_DISABLED",
+                    "disabled user cannot approve or reject");
         }
         String participant = owned.getPartyId();
         String reason = sanitizeReason(request == null ? null : request.getReason());
@@ -359,15 +369,10 @@ public class PrivacyComputeService {
         if (mapper.beginRetry(jobId, attemptId, next, current) != 1) {
             throw RegistrationException.conflict("PRIVACY_JOB_STATE_CHANGED", "job state changed; refresh and retry");
         }
+        List<InputSnapshotRecord> snapshots = mapper.findInputSnapshots(jobId);
         for (PrivacyComputeModels.ParticipantSpec participant : mapper.findParticipants(jobId)) {
-            String snapshotDigest = snapshotDigest(mapper.findInputSnapshots(jobId), participant.getPartyId());
-            boolean ownInput = principal.getUserId().equals(participant.getOwnerUserId());
-            String autoSignature = ownInput ? approvalSigner.sign(jobId + "\n" + attemptId + "\n"
-                    + participant.getPartyId() + "\n" + principal.getUserId() + "\nAPPROVED\n\n"
-                    + job.getSpecDigest() + "\n" + snapshotDigest) : null;
-            mapper.insertPendingApproval(jobId, attemptId, participant.getPartyId(),
-                    participant.getOwnerUserId(), participant.getOwnerUsername(), snapshotDigest,
-                    ownInput ? "APPROVED" : "PENDING", autoSignature);
+            String snapshotDigest = snapshotDigest(snapshots, participant.getPartyId());
+            insertApproval(jobId, attemptId, job.getSpecDigest(), participant, snapshotDigest, principal);
         }
         event(jobId, attemptId, null, "RETRY", "PENDING", "FRESH_ATTEMPT_CREATED",
                 null, resolver.sha256(attemptId), "new approvals and protocol randomness are required");
@@ -804,10 +809,20 @@ public class PrivacyComputeService {
         value.setInitiator(row.getInitiator());
         value.setInitiatorUserId(row.getInitiatorUserId());
         value.setParticipants(spec.getParticipants());
+        Map<String, PrivacyComputeModels.ParticipantSpec> byParty = new LinkedHashMap<>();
+        for (PrivacyComputeModels.ParticipantSpec participant : spec.getParticipants()) {
+            if (participant != null && participant.getPartyId() != null) byParty.put(participant.getPartyId(), participant);
+        }
         List<ApprovalView> approvalViews = new ArrayList<>();
         for (ApprovalRecord approval : mapper.findApprovals(row.getJobId(), row.getCurrentAttemptId())) {
             ApprovalView item = new ApprovalView();
             item.setParticipantId(approval.getParticipantId());
+            PrivacyComputeModels.ParticipantSpec party = byParty.get(approval.getParticipantId());
+            item.setOwnerDomainId(approval.getOwnerDomainId() != null ? approval.getOwnerDomainId()
+                    : party == null ? null : party.getOwnerDomainId());
+            item.setOwnerDomainCode(approval.getOwnerDomainCode() != null ? approval.getOwnerDomainCode()
+                    : party == null ? null : party.getOwnerDomainCode());
+            item.setOwnerDomainName(party == null ? null : party.getOwnerDomainName());
             item.setApproverUserId(approval.getApproverUserId());
             item.setApproverUsername(approval.getApproverUsername());
             item.setInputSnapshotDigest(approval.getInputSnapshotDigest());
@@ -836,11 +851,37 @@ public class PrivacyComputeService {
         requireUser(principal);
         if (canAuditAll(principal)) return;
         boolean initiator = principal.getUserId().equals(job.getInitiatorUserId());
-        boolean owner = mapper.findParticipantForOwner(job.getJobId(), principal.getUserId()) != null;
-        if (!initiator && !owner) {
+        Long domainId = domainOf(principal);
+        boolean participant = domainId != null && mapper.findParticipantForDomain(job.getJobId(), domainId) != null;
+        if (!initiator && !participant) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, "PRIVACY_JOB_ACCESS_DENIED",
-                    "user is neither the initiator nor a frozen dataset owner");
+                    "user is neither the initiator nor a domain user of a participant domain");
         }
+    }
+
+    /** The domain a user acts for in privacy computing: a DATA_OWNER's domain, otherwise none. */
+    private Long domainOf(AuthenticatedUser user) {
+        return user != null && user.hasRole("DATA_OWNER") ? user.getDomainId() : null;
+    }
+
+    /**
+     * Opens the participant's approval for an attempt. An input of the
+     * initiator's own domain is approved at once, with the initiator recorded as
+     * the approver; every other input waits (approver unknown) for a domain user
+     * of its domain. Returns whether the input was auto-approved.
+     */
+    private boolean insertApproval(String jobId, String attemptId, String specDigest,
+                                   PrivacyComputeModels.ParticipantSpec participant,
+                                   String snapshotDigest, AuthenticatedUser initiator) {
+        Long initiatorDomain = domainOf(initiator);
+        boolean ownInput = initiatorDomain != null && initiatorDomain.equals(participant.getOwnerDomainId());
+        String autoSignature = ownInput ? approvalSigner.sign(jobId + "\n" + attemptId + "\n"
+                + participant.getPartyId() + "\n" + initiator.getUserId() + "\nAPPROVED\n\n"
+                + specDigest + "\n" + snapshotDigest) : null;
+        mapper.insertPendingApproval(jobId, attemptId, participant.getPartyId(),
+                ownInput ? initiator.getUserId() : null, ownInput ? initiator.getUsername() : null,
+                snapshotDigest, ownInput ? "APPROVED" : "PENDING", autoSignature);
+        return ownInput;
     }
 
     private void requireAwaitingApproval(JobRecord job) {
@@ -861,7 +902,7 @@ public class PrivacyComputeService {
         requireUser(user);
         if (!user.hasRole("DATA_OWNER")) {
             throw new RegistrationException(HttpStatus.FORBIDDEN, "DATA_OWNER_REQUIRED",
-                    "only a data owner can approve privacy inputs");
+                    "only a domain user (DATA_OWNER) can take part in privacy computations");
         }
     }
 
