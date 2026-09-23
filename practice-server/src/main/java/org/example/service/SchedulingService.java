@@ -60,7 +60,6 @@ public class SchedulingService {
     private final NodeAvailabilityService nodeAvailabilityService;
     private final K8sTaskOrchestratorService orchestrator;
     private final ObjectMapper objectMapper;
-    private final NetworkTopologyService networkTopologyService;
     private final DatasetSchedulingExecutor datasetSchedulingExecutor;
     private final DatasetHeatService heat;
     private final RuntimeImageMapper imageMapper;
@@ -73,7 +72,6 @@ public class SchedulingService {
                              NodeAvailabilityService nodeAvailabilityService,
                              K8sTaskOrchestratorService orchestrator,
                              ObjectMapper objectMapper,
-                             NetworkTopologyService networkTopologyService,
                              DatasetSchedulingExecutor datasetSchedulingExecutor,
                              DatasetHeatService heat,
                              RuntimeImageMapper imageMapper) {
@@ -85,7 +83,6 @@ public class SchedulingService {
         this.nodeAvailabilityService = nodeAvailabilityService;
         this.orchestrator = orchestrator;
         this.objectMapper = objectMapper;
-        this.networkTopologyService = networkTopologyService;
         this.datasetSchedulingExecutor = datasetSchedulingExecutor;
         this.heat = heat;
         this.imageMapper = imageMapper;
@@ -220,9 +217,6 @@ public class SchedulingService {
             }
             if ("USE_IN_PLACE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId())) {
                 throw RegistrationException.invalid("USE_IN_PLACE requires sourceNodeId = targetNodeId");
-            }
-            if (!deleteOnly) {
-                networkTopologyService.requirePath(item.getSourceNodeId(), item.getTargetNodeId());
             }
             assignments.add(SchedulingAssignment.builder()
                     .datasetId(item.getDatasetId())

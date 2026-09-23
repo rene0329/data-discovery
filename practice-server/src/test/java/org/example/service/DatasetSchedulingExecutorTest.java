@@ -28,7 +28,6 @@ class DatasetSchedulingExecutorTest {
     private SchedulingPlanMapper plans;
     private DatasetReplicaAvailabilityService availability;
     private NodeAvailabilityService nodeAvailability;
-    private NetworkTopologyService topology;
     private DatasetUploadClient transfer;
     private DatasetSchedulingExecutor executor;
     private DatasetReplica replica;
@@ -42,9 +41,8 @@ class DatasetSchedulingExecutorTest {
         plans = mock(SchedulingPlanMapper.class);
         availability = mock(DatasetReplicaAvailabilityService.class);
         nodeAvailability = mock(NodeAvailabilityService.class);
-        topology = mock(NetworkTopologyService.class);
         transfer = mock(DatasetUploadClient.class);
-        executor = new DatasetSchedulingExecutor(datasets, nodes, plans, availability, nodeAvailability, topology, transfer);
+        executor = new DatasetSchedulingExecutor(datasets, nodes, plans, availability, nodeAvailability, transfer);
         // Deliberately no default runtime image: data transfer must still complete.
         when(datasets.findDatasetById(10L)).thenReturn(RegisteredDataset.builder().datasetId(10L)
                 .datasetVersion("1.0").status("ACTIVE").build());
@@ -191,15 +189,10 @@ class DatasetSchedulingExecutorTest {
     }
 
     @Test
-    void rechecksAvailabilityAndNetworkBeforeCopying() {
+    void rechecksAvailabilityBeforeCopying() {
         when(availability.evaluate(replica)).thenReturn(new ReplicaAvailability("UNREACHABLE", false, "offline"));
         execute("COPY");
         verifyNoInteractions(transfer);
-        when(availability.evaluate(replica)).thenReturn(new ReplicaAvailability("USABLE", true, null));
-        when(topology.requirePath(3, 4)).thenThrow(new IllegalStateException("no route"));
-        execute("COPY");
-        verifyNoInteractions(transfer);
-        verify(plans).updatePlanStatus(40L, "FAILED", "no route");
     }
 
     @Test

@@ -4,7 +4,6 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.api.model.Container;
 import org.example.entity.EdgeManagement;
 import org.example.entity.NodeManagement;
-import org.example.exception.RegistrationException;
 import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.service.DataTransferAddressResolver;
@@ -59,13 +58,14 @@ class K8sJobFactoryTopologyTest {
     }
 
     @Test
-    void disconnectedCandidateIsRejectedForAutomaticAndForcedScheduling() {
+    void disconnectedCandidateIsSkippedByAutomaticSelectionButAnExplicitTargetStillRuns() {
         accessLink.setStatus("inactive");
         List<?> candidates = ReflectionTestUtils.invokeMethod(
                 factory, "gatherAvailableNodes", 0.5, 1.0, "cluster-hz-1");
         assertTrue(candidates.isEmpty());
-        assertThrows(RegistrationException.class, () -> factory.createDataProcessingJob(
-                "test-job", "cluster-hz-1", "test.npz", "/dataset/test.npz", "cluster-bj-1", null, 0.5, 1.0));
+        JobCreationResult forced = factory.createDataProcessingJob(
+                "test-job", "cluster-hz-1", "test.npz", "/dataset/test.npz", "cluster-bj-1", null, 0.5, 1.0);
+        assertEquals("cluster-bj-1", forced.getSelectedNodeName());
     }
 
     @Test

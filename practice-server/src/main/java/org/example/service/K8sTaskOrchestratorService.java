@@ -89,7 +89,6 @@ public class K8sTaskOrchestratorService {
     private final DatasetUploadClient datasetUploadClient;
     private final DatasetAccessAuthorizationService accessAuthorizationService;
 
-    private final NetworkTopologyService networkTopologyService;
     private final InPlacePlacementService inPlacePlacement;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
@@ -125,7 +124,6 @@ public class K8sTaskOrchestratorService {
             DatasetReplicaAvailabilityService replicaAvailabilityService,
             SchedulingPlanMapper schedulingPlanMapper,
             DatasetUploadClient datasetUploadClient,
-            NetworkTopologyService networkTopologyService,
             DatasetAccessAuthorizationService accessAuthorizationService,
             InPlacePlacementService inPlacePlacement
     ) {
@@ -143,7 +141,6 @@ public class K8sTaskOrchestratorService {
         this.replicaAvailabilityService = replicaAvailabilityService;
         this.schedulingPlanMapper = schedulingPlanMapper;
         this.datasetUploadClient = datasetUploadClient;
-        this.networkTopologyService = networkTopologyService;
         this.accessAuthorizationService = accessAuthorizationService;
         this.inPlacePlacement = inPlacePlacement;
     }
@@ -335,8 +332,6 @@ public class K8sTaskOrchestratorService {
         }
         image.setCommand(readStringList(image.getCommandJson()));
         image.setArgsTemplate(readStringList(image.getArgsTemplateJson()));
-        // Recheck after queuing and before copying: a previously accepted path may have failed.
-        networkTopologyService.requirePath(sourceNode.getNodeId(), targetNode.getNodeId());
         NodeManagement executionSource = sourceNode;
         Long executionSize = replica.getSizeBytes();
         String executionChecksumAlgorithm = replica.getChecksumAlgorithm();

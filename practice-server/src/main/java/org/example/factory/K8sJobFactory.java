@@ -338,7 +338,8 @@ public class K8sJobFactory {
             if (!nodeAvailabilityService.isSchedulable(targetNodeInfo)) {
                 throw new IllegalStateException("目标节点当前不可用于调度: " + overrideTargetNode);
             }
-            networkTopologyService.requirePath(sourceNodeInfo.getNodeId(), targetNodeInfo.getNodeId());
+            // An explicit target is not bound to the logical topology: the transfer itself
+            // goes over the node addresses (VPC within a site, otherwise via the hub).
             overrideTargetClusterId = targetNodeInfo.getCluster();
         }
 

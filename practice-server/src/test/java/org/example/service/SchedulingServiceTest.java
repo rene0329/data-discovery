@@ -48,7 +48,6 @@ class SchedulingServiceTest {
     private NodeAvailabilityService nodeAvailabilityService;
     private K8sTaskOrchestratorService orchestrator;
     private SchedulingService service;
-    private NetworkTopologyService topology;
     private DatasetSchedulingExecutor dataExecutor;
     private RuntimeImageMapper imageMapper;
 
@@ -61,11 +60,10 @@ class SchedulingServiceTest {
         replicaAvailabilityService = mock(DatasetReplicaAvailabilityService.class);
         nodeAvailabilityService = mock(NodeAvailabilityService.class);
         orchestrator = mock(K8sTaskOrchestratorService.class);
-        topology = mock(NetworkTopologyService.class);
         dataExecutor = mock(DatasetSchedulingExecutor.class);
         imageMapper = mock(RuntimeImageMapper.class);
         service = new SchedulingService(datasetMapper, nodeMapper, planMapper, taskMapper,
-                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), topology, dataExecutor,
+                replicaAvailabilityService, nodeAvailabilityService, orchestrator, new ObjectMapper(), dataExecutor,
                 mock(DatasetHeatService.class), imageMapper);
     }
 
@@ -143,15 +141,19 @@ class SchedulingServiceTest {
     }
 
     @Test
-    void rejectsExternalAssignmentWithoutLogicalPathBeforeWritingPlan() {
-        RegisteredDataset dataset = RegisteredDataset.builder().datasetId(10L).status("ACTIVE").build();
+    void acceptsCrossNodeComputeAssignmentWithoutConsultingTheLogicalTopology() {
+        RegisteredDataset dataset = RegisteredDataset.builder().datasetId(10L).name("MNIST").status("ACTIVE").build();
         DatasetReplica replica = DatasetReplica.builder().replicaId(20L).datasetId(10L).nodeId(3).build();
         when(datasetMapper.findDatasetById(10L)).thenReturn(dataset);
         when(datasetMapper.findReplicaById(20L)).thenReturn(replica);
         when(replicaAvailabilityService.evaluate(replica)).thenReturn(new ReplicaAvailability("USABLE", true, null));
         when(nodeMapper.getNodeById(4)).thenReturn(NodeManagement.builder().nodeId(4).type("compute-storage").build());
         when(nodeAvailabilityService.isSchedulable(any(NodeManagement.class))).thenReturn(true);
-        when(topology.requirePath(3, 4)).thenThrow(RegistrationException.conflict("No available logical topology path"));
+        doAnswer(invocation -> {
+            org.example.entity.SchedulingPlan plan = invocation.getArgument(0);
+            plan.setPlanId(41L);
+            return 1;
+        }).when(planMapper).insertPlan(any());
         SchedulingPlanRequest request = new SchedulingPlanRequest();
         request.setExternalPlanId("plan-no-route");
         request.setTaskId("task-no-route");
@@ -160,9 +162,9 @@ class SchedulingServiceTest {
         item.setSourceNodeId(3); item.setTargetNodeId(4); item.setAction("COPY_AND_USE");
         request.setAssignments(Collections.singletonList(item));
 
-        assertThrows(RegistrationException.class, () -> service.submit(request));
-        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
-        verifyNoInteractions(taskMapper, orchestrator);
+        // Manual scheduling is not bound to the logical topology: nodes 3 and 4 need no measured path.
+        assertEquals(41L, service.submit(request).getPlanId());
+        verify(orchestrator).executeExternalPlan(any(), any(), any());
     }
 
     @Test
@@ -211,7 +213,6 @@ class SchedulingServiceTest {
         // taskId echoes the caller's correlation ID; internalTaskId is task_management.task_id.
         assertEquals("task-1", accepted.getTaskId());
         assertEquals(30, accepted.getInternalTaskId());
-        verify(topology).requirePath(3, 3);
         verify(orchestrator).executeExternalPlan(any(), any(), any());
         verifyNoInteractions(dataExecutor);
     }

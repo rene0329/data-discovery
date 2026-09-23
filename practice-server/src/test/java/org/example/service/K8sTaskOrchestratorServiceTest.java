@@ -124,7 +124,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, migrations, jobs, datasets, images,
                 new ObjectMapper(), "node-a", "", Runnable::run, availability,
                 mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
 
@@ -181,7 +181,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DatasetRegistrationMapper.class), mock(RuntimeImageMapper.class),
                 new ObjectMapper(), "node-a", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), mock(SchedulingPlanMapper.class),
-                mock(DatasetUploadClient.class), mock(NetworkTopologyService.class),
+                mock(DatasetUploadClient.class),
                 mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class));
         DataItemResult first = evidence("2026-09-19T00:00:00Z", "2026-09-19T00:00:04Z",
                 "2026-09-19T00:00:04Z", "2026-09-19T00:00:08Z");
@@ -233,7 +233,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "CENTRALIZED");
 
@@ -277,7 +277,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Arrays.asList(10L, 11L), 7L, null, "COMPARISON");
 
@@ -369,7 +369,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                mock(NetworkTopologyService.class), authorization, placement(nodes, availability));
+                authorization, placement(nodes, availability));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "COMPARISON");
 
@@ -595,7 +595,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "master-40", "", Runnable::run,
                 availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
-                topology, authorization, placement(nodes, availability, topology));
+                authorization, placement(nodes, availability, topology));
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
 
@@ -633,7 +633,7 @@ class K8sTaskOrchestratorServiceTest {
                 mock(MigrationTaskMapper.class), mock(K8sJobFactory.class), datasets,
                 mock(RuntimeImageMapper.class), new ObjectMapper(), "node-a", "", Runnable::run,
                 mock(DatasetReplicaAvailabilityService.class), mock(SchedulingPlanMapper.class),
-                mock(DatasetUploadClient.class), mock(NetworkTopologyService.class),
+                mock(DatasetUploadClient.class),
                 mock(DatasetAccessAuthorizationService.class), mock(InPlacePlacementService.class));
     }
 

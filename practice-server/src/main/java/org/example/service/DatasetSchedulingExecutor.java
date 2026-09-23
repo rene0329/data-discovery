@@ -26,7 +26,6 @@ public class DatasetSchedulingExecutor {
     private final SchedulingPlanMapper planMapper;
     private final DatasetReplicaAvailabilityService replicaAvailability;
     private final NodeAvailabilityService nodeAvailability;
-    private final NetworkTopologyService topology;
     private final DatasetUploadClient transfer;
 
     public DatasetSchedulingExecutor(DatasetRegistrationMapper datasetMapper,
@@ -34,14 +33,12 @@ public class DatasetSchedulingExecutor {
                                      SchedulingPlanMapper planMapper,
                                      DatasetReplicaAvailabilityService replicaAvailability,
                                      NodeAvailabilityService nodeAvailability,
-                                     NetworkTopologyService topology,
                                      DatasetUploadClient transfer) {
         this.datasetMapper = datasetMapper;
         this.nodeMapper = nodeMapper;
         this.planMapper = planMapper;
         this.replicaAvailability = replicaAvailability;
         this.nodeAvailability = nodeAvailability;
-        this.topology = topology;
         this.transfer = transfer;
     }
 
@@ -107,7 +104,6 @@ public class DatasetSchedulingExecutor {
                 || source.getNodeId().equals(target.getNodeId())) {
             throw RegistrationException.conflict("target storage node is no longer available");
         }
-        topology.requirePath(source.getNodeId(), target.getNodeId());
         DatasetReplica targetReplica = datasetMapper.findReplicaByNodePath(target.getNodeId(), replica.getFilePath());
         if (targetReplica != null && !dataset.getDatasetId().equals(targetReplica.getDatasetId())) {
             throw RegistrationException.conflict("target path belongs to another dataset");
