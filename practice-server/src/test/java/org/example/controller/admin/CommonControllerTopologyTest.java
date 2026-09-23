@@ -7,7 +7,6 @@ import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.MigrationTaskMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TaskManagementMapper;
-import org.example.service.K8sTaskOrchestratorService;
 import org.example.service.NodeAvailabilityService;
 import org.example.service.NetworkTopologyService;
 import org.example.service.PublicIpLocationService;
@@ -53,7 +52,7 @@ class CommonControllerTopologyTest {
         CommonController controller = new CommonController(mock(DataManagementMapper.class), nodes,
                 mock(TaskManagementMapper.class), mock(MigrationTaskMapper.class),
                 new NetworkTopologyService(edges, nodes, new NodeAvailabilityService(300), 1800),
-                mock(K8sTaskOrchestratorService.class), mock(RestTemplate.class),
+                mock(RestTemplate.class),
                 new NodeAvailabilityService(300), locations);
 
         ResponseEntity<ApiResponse<Map<String, Object>>> management = controller.networkTopology(false);

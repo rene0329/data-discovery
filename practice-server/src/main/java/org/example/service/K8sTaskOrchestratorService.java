@@ -143,48 +143,6 @@ public class K8sTaskOrchestratorService {
 
 
     @Async
-    public void executeTask(Integer taskId, List<String> selectedDatas) {
-        log.info("任务 {} 开始执行，使用K8s原生调度器+亲和性策略处理 {} 个数据项", taskId, selectedDatas.size());
-
-        try {
-            List<CompletableFuture<DataItemResult>> futures = selectedDatas.stream()
-                    .map(dataItem -> CompletableFuture
-                            .supplyAsync(() -> processDataItem(taskId, dataItem), dataProcessingExecutor)
-                            .exceptionally(ex -> {
-                                // 单个子任务失败只记录日志，不影响其他子任务
-                                log.error("数据项 '{}' 处理失败，已跳过: {}", dataItem, ex.getMessage());
-                                return null;
-                            }))
-                    .collect(Collectors.toList());
-
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-            log.info("任务 {} 的所有Job执行完毕，开始汇总结果...", taskId);
-
-            List<String> scheduleT1List = new ArrayList<>();
-            List<String> scheduleT2List = new ArrayList<>();
-            double totalT1 = 0.0;
-            double totalT2 = 0.0;
-
-            for (CompletableFuture<DataItemResult> future : futures) {
-                DataItemResult result = future.get();
-                if (result != null) {
-                    scheduleT1List.add(result.getScheduleT1());
-                    scheduleT2List.add(result.getScheduleT2());
-                    totalT1 += result.getT1Seconds();
-                    totalT2 += result.getT2Seconds();
-                }
-            }
-
-            updateFinalTaskStatus(taskId, totalT1, totalT2, scheduleT1List, scheduleT2List,
-                    scheduleT1List.size(), selectedDatas.size());
-
-        } catch (Exception e) {
-            log.error("任务 {} 执行过程中发生错误", taskId, e);
-            updateTaskStatusToFailed(taskId, e.getMessage());
-        }
-    }
-
-    @Async
     public void executeRegisteredTask(Integer taskId, List<Long> datasetIds,
                                       Long explicitRuntimeImageId,
                                       ResourceRequirements overrides,
@@ -376,45 +334,6 @@ public class K8sTaskOrchestratorService {
     }
 
 
-    private DataItemResult processDataItem(Integer taskId, String dataItem) {
-        log.info("开始处理数据项: {}", dataItem);
-        DataManagement dataInfo = dataManagementMapper.findDataByName(dataItem);
-        if (dataInfo == null) {
-            log.error("找不到数据项 '{}' 的信息", dataItem);
-            return null;
-        }
-        String sourceNodeName = dataInfo.getDataServer();
-        NodeManagement sourceNodeInfo = nodeManagementMapper.getNodeByName(sourceNodeName);
-        if (sourceNodeInfo == null) {
-            log.error("在数据库中找不到源节点 '{}' 的集群信息", sourceNodeName);
-            return null;
-        }
-
-        String resolvedCentralNodeName = resolveCentralNodeName();
-        AtomicReference<String> affinityNodeOut = new AtomicReference<>(sourceNodeName);
-        AtomicReference<String> centralNodeOut  = new AtomicReference<>(resolvedCentralNodeName);
-        long t1_ms = executeJobAndMeasureInitContainer(
-                taskId, "affinity", sourceNodeInfo, null, null, dataInfo,
-                null, null, null, affinityNodeOut);
-        long t2_ms = executeJobAndMeasureInitContainer(
-                taskId, "central", sourceNodeInfo, resolvedCentralNodeName, null, dataInfo,
-                null, null, null, centralNodeOut);
-
-        if (t1_ms == -1 || t2_ms == -1) {
-            log.error("数据项 {} 的Job执行失败", dataItem);
-            return null;
-        }
-
-        String affinityTarget = affinityNodeOut.get();
-        boolean inPlace = sourceNodeName.equals(affinityTarget);
-        DataItemResult result = new DataItemResult();
-        result.setT1Seconds(t1_ms / 1000.0);
-        result.setT2Seconds(t2_ms / 1000.0);
-        result.setScheduleT1(dataItem + ": " + sourceNodeName + " -> " + affinityTarget + (inPlace ? " (原地)" : ""));
-        result.setScheduleT2(dataItem + ": " + sourceNodeName + " -> " + centralNodeOut.get());
-        log.info("数据项 {} 处理完成。亲和性调度传输: {}ms, 中心化调度传输: {}ms", dataItem, t1_ms, t2_ms);
-        return result;
-    }
 
     private DataItemResult processRegisteredDataItem(Integer taskId, Long datasetId,
                                                      Long explicitRuntimeImageId,

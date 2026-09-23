@@ -8,7 +8,6 @@ import org.example.service.NetworkTopologyService;
 import org.example.mapper.MigrationTaskMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.example.mapper.TaskManagementMapper;
-import org.example.service.K8sTaskOrchestratorService; // 引入新的后台服务
 import org.example.service.NodeAvailability;
 import org.example.service.NodeAvailabilityService;
 import org.example.service.PublicIpLocationService;
@@ -23,10 +22,8 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriUtils;
@@ -50,7 +47,6 @@ public class CommonController {
     private final TaskManagementMapper taskManagementMapper;
     private final MigrationTaskMapper migrationTaskMapper;
     private final NetworkTopologyService networkTopologyService;
-    private final K8sTaskOrchestratorService k8sTaskOrchestratorService;
     private final RestTemplate restTemplate;
     private final NodeAvailabilityService nodeAvailabilityService;
     private final PublicIpLocationService publicIpLocationService;
@@ -84,7 +80,6 @@ public class CommonController {
             TaskManagementMapper taskManagementMapper,
             MigrationTaskMapper migrationTaskMapper,
             NetworkTopologyService networkTopologyService,
-            K8sTaskOrchestratorService k8sTaskOrchestratorService,
             RestTemplate restTemplate,
             NodeAvailabilityService nodeAvailabilityService,
             PublicIpLocationService publicIpLocationService
@@ -94,7 +89,6 @@ public class CommonController {
         this.taskManagementMapper = taskManagementMapper;
         this.migrationTaskMapper = migrationTaskMapper;
         this.networkTopologyService = networkTopologyService;
-        this.k8sTaskOrchestratorService = k8sTaskOrchestratorService;
         this.restTemplate = restTemplate;
         this.nodeAvailabilityService = nodeAvailabilityService;
         this.publicIpLocationService = publicIpLocationService;
@@ -184,60 +178,6 @@ public class CommonController {
         return Arrays.stream(relativePath.replace('\\', '/').split("/"))
                 .map(segment -> UriUtils.encodePathSegment(segment, StandardCharsets.UTF_8))
                 .collect(Collectors.joining("/"));
-    }
-
-
-    /**
-     * 用户提交数据 (已重构为异步委派模式)
-     * 此方法现在非常快速，它会立即返回响应，并将长时间运行的任务交给后台服务处理。
-     */
-    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
-    @PostMapping("/submitData/{currentTaskId}")
-    public ResponseEntity<ApiResponse<Integer>> submitData(@PathVariable Integer currentTaskId, @RequestBody List<String> selectedDatas) {
-        log.info("接收到调度任务请求，任务ID: {}", currentTaskId);
-
-        if (selectedDatas == null || selectedDatas.isEmpty()) {
-            log.warn("提交的数据列表为空，任务 {} 中止。", currentTaskId);
-            return ResponseEntity.ok(ApiResponse.ok(0)); // 0 表示没有处理任何数据
-        }
-
-        Set<Integer> legacyIds = dataManagementMapper.getAllData().stream()
-                .filter(d -> selectedDatas.contains(d.getDataName())).map(DataManagement::getDataId)
-                .collect(Collectors.toSet());
-        List<RegisteredDataset> registered = datasetRegistrationMapper.listDatasets(null, null).stream()
-                .filter(d -> selectedDatas.contains(d.getName()) || legacyIds.contains(d.getLegacyDataId()))
-                .collect(Collectors.toList());
-        org.example.service.DatasetOperationGuard.lock(datasetRegistrationMapper,
-                registered.stream().map(RegisteredDataset::getDatasetId).collect(Collectors.toList()));
-        registered.forEach(d -> org.example.service.DatasetOperationGuard.requireIdle(datasetRegistrationMapper, d));
-
-        // 1. (快速) 创建总任务记录，初始状态为 "执行中"
-        TaskManagement taskManagement = TaskManagement.builder()
-                .taskName("任务")  // 先用占位名，insert 后用 DB 自增 ID 覆盖
-                .selectedData(selectedDatas.toString())
-                .status("执行中")
-                .createTime(LocalDateTime.now())
-                .build();
-        taskManagementMapper.submitData(taskManagement);
-        Integer taskId = taskManagement.getTaskId(); // 获取数据库生成的自增ID
-        // 用 DB 自增 ID 更新 taskName，确保 taskName 与 taskId 一致（"任务62" 而非 "任务1741447200"）
-        taskManagement.setTaskName("任务" + taskId);
-        taskManagementMapper.updateTask(taskManagement);
-
-        // 2. (快速) 先按真实间隔衰减，再向热度上限做一次 EMA，不使用固定加值
-        for (String data : selectedDatas) {
-            dataManagementMapper.updateDataHeatOnAccess(
-                    data, accessAlpha, maxHeat, heatHalfLifeHours, heatThreshold);
-        }
-
-        // 3. (核心) 将包含所有复杂逻辑的任务异步委派给后台服务
-        //    这个调用会立即返回，不会阻塞当前请求线程。
-        org.example.service.DatasetOperationGuard.afterCommit(() ->
-                k8sTaskOrchestratorService.executeTask(taskId, selectedDatas));
-        log.info("任务 {} 已成功提交至后台异步执行。立即返回HTTP响应。", taskId);
-
-        // 4. 立即返回成功响应，告知客户端任务已接收
-        return ResponseEntity.ok(ApiResponse.ok(1)); // 1 表示任务已成功接收
     }
 
 

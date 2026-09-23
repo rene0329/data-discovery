@@ -7,7 +7,6 @@ import org.example.entity.NodeManagement;
 import org.example.exception.RegistrationException;
 import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
-import org.example.mapper.TrainingProfileMapper;
 import org.example.service.NetworkTopologyService;
 import org.example.service.NodeAvailabilityService;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,7 +41,7 @@ class K8sJobFactoryTopologyTest {
         accessLink = edge(4, 1, 20, 50);
         when(edges.selectAllMetrics()).thenReturn(Arrays.asList(accessLink, edge(1, 3, 8, 60), edge(1, 6, 30, 40)));
         NetworkTopologyService topology = new NetworkTopologyService(edges, nodes, availability, 1800);
-        factory = new K8sJobFactory("unused", nodes, mock(TrainingProfileMapper.class), "cluster.local",
+        factory = new K8sJobFactory("unused", nodes, "cluster.local",
                 "curl:test", "python:test", "discovery", "default", 8080, "", 1, topology, availability);
         Map<String, KubernetesClient> clients = (Map<String, KubernetesClient>) ReflectionTestUtils.getField(factory, "clusterClients");
         clients.put("cluster-a", mock(KubernetesClient.class));

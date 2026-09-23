@@ -10,10 +10,8 @@ import io.fabric8.kubernetes.client.KubernetesClientException;
 import lombok.extern.slf4j.Slf4j;
 import org.example.entity.NodeManagement;
 import org.example.entity.RuntimeImage;
-import org.example.entity.TrainingProfile;
 import org.example.service.NetworkTopologyService;
 import org.example.mapper.NodeManagementMapper;
-import org.example.mapper.TrainingProfileMapper;
 import org.example.service.NodeAvailabilityService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,7 +40,6 @@ public class K8sJobFactory {
     private final Map<String, KubernetesClient> clusterClients = new ConcurrentHashMap<>();
     private final String kubeconfigPath;
     private final NodeManagementMapper nodeManagementMapper;
-    private final TrainingProfileMapper trainingProfileMapper;
     private final NetworkTopologyService networkTopologyService;
     private final String clusterDomain;
     private final String initContainerImage;
@@ -162,7 +159,6 @@ public class K8sJobFactory {
     public K8sJobFactory(
             @Value("${dispatch.kubeconfig.path:C:/Users/xuty/.kube/config}") String kubeconfigPath,
             NodeManagementMapper nodeManagementMapper,
-            TrainingProfileMapper trainingProfileMapper,
             @Value("${dispatch.cluster.domain:cluster.local}") String clusterDomain,
             @Value("${dispatch.job.image.init:busybox:1.35}") String initContainerImage,
             @Value("${dispatch.job.image.main:python:3.9-slim}") String mainContainerImage,
@@ -176,7 +172,6 @@ public class K8sJobFactory {
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
-        this.trainingProfileMapper = trainingProfileMapper;
         this.networkTopologyService = networkTopologyService;
         this.clusterDomain = clusterDomain;
         this.initContainerImage = initContainerImage;
@@ -292,21 +287,19 @@ public class K8sJobFactory {
                                                      RuntimeImage runtimeImage,
                                                      String datasetAccessToken) {
 
-        TrainingProfile profile = runtimeImage == null ? resolveTrainingProfile(dataFileName) : null;
-        double effectiveCpu = cpuRequest != null ? cpuRequest : (profile != null && profile.getDefaultCpu() != null ? profile.getDefaultCpu() : 0.5);
-        double effectiveMem = memoryRequest != null ? memoryRequest : (profile != null && profile.getDefaultMem() != null ? profile.getDefaultMem() : 1.0);
+        // 未显式传入 runtimeImage 时，不再按数据集文件名猜测训练配置（旧的 training_profile
+        // 关键字匹配已随注册中心的 RuntimeImage 体系下线），一律用固定的通用默认值。
+        double effectiveCpu = cpuRequest != null ? cpuRequest : 0.5;
+        double effectiveMem = memoryRequest != null ? memoryRequest : 1.0;
         double effectiveGpu = gpuRequest != null ? gpuRequest
                 : (runtimeImage != null && runtimeImage.getDefaultGpu() != null ? runtimeImage.getDefaultGpu() : 0.0);
         String selectedMainImage = runtimeImage != null
                 ? immutableImageRef(runtimeImage.getImageRef(), runtimeImage.getResolvedDigest())
-                : (profile != null && profile.getImage() != null && !profile.getImage().isEmpty()) ? profile.getImage() : mainContainerImage;
-        String selectedEntrypoint = (profile != null && profile.getEntrypoint() != null && !profile.getEntrypoint().isEmpty()) ? profile.getEntrypoint() : "/app/train.py";
-        String selectedDataPath = renderDataPath(runtimeImage != null ? runtimeImage.getDataPathTemplate()
-                : profile != null ? profile.getDataPathTemplate() : null, dataFileName);
-        String selectedTaskType = runtimeImage != null ? runtimeImage.getTaskType()
-                : profile != null ? profile.getTaskType() : inferTaskType(dataFileName);
-        String selectedModelType = runtimeImage != null ? runtimeImage.getModelType()
-                : profile != null ? profile.getModelType() : "default";
+                : mainContainerImage;
+        String selectedEntrypoint = "/app/train.py";
+        String selectedDataPath = renderDataPath(runtimeImage != null ? runtimeImage.getDataPathTemplate() : null, dataFileName);
+        String selectedTaskType = runtimeImage != null ? runtimeImage.getTaskType() : "default";
+        String selectedModelType = runtimeImage != null ? runtimeImage.getModelType() : "default";
         List<String> selectedCommand = runtimeImage != null && runtimeImage.getCommand() != null
                 && !runtimeImage.getCommand().isEmpty()
                 ? renderArguments(runtimeImage.getCommand(), dataFileName, selectedDataPath)
@@ -505,37 +498,6 @@ public class K8sJobFactory {
                         .replace("{dataset}", datasetName == null ? "dataset" : datasetName)
                         .replace("{dataPath}", dataPath))
                 .collect(Collectors.toList());
-    }
-
-    private TrainingProfile resolveTrainingProfile(String datasetName) {
-        try {
-            TrainingProfile exact = trainingProfileMapper.findByDatasetName(datasetName);
-            if (exact != null) {
-                return exact;
-            }
-            String taskType = inferTaskType(datasetName);
-            return trainingProfileMapper.findDefaultByTaskType(taskType);
-        } catch (Exception e) {
-            log.warn("训练配置路由失败，使用默认镜像。dataset={}, err={}", datasetName, e.getMessage());
-            return null;
-        }
-    }
-
-    private String inferTaskType(String datasetName) {
-        String n = datasetName == null ? "" : datasetName.toLowerCase();
-        if (n.contains("rating") || n.contains("recsys") || n.contains("recommend")
-                || n.contains("ciao") || n.contains("epinion") || n.contains("yelp") || n.contains("bpr")) {
-            return "recsys";
-        }
-        if (n.contains("emotion") || n.contains("sentiment") || n.endsWith(".csv") || n.contains("text")
-                || n.contains("nlpcc") || n.contains("gru")) {
-            return "text";
-        }
-        if (n.contains("cat") || n.contains("dog") || n.endsWith(".jpg") || n.endsWith(".jpeg") || n.endsWith(".png") || n.contains("image")
-                || n.contains("resnet") || n.contains("catdog")) {
-            return "image";
-        }
-        return "text";
     }
 
     private String renderDataPath(String template, String dataFileName) {
