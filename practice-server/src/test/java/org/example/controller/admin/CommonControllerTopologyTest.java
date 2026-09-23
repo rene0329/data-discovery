@@ -47,8 +47,9 @@ class CommonControllerTopologyTest {
                 .registrationStatus("DISABLED").enabled(false).observedStatus("ONLINE")
                 .lastSeenAt(now).build();
         when(nodes.networkConstruction()).thenReturn(Arrays.asList(active, disabled));
-        when(edges.links()).thenReturn(Arrays.asList(
-                EdgeManagement.builder().edgeId(1).sourceId(1).targetId(2).latency(5.0).bandwidth(10L).build()));
+        when(nodes.selectAllNodes()).thenReturn(Arrays.asList(active, disabled));
+        when(edges.selectAllMetrics()).thenReturn(Arrays.asList(
+                EdgeManagement.builder().sourceId(1).targetId(2).latency(5.0).bandwidth(10L).build()));
         CommonController controller = new CommonController(mock(DataManagementMapper.class), nodes,
                 mock(TaskManagementMapper.class), mock(MigrationTaskMapper.class),
                 new NetworkTopologyService(edges, nodes, new NodeAvailabilityService(300), 1800),

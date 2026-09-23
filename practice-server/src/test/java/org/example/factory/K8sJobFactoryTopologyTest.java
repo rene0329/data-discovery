@@ -34,13 +34,13 @@ class K8sJobFactoryTopologyTest {
         NodeManagementMapper nodes = mock(NodeManagementMapper.class);
         EdgeManagementMapper edges = mock(EdgeManagementMapper.class);
         NodeAvailabilityService availability = new NodeAvailabilityService(300);
-        NodeManagement hz = node(4, "alihz"), bj = node(6, "alibj");
-        when(nodes.getNodeByName("alihz")).thenReturn(hz);
-        when(nodes.getNodeByName("alibj")).thenReturn(bj);
-        when(nodes.selectAllNodes()).thenReturn(Arrays.asList(node(1, "master-88"), node(3, "master-90"), hz, bj));
+        NodeManagement hz = node(4, "cluster-hz-1"), bj = node(6, "cluster-bj-1");
+        when(nodes.getNodeByName("cluster-hz-1")).thenReturn(hz);
+        when(nodes.getNodeByName("cluster-bj-1")).thenReturn(bj);
+        when(nodes.selectAllNodes()).thenReturn(Arrays.asList(node(1, "master-141"), node(3, "master-40"), hz, bj));
         when(nodes.getComputeCapableNodes()).thenReturn(Collections.singletonList(bj));
         accessLink = edge(4, 1, 20, 50);
-        when(edges.links()).thenReturn(Arrays.asList(accessLink, edge(1, 3, 8, 60), edge(3, 6, 30, 40)));
+        when(edges.selectAllMetrics()).thenReturn(Arrays.asList(accessLink, edge(1, 3, 8, 60), edge(1, 6, 30, 40)));
         NetworkTopologyService topology = new NetworkTopologyService(edges, nodes, availability, 1800);
         factory = new K8sJobFactory("unused", nodes, mock(TrainingProfileMapper.class), "cluster.local",
                 "curl:test", "python:test", "discovery", "default", 8080, "", 1, topology, availability);
@@ -51,10 +51,10 @@ class K8sJobFactoryTopologyTest {
     @Test
     void automaticSchedulingIncludesMultiHopCandidateWithPathMetrics() {
         List<?> candidates = ReflectionTestUtils.invokeMethod(
-                factory, "gatherAvailableNodes", 0.5, 1.0, "alihz");
+                factory, "gatherAvailableNodes", 0.5, 1.0, "cluster-hz-1");
         assertEquals(1, candidates.size());
-        assertEquals("alibj", ReflectionTestUtils.getField(candidates.get(0), "name"));
-        assertEquals(58.0, ((Number) ReflectionTestUtils.getField(candidates.get(0), "latencyMs")).doubleValue());
+        assertEquals("cluster-bj-1", ReflectionTestUtils.getField(candidates.get(0), "name"));
+        assertEquals(50.0, ((Number) ReflectionTestUtils.getField(candidates.get(0), "latencyMs")).doubleValue());
         assertEquals(40.0, ((Number) ReflectionTestUtils.getField(candidates.get(0), "bandwidthMbps")).doubleValue());
     }
 
@@ -62,10 +62,10 @@ class K8sJobFactoryTopologyTest {
     void disconnectedCandidateIsRejectedForAutomaticAndForcedScheduling() {
         accessLink.setStatus("inactive");
         List<?> candidates = ReflectionTestUtils.invokeMethod(
-                factory, "gatherAvailableNodes", 0.5, 1.0, "alihz");
+                factory, "gatherAvailableNodes", 0.5, 1.0, "cluster-hz-1");
         assertTrue(candidates.isEmpty());
         assertThrows(RegistrationException.class, () -> factory.createDataProcessingJob(
-                "test-job", "alihz", "test.npz", "/dataset/test.npz", "alibj", null, 0.5, 1.0));
+                "test-job", "cluster-hz-1", "test.npz", "/dataset/test.npz", "cluster-bj-1", null, 0.5, 1.0));
     }
 
     @Test
@@ -84,8 +84,8 @@ class K8sJobFactoryTopologyTest {
     void scopedReadTokenIsInjectedAsAnEnvironmentVariableAndNotLoggedInCommandText() {
         String token = "signed.secret.token";
         JobCreationResult result = factory.createDataProcessingJob(
-                "authorized-job", "alihz", "test.npz", "/dataset/test.npz",
-                "alibj", null, 0.5, 1.0, null, null, token);
+                "authorized-job", "cluster-hz-1", "test.npz", "/dataset/test.npz",
+                "cluster-bj-1", null, 0.5, 1.0, null, null, token);
         Container transfer = result.getJob().getSpec().getTemplate().getSpec().getInitContainers().get(0);
         String command = transfer.getCommand().get(2);
 
@@ -99,11 +99,11 @@ class K8sJobFactoryTopologyTest {
     @Test
     void sameNodeOverrideCreatesTheInPlaceJobOnTheSourceNode() {
         JobCreationResult result = factory.createDataProcessingJob(
-                "in-place-job", "alihz", "test.npz", "/dataset/test.npz",
-                "alihz", null, 0.5, 1.0, null, null, "scoped-read-token");
+                "in-place-job", "cluster-hz-1", "test.npz", "/dataset/test.npz",
+                "cluster-hz-1", null, 0.5, 1.0, null, null, "scoped-read-token");
 
-        assertEquals("alihz", result.getSelectedNodeName());
-        assertEquals("alihz", result.getJob().getSpec().getTemplate().getSpec().getNodeName());
+        assertEquals("cluster-hz-1", result.getSelectedNodeName());
+        assertEquals("cluster-hz-1", result.getJob().getSpec().getTemplate().getSpec().getNodeName());
     }
 
     private NodeManagement node(int id, String name) {

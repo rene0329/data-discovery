@@ -37,11 +37,11 @@ public class NetworkMetricsService {
         NodeManagement source = nodes.getNodeByName(report.getSourceNode());
         NodeManagement target = nodes.getNodeByName(report.getTargetNode());
         if (source == null || target == null || source.getNodeId().equals(target.getNodeId())) return;
-        // The policy row must already exist: reachability never creates a logical link.
-        EdgeManagement edge = edges.findBySourceAndTargetNode(
-                Math.min(source.getNodeId(), target.getNodeId()),
-                Math.max(source.getNodeId(), target.getNodeId()));
-        if (edge == null) return;
+        // Measurements are cached for any pair; NetworkTopologyService decides which pairs are links.
+        EdgeManagement edge = EdgeManagement.builder()
+                .sourceId(Math.min(source.getNodeId(), target.getNodeId()))
+                .targetId(Math.max(source.getNodeId(), target.getNodeId()))
+                .build();
         if (report.getLatencyMs() != null && Double.isFinite(report.getLatencyMs())
                 && report.getLatencyMs() >= 0 && report.getBandwidthBps() != null
                 && report.getBandwidthBps() > 0) {
@@ -49,10 +49,10 @@ public class NetworkMetricsService {
             edge.setBandwidth(Math.max(1L, Math.round(report.getBandwidthBps() / 1_000_000.0)));
             edge.setStatus("active");
         } else {
-            // Retain the last metrics for display, but exclude failed/incomplete probes from routing.
+            // Null metrics keep the last values for display; the status excludes it from routing.
             edge.setStatus("inactive");
         }
-        edges.updateEdge(edge);
+        edges.upsertMetric(edge);
     }
 
     public List<NetworkEdgeDto> getAllEdgesWithNodeNames() {

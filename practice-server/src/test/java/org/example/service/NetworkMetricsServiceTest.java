@@ -7,6 +7,8 @@ import org.example.mapper.EdgeManagementMapper;
 import org.example.mapper.NodeManagementMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -21,57 +23,55 @@ class NetworkMetricsServiceTest {
         edges = mock(EdgeManagementMapper.class);
         nodes = mock(NodeManagementMapper.class);
         service = new NetworkMetricsService(edges, nodes, mock(NetworkTopologyService.class));
-        when(nodes.getNodeByName("alihz")).thenReturn(NodeManagement.builder().nodeId(14).nodeName("alihz").build());
-        when(nodes.getNodeByName("master-88")).thenReturn(NodeManagement.builder().nodeId(7).nodeName("master-88").build());
-        when(nodes.getNodeByName("master-90")).thenReturn(NodeManagement.builder().nodeId(9).nodeName("master-90").build());
+        when(nodes.getNodeByName("cluster-hz-1")).thenReturn(NodeManagement.builder().nodeId(14).nodeName("cluster-hz-1").build());
+        when(nodes.getNodeByName("master-40")).thenReturn(NodeManagement.builder().nodeId(7).nodeName("master-40").build());
     }
 
     @Test
-    void ignoresSuccessfulProbeOutsideApprovedTopology() {
-        service.saveMetrics(report("alihz", "master-90", 90_000_000L, 2.0));
-        verify(edges).findBySourceAndTargetNode(9, 14);
-        verify(edges, never()).updateEdge(any());
+    void upsertsUndirectedPairInEitherDirection() {
+        service.saveMetrics(report("cluster-hz-1", "master-40", 93_666_000L, 33.7));
+        service.saveMetrics(report("master-40", "cluster-hz-1", 95_000_000L, 34.0));
+        List<EdgeManagement> saved = captured(2);
+        for (EdgeManagement edge : saved) {
+            assertEquals(7, edge.getSourceId());
+            assertEquals(14, edge.getTargetId());
+            assertEquals("active", edge.getStatus());
+        }
+        assertEquals(94L, saved.get(0).getBandwidth());
+        assertEquals(95L, saved.get(1).getBandwidth());
+        assertEquals(34.0, saved.get(1).getLatency());
     }
 
     @Test
-    void updatesApprovedUndirectedLinkInEitherDirectionWithoutChangingEndpoints() {
-        EdgeManagement edge = EdgeManagement.builder().edgeId(4).sourceId(7).targetId(14).status("UNKNOWN").build();
-        when(edges.findBySourceAndTargetNode(7, 14)).thenReturn(edge);
-        service.saveMetrics(report("alihz", "master-88", 93_666_000L, 33.7));
-        service.saveMetrics(report("master-88", "alihz", 95_000_000L, 34.0));
-        verify(edges, times(2)).updateEdge(edge);
-        assertEquals(4, edge.getEdgeId());
-        assertEquals(7, edge.getSourceId());
-        assertEquals(14, edge.getTargetId());
-        assertEquals(95L, edge.getBandwidth());
-        assertEquals(34.0, edge.getLatency());
-        assertEquals("active", edge.getStatus());
-    }
-
-    @Test
-    void failureKeepsLastMetricsAndRecoveryReusesSameLink() {
-        EdgeManagement edge = EdgeManagement.builder().edgeId(4).sourceId(7).targetId(14)
-                .bandwidth(80L).latency(20.0).status("active").build();
-        when(edges.findBySourceAndTargetNode(7, 14)).thenReturn(edge);
-        service.saveMetrics(report("alihz", "master-88", null, null));
+    void failureSendsNullMetricsSoStoredValuesAreKept() {
+        service.saveMetrics(report("cluster-hz-1", "master-40", null, null));
+        EdgeManagement edge = captured(1).get(0);
         assertEquals("inactive", edge.getStatus());
-        assertEquals(80L, edge.getBandwidth());
-        assertEquals(20.0, edge.getLatency());
-        service.saveMetrics(report("alihz", "master-88", 70_000_000L, 25.0));
-        assertEquals("active", edge.getStatus());
-        assertEquals(4, edge.getEdgeId());
-        assertEquals(70L, edge.getBandwidth());
+        assertNull(edge.getBandwidth());
+        assertNull(edge.getLatency());
     }
 
     @Test
     void incompleteOrNonFiniteMeasurementsCannotActivateLink() {
-        EdgeManagement edge = EdgeManagement.builder().edgeId(4).build();
-        when(edges.findBySourceAndTargetNode(7, 14)).thenReturn(edge);
-        service.saveMetrics(report("alihz", "master-88", null, 33.7));
-        assertEquals("inactive", edge.getStatus());
-        service.saveMetrics(report("alihz", "master-88", 100L, Double.NaN));
-        assertEquals("inactive", edge.getStatus());
-        assertNull(edge.getBandwidth());
+        service.saveMetrics(report("cluster-hz-1", "master-40", null, 33.7));
+        service.saveMetrics(report("cluster-hz-1", "master-40", 100L, Double.NaN));
+        for (EdgeManagement edge : captured(2)) {
+            assertEquals("inactive", edge.getStatus());
+            assertNull(edge.getBandwidth());
+        }
+    }
+
+    @Test
+    void unknownOrSelfPairsAreIgnored() {
+        service.saveMetrics(report("cluster-hz-1", "missing", 90_000_000L, 2.0));
+        service.saveMetrics(report("master-40", "master-40", 90_000_000L, 2.0));
+        verify(edges, never()).upsertMetric(any());
+    }
+
+    private List<EdgeManagement> captured(int times) {
+        ArgumentCaptor<EdgeManagement> captor = ArgumentCaptor.forClass(EdgeManagement.class);
+        verify(edges, times(times)).upsertMetric(captor.capture());
+        return captor.getAllValues();
     }
 
     private NetworkMetricDto report(String source, String target, Long bps, Double latency) {
