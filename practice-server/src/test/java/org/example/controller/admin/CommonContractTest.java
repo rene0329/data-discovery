@@ -2,7 +2,6 @@ package org.example.controller.admin;
 
 import org.example.handler.CommonExceptionHandler;
 import org.example.mapper.*;
-import org.example.service.K8sTaskOrchestratorService;
 import org.example.service.NodeAvailabilityService;
 import org.example.service.NetworkTopologyService;
 import org.example.service.PublicIpLocationService;
@@ -33,7 +32,7 @@ class CommonContractTest {
         when(datasets.adminList(anyString())).thenReturn(Collections.emptyList());
         mvc = MockMvcBuilders.standaloneSetup(new CommonController(datasets, nodes,
                 mock(TaskManagementMapper.class), mock(MigrationTaskMapper.class),
-                mock(NetworkTopologyService.class), mock(K8sTaskOrchestratorService.class),
+                mock(NetworkTopologyService.class),
                 mock(RestTemplate.class), new NodeAvailabilityService(300), mock(PublicIpLocationService.class)))
                 .setControllerAdvice(new CommonExceptionHandler()).build();
     }
