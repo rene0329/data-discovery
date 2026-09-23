@@ -18,6 +18,7 @@ import org.example.service.NodeReadCacheService;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration;
 import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
 import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
 import org.springframework.context.annotation.Import;
@@ -41,7 +42,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;  // 如果你
  * no purpose here and must be excluded.
  */
 @SpringBootApplication(scanBasePackageClasses = DaemonComponentRoot.class,
-        exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
+        exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class,
+                ManagementWebSecurityAutoConfiguration.class})
 @Import({
         Knife4jConfig.class,
         DataDiscoveryController.class,
