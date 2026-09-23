@@ -35,6 +35,9 @@ public class SecurityConfiguration {
                 .antMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
                 .antMatchers(HttpMethod.POST, "/api/v1/auth/impersonation").hasRole("ADMIN")
                 .antMatchers(HttpMethod.POST, "/api/v1/auth/impersonation/exit").authenticated()
+                // Any signed-in user (AUDITOR and domain-less users included) may request a
+                // short-lived dataset usage grant for themselves; creating tasks stays restricted.
+                .antMatchers(HttpMethod.POST, "/api/v1/security/dataset-access/grants").authenticated()
                 .antMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/v1/privacy-computing/capabilities",
                         "/api/v1/privacy-computing/templates").permitAll()

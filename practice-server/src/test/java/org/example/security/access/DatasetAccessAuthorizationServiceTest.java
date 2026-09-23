@@ -161,6 +161,15 @@ class DatasetAccessAuthorizationServiceTest {
         assertEquals("PUBLIC_ACTION_NOT_ALLOWED", denied.getErrorCode());
     }
 
+    @Test
+    void auditEventDecisionFilterIsNormalizedAndOptional() {
+        service.findAuditEvents(" ", null, "owner-a", " denied ", 1000);
+        verify(audits).find(null, null, "owner-a", "DENIED", 500);
+
+        service.findAuditEvents(null, "run-1", null, 0);
+        verify(audits).find(null, "run-1", null, null, 1);
+    }
+
     private AccessScope scope(String dataset, String path, String action, String target) {
         return new AccessScope(dataset, "v1", path, action, target);
     }

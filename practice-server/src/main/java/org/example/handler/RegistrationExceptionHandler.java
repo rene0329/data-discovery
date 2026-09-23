@@ -2,6 +2,7 @@ package org.example.handler;
 
 import org.example.auth.AuthException;
 import org.example.exception.RegistrationException;
+import org.example.security.access.DatasetUsageController;
 import org.example.vo.ApiV1Response;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.Ordered;
@@ -21,7 +22,8 @@ import org.springframework.web.multipart.support.MissingServletRequestPartExcept
 
 @Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice(basePackages = {"org.example.controller.registration",
-        "org.example.security.aggregation.coordinator"})
+        "org.example.security.aggregation.coordinator"},
+        assignableTypes = DatasetUsageController.class)
 @Slf4j
 public class RegistrationExceptionHandler {
 

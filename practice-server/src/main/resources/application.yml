@@ -226,6 +226,9 @@ app:
   dataset-access:
     enabled: ${APP_DATASET_ACCESS_ENABLED:true}
     token-ttl-seconds: ${APP_DATASET_ACCESS_TOKEN_TTL_SECONDS:300}
+    # Lifetime of a self-service usage grant issued from the 访问控制 page (申请令牌).
+    # A grant stops counting once expires_at passes; values below 1 are treated as 1.
+    grant-ttl-minutes: ${APP_DATASET_ACCESS_GRANT_TTL_MINUTES:60}
     hmac-secret: ${APP_DATASET_ACCESS_HMAC_SECRET:topic4-acceptance-hmac-secret-change-before-production}
     credentials:
       reviewer-a: ${APP_DATASET_ACCESS_REVIEWER_A_SECRET:topic4-reviewer-a-secret}

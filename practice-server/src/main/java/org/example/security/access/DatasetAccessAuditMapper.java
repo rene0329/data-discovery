@@ -24,10 +24,12 @@ public interface DatasetAccessAuditMapper {
             "<if test='requestId != null and requestId != \"\"'> AND request_id = #{requestId}</if>",
             "<if test='runId != null and runId != \"\"'> AND run_id = #{runId}</if>",
             "<if test='principal != null and principal != \"\"'> AND principal = #{principal}</if>",
+            "<if test='decision != null and decision != \"\"'> AND decision = #{decision}</if>",
             "ORDER BY event_id DESC LIMIT #{limit}",
             "</script>"})
     List<DatasetAccessAuditEvent> find(@Param("requestId") String requestId,
                                        @Param("runId") String runId,
                                        @Param("principal") String principal,
+                                       @Param("decision") String decision,
                                        @Param("limit") int limit);
 }
