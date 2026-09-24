@@ -84,10 +84,9 @@ dispatch:
       speed-time-seconds: 30
       limit-rate:
         # 不设全局默认限速：数据搬运耗时反映实际网络路径。
-        # 以下路径级限速是 zjlab 拓扑实验的配置，按节点名匹配，在 ZJ 集群上不生效。
-        n89-to-88: 3277k
-        n89-to-90: 2048k
-        n88-to-90: 4096k
+        # 路径级限速："源节点->目标节点=速率"，逗号分隔，* 匹配任意节点，按顺序取第一条匹配；
+        # 速率写法同 curl --limit-rate（如 1536k、2M）。由部署环境变量给出。
+        paths: ${DISPATCH_JOB_CURL_LIMIT_RATE_PATHS:}
     active-deadline-seconds: 3600
     ttl-seconds-after-finished: 300
   central-node:

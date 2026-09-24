@@ -136,6 +136,17 @@ class K8sJobFactoryTopologyTest {
         assertTrue(inPlace.contains("'http://172.28.241.196:8080/data-discovery/download/dataset/test.npz'"));
         assertTrue(centralized.contains("'http://10.0.0.5:8080/data-discovery/download/dataset/test.npz'"));
         assertFalse(inPlace.contains("--limit-rate"));
+
+        ReflectionTestUtils.setField(lanFactory, "pathRateLimits",
+                PathRateLimits.parse("*->master-215=2560k,*->master-40=1536k"));
+        String limited = lanFactory.createDataProcessingJob("centralized-job", "cluster-sh-3", "test.npz",
+                "/dataset/test.npz", "master-40", null, 0.5, 1.0)
+                .getJob().getSpec().getTemplate().getSpec().getInitContainers().get(0).getCommand().get(2);
+        String local = lanFactory.createDataProcessingJob("in-place-job", "cluster-sh-3", "test.npz",
+                "/dataset/test.npz", "cluster-sh-1", null, 0.5, 1.0)
+                .getJob().getSpec().getTemplate().getSpec().getInitContainers().get(0).getCommand().get(2);
+        assertTrue(limited.contains(" --limit-rate 1536k"));
+        assertFalse(local.contains("--limit-rate"));
     }
 
     private NodeManagement node(int id, String name) {

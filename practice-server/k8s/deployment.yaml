@@ -39,6 +39,9 @@ spec:
               value: "10.15.16.40"
             - name: DISPATCH_CENTRAL_NODE_NAME
               value: "master-40"
+            # 模拟带宽受限：到分布式计算节点 master-215 限 2.5 MiB/s，到中心节点 master-40 限 1.5 MiB/s。
+            - name: DISPATCH_JOB_CURL_LIMIT_RATE_PATHS
+              value: "*->master-215=2560k,*->master-40=1536k"
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS

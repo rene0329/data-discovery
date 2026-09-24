@@ -53,17 +53,10 @@ public class K8sJobFactory {
     private final NodeAvailabilityService nodeAvailabilityService;
     private final DataTransferAddressResolver transferAddresses;
 
-    /** 路径级限速: master-89 -> master-88（旧 master-141 -> master-40） */
-    @Value("${dispatch.job.curl.limit-rate.n89-to-88:}")
-    private String wgetLimitRate89To88;
-
-    /** 路径级限速: master-89 -> master-90（旧 master-141 -> master-215） */
-    @Value("${dispatch.job.curl.limit-rate.n89-to-90:}")
-    private String wgetLimitRate89To90;
-
-    /** 路径级限速: master-88 -> master-90（旧 master-40 -> master-215） */
-    @Value("${dispatch.job.curl.limit-rate.n88-to-90:}")
-    private String wgetLimitRate88To90;
+    /** 路径级限速规则，格式见 {@link PathRateLimits}；init() 时解析。 */
+    @Value("${dispatch.job.curl.limit-rate.paths:}")
+    private String limitRatePaths;
+    private PathRateLimits pathRateLimits = PathRateLimits.parse(null);
 
     @Value("${dispatch.scheduler.weight.cpuFreePct:0.5}")
     private double weightCpuFreePct;
@@ -202,6 +195,8 @@ public class K8sJobFactory {
 
     @PostConstruct
     public void init() {
+        pathRateLimits = PathRateLimits.parse(limitRatePaths);
+        log.info("curl 限速配置: default='{}', paths='{}'", wgetLimitRate, pathRateLimits);
         // --- 优先尝试 In-Cluster 配置（仅当检测到 K8s 环境变量时） ---
         boolean inClusterEnv = System.getenv("KUBERNETES_SERVICE_HOST") != null;
         if (inClusterEnv) {
@@ -259,8 +254,6 @@ public class K8sJobFactory {
         if (clusterClients.isEmpty()) {
             log.error("K8sJobFactory 初始化失败：既无法使用 In-Cluster 认证，也无法加载外部 kubeconfig 文件。没有可用的 Kubernetes 客户端。");
         }
-        log.info("curl 限速配置: default='{}', n89-to-88='{}', n89-to-90='{}', n88-to-90='{}'",
-                wgetLimitRate, wgetLimitRate89To88, wgetLimitRate89To90, wgetLimitRate88To90);
     }
 
     public JobCreationResult createDataProcessingJob(String jobName,
@@ -538,11 +531,8 @@ public class K8sJobFactory {
      * 优先级: 路径级配置 > 全局配置 > 不限速。
      */
     private String resolveLimitRate(String srcNode, String destNode) {
-        if (srcNode != null && destNode != null) {
-            if ("master-89".equalsIgnoreCase(srcNode) && "master-88".equalsIgnoreCase(destNode) && isValidRate(wgetLimitRate89To88)) return wgetLimitRate89To88;
-            if ("master-89".equalsIgnoreCase(srcNode) && "master-90".equalsIgnoreCase(destNode) && isValidRate(wgetLimitRate89To90)) return wgetLimitRate89To90;
-            if ("master-88".equalsIgnoreCase(srcNode) && "master-90".equalsIgnoreCase(destNode) && isValidRate(wgetLimitRate88To90)) return wgetLimitRate88To90;
-        }
+        String pathRate = srcNode == null || destNode == null ? null : pathRateLimits.resolve(srcNode, destNode);
+        if (pathRate != null) return pathRate;
         return isValidRate(wgetLimitRate) ? wgetLimitRate : null;
     }
 
