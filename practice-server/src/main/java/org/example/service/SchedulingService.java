@@ -32,6 +32,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -49,6 +50,8 @@ public class SchedulingService {
     private static final Set<String> ACTIONS = new HashSet<>(Arrays.asList(
             "USE_IN_PLACE", "COPY_AND_USE", "MOVE_AND_USE", "REMOTE_READ"));
     private static final Set<String> DATA_ACTIONS = new HashSet<>(Arrays.asList("COPY", "MOVE", "DELETE"));
+    /** A dataset lives in one place; at most one extra copy (e.g. an isolated verification copy) is allowed. */
+    public static final int MAX_LIVE_REPLICAS = 2;
     private static final Set<String> PLAN_STATUSES = new HashSet<>(Arrays.asList(
             "ACCEPTED", "RUNNING", "COMPLETED", "PARTIAL_COMPLETED", "FAILED"));
 
@@ -166,6 +169,7 @@ public class SchedulingService {
                 .map(SchedulingPlanRequest.Assignment::getTargetNodeId).collect(Collectors.toList()))
                 .forEach(datasetMapper::lockStorageNode);
         Map<Integer, Integer> reserved = new LinkedHashMap<>();
+        Map<Long, Integer> liveReplicas = new HashMap<>();
         List<SchedulingAssignment> assignments = new ArrayList<>();
         List<Long> datasetIds = new ArrayList<>();
         List<String> datasetNames = new ArrayList<>();
@@ -219,6 +223,20 @@ public class SchedulingService {
             if ("USE_IN_PLACE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId())) {
                 throw RegistrationException.invalid("USE_IN_PLACE requires sourceNodeId = targetNodeId");
             }
+            if (addsReplica(dataOnly, action, item)) {
+                DatasetReplica targetCopy = datasetMapper.findReplicaByNodePath(item.getTargetNodeId(), replica.getFilePath());
+                boolean alreadyThere = targetCopy != null && dataset.getDatasetId().equals(targetCopy.getDatasetId())
+                        && !"MISSING".equals(targetCopy.getAvailability());
+                if (!alreadyThere) {
+                    int live = liveReplicas.computeIfAbsent(dataset.getDatasetId(), id -> (int) datasetMapper
+                            .listReplicas(id).stream().filter(r -> !"MISSING".equals(r.getAvailability())).count());
+                    if (live >= MAX_LIVE_REPLICAS) {
+                        throw RegistrationException.conflict("数据集 " + dataset.getName() + " 已有 " + live
+                                + " 个有效副本，最多保留 " + MAX_LIVE_REPLICAS + " 个；请先迁移或删除副本");
+                    }
+                    liveReplicas.put(dataset.getDatasetId(), live + 1);
+                }
+            }
             assignments.add(SchedulingAssignment.builder()
                     .datasetId(item.getDatasetId())
                     .replicaId(item.getReplicaId())
@@ -251,6 +269,12 @@ public class SchedulingService {
         // Job that finished reading its input (K8sTaskOrchestratorService).
         dispatchAfterCommit(plan.getPlanId(), plan.getInternalTaskId(), assignments);
         return accepted(plan);
+    }
+
+    /** COPY and cross-node COPY_AND_USE keep the source, so the dataset gains a replica. */
+    private static boolean addsReplica(boolean dataOnly, String action, SchedulingPlanRequest.Assignment item) {
+        return dataOnly ? "COPY".equals(action)
+                : "COPY_AND_USE".equals(action) && !item.getSourceNodeId().equals(item.getTargetNodeId());
     }
 
     /** Must match countActiveWriteReferences: these assignments change the dataset's replicas. */

@@ -128,6 +128,63 @@ class InPlacePlacementServiceTest {
                 + "and no reachable compute node from cluster-hz-1"), result.getRejectedReasons());
     }
 
+    @Test
+    void distributedRunsSkipTheCentralNodeEvenWhenItIsMarginallyCloser() {
+        // ZJ: cluster-hz-1 reaches master-40 in 6.436 ms and master-215 in 6.446 ms, both via master-141.
+        paths(5, path(1, 6.436, 140L), path(3, 6.446, 140L), path(7, 20.0, 100L));
+
+        InPlacePlacementService.Placement result = centralAware("master-40", "")
+                .place(Collections.singletonList(replica(1, 5)));
+
+        assertEquals(InPlacePlacementService.Tier.NEAREST, result.getTier());
+        assertEquals("master-215", result.getComputeNode().getNodeName());
+    }
+
+    @Test
+    void sameSitePlacementSkipsTheCentralNode() {
+        NodeManagement master141 = node(2, "master-141", "storage", "center");
+        when(nodes.getNodeById(2)).thenReturn(master141);
+
+        InPlacePlacementService.Placement result = centralAware("master-40", "")
+                .place(Collections.singletonList(replica(1, 2)));
+
+        assertEquals(InPlacePlacementService.Tier.SAME_SITE, result.getTier());
+        assertEquals("master-215", result.getComputeNode().getNodeName());
+    }
+
+    @Test
+    void aReplicaOnTheCentralNodeStillRunsThere() {
+        InPlacePlacementService.Placement result = centralAware("master-40", "")
+                .place(Collections.singletonList(replica(1, 1)));
+
+        assertEquals(InPlacePlacementService.Tier.LOCAL, result.getTier());
+        assertEquals("master-40", result.getComputeNode().getNodeName());
+    }
+
+    @Test
+    void theCentralNodeIsUsedWhenNoOtherComputeNodeIsReachable() {
+        paths(5, path(1, 12.0, 100L));
+
+        InPlacePlacementService.Placement result = centralAware("master-40", "")
+                .place(Collections.singletonList(replica(1, 5)));
+
+        assertEquals("master-40", result.getComputeNode().getNodeName());
+        assertTrue(result.getRejectedReasons().isEmpty());
+    }
+
+    @Test
+    void theCentralNodeIsRecognisedByItsInternalIp() {
+        master40.setInternalIp("10.15.16.40");
+        paths(5, path(1, 6.436, 140L), path(3, 6.446, 140L));
+
+        assertEquals("master-215", centralAware("", "10.15.16.40")
+                .place(Collections.singletonList(replica(1, 5))).getComputeNode().getNodeName());
+    }
+
+    private InPlacePlacementService centralAware(String name, String ip) {
+        return new InPlacePlacementService(nodes, replicas, nodeAvailability, topology, name, ip);
+    }
+
     private void paths(int source, NetworkPath... targets) {
         Map<Integer, NetworkPath> map = new HashMap<>();
         map.put(source, new NetworkPath(Collections.singletonList(source), 0.0, Long.MAX_VALUE));

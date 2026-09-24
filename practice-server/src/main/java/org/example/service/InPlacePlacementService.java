@@ -4,6 +4,8 @@ import org.example.entity.DatasetReplica;
 import org.example.entity.NodeManagement;
 import org.example.mapper.NodeManagementMapper;
 import org.example.service.NetworkTopologyService.NetworkPath;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -27,6 +29,8 @@ import java.util.stream.Collectors;
  *       bandwidth, then lowest node id. This crosses site boundaries (and may pick the central
  *       node); it also covers replicas whose node has no site_code.</li>
  * </ol>
+ * Tiers 2 and 3 skip the central node, which is where CENTRALIZED runs execute: a distributed run
+ * lands there only when its replica is on it, or when no other compute node is reachable.
  * Only when no usable replica can reach any schedulable compute node is there no placement.
  */
 @Service
@@ -37,15 +41,30 @@ public class InPlacePlacementService {
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     private final NodeAvailabilityService nodeAvailabilityService;
     private final NetworkTopologyService networkTopologyService;
+    private final String centralNodeName;
+    private final String centralNodeIp;
 
+    /** Without a configured central node every compute node is treated alike. */
     public InPlacePlacementService(NodeManagementMapper nodeMapper,
                                    DatasetReplicaAvailabilityService replicaAvailabilityService,
                                    NodeAvailabilityService nodeAvailabilityService,
                                    NetworkTopologyService networkTopologyService) {
+        this(nodeMapper, replicaAvailabilityService, nodeAvailabilityService, networkTopologyService, null, null);
+    }
+
+    @Autowired
+    public InPlacePlacementService(NodeManagementMapper nodeMapper,
+                                   DatasetReplicaAvailabilityService replicaAvailabilityService,
+                                   NodeAvailabilityService nodeAvailabilityService,
+                                   NetworkTopologyService networkTopologyService,
+                                   @Value("${dispatch.central-node.name:}") String centralNodeName,
+                                   @Value("${dispatch.central-node.ip:}") String centralNodeIp) {
         this.nodeMapper = nodeMapper;
         this.replicaAvailabilityService = replicaAvailabilityService;
         this.nodeAvailabilityService = nodeAvailabilityService;
         this.networkTopologyService = networkTopologyService;
+        this.centralNodeName = centralNodeName == null ? "" : centralNodeName.trim();
+        this.centralNodeIp = centralNodeIp == null ? "" : centralNodeIp.trim();
     }
 
     /** Compute-capable nodes that are currently schedulable, in mapper order. */
@@ -87,6 +106,22 @@ public class InPlacePlacementService {
                 }
             }
         }
+        List<NodeManagement> awayFromCentral = computeNodes.stream()
+                .filter(compute -> !isCentral(compute)).collect(Collectors.toList());
+        if (awayFromCentral.size() < computeNodes.size()) {
+            Placement distributed = nearby(usable, awayFromCentral, reasons, new ArrayList<>());
+            if (distributed != null) return distributed;
+        }
+        List<String> unreachable = new ArrayList<>();
+        Placement any = nearby(usable, computeNodes, reasons, unreachable);
+        if (any != null) return any;
+        reasons.addAll(unreachable);
+        return new Placement(null, null, null, null, null, reasons);
+    }
+
+    /** Tiers 2 and 3 over the given compute nodes; null when none is reachable. */
+    private Placement nearby(List<Candidate> usable, List<NodeManagement> computeNodes,
+                             List<String> reasons, List<String> unreachable) {
         for (Candidate candidate : usable) {
             String siteCode = candidate.node.getSiteCode();
             if (siteCode == null) continue;
@@ -116,12 +151,17 @@ public class InPlacePlacementService {
             if (local == null) {
                 String site = candidate.node.getSiteCode() == null ? "node has no site_code"
                         : "no available compute node in site '" + candidate.node.getSiteCode() + "'";
-                reasons.add(nodeLabel + ": " + site + ", and no reachable compute node from " + nodeLabel);
+                unreachable.add(nodeLabel + ": " + site + ", and no reachable compute node from " + nodeLabel);
             } else if (best == null || nearest.compare(local, best) < 0) {
                 best = local;
             }
         }
-        return best != null ? best : new Placement(null, null, null, null, null, reasons);
+        return best;
+    }
+
+    private boolean isCentral(NodeManagement node) {
+        return (!centralNodeName.isEmpty() && centralNodeName.equals(node.getNodeName()))
+                || (!centralNodeIp.isEmpty() && centralNodeIp.equals(node.getInternalIp()));
     }
 
     private static String label(NodeManagement node, Integer nodeId) {

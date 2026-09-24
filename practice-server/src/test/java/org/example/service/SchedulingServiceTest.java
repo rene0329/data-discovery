@@ -362,6 +362,33 @@ class SchedulingServiceTest {
     }
 
     @Test
+    void copiesAreRejectedOnceADatasetHasTwoLiveReplicas() {
+        twoLiveReplicas("AVAILABLE");
+        SchedulingPlanRequest copy = dataPlan("COPY");
+        assertTrue(assertThrows(RegistrationException.class, () -> service.submitDataPlan(copy))
+                .getMessage().contains("最多保留 2 个"));
+        SchedulingPlanRequest copyAndUse = computePlan("COPY_AND_USE");
+        assertTrue(assertThrows(RegistrationException.class, () -> service.submit(copyAndUse))
+                .getMessage().contains("最多保留 2 个"));
+        verify(planMapper, org.mockito.Mockito.never()).insertPlan(any());
+        verifyNoInteractions(dataExecutor, orchestrator);
+    }
+
+    @Test
+    void movesAndMissingRowsDoNotCountTowardsTheReplicaLimit() {
+        twoLiveReplicas("AVAILABLE");
+        assertEquals(40L, service.submitDataPlan(dataPlan("MOVE")).getPlanId());
+        twoLiveReplicas("MISSING");
+        assertEquals(40L, service.submitDataPlan(dataPlan("COPY")).getPlanId());
+    }
+
+    private void twoLiveReplicas(String secondAvailability) {
+        when(datasetMapper.listReplicas(10L)).thenReturn(java.util.Arrays.asList(
+                DatasetReplica.builder().replicaId(20L).datasetId(10L).nodeId(3).availability("AVAILABLE").build(),
+                DatasetReplica.builder().replicaId(21L).datasetId(10L).nodeId(5).availability(secondAvailability).build()));
+    }
+
+    @Test
     void pendingTargetsReserveCapacityAcrossPlans() {
         SchedulingPlanRequest request = dataPlan("COPY");
         when(datasetMapper.countStorageSlots(4)).thenReturn(9);

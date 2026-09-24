@@ -221,8 +221,10 @@ app:
     threshold: 10
 
   heat-placement:
-    # Only successful, complete reads within this window influence placement.
-    consumption-lookback-hours: 24
+    # 热度达到该值的数据集才参与热敏存储（每次任务读取：H' = 0.9H + 10，超出下限的部分每 24 小时减半）。
+    hot-threshold: 30
+    # 迁移后到就近计算节点的时延至少缩短这么多（毫秒）才迁移，避免因测量抖动来回搬。
+    min-latency-gain-ms: 1
 
   # Acceptance identities are intentionally small and static for this phase.
   # Every value can be replaced through the deployment environment before judge runs.

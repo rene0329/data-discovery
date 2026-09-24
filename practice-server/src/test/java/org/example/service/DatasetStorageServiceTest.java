@@ -5,7 +5,6 @@ import org.example.dto.scheduling.SchedulingPlanRequest;
 import org.example.entity.*;
 import org.example.exception.RegistrationException;
 import org.example.mapper.*;
-import org.example.access.DatasetConsumerStat;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import java.time.LocalDateTime;
@@ -20,7 +19,6 @@ class DatasetStorageServiceTest {
     TaskManagementMapper tasks = mock(TaskManagementMapper.class);
     SchedulingService scheduling = mock(SchedulingService.class);
     NetworkTopologyService topology = mock(NetworkTopologyService.class);
-    DatasetAccessEventMapper accessEvents = mock(DatasetAccessEventMapper.class);
     DatasetStorageService service;
     List<RegisteredDataset> catalog;
 
@@ -29,7 +27,7 @@ class DatasetStorageServiceTest {
         NodeAvailabilityService availability = new NodeAvailabilityService(300);
         service = new DatasetStorageService(datasets, nodes, tasks, availability,
                 new DatasetReplicaAvailabilityService(nodes, availability), topology, scheduling,
-                accessEvents, 24);
+                mock(InPlacePlacementService.class), 30, 1);
         List<NodeManagement> pool = Arrays.asList(node(1, "storage"), node(2, "compute-storage"), node(3, "storage"));
         when(nodes.selectAllNodes()).thenReturn(pool);
         pool.forEach(n -> when(nodes.getNodeById(n.getNodeId())).thenReturn(n));
@@ -47,63 +45,12 @@ class DatasetStorageServiceTest {
     }
 
     @Test
-    void previewsLogicalHeatAndCreatesBackupBeforeMovingWithoutWritingAnything() {
-        DatasetStoragePlan plan = service.preview("heat");
-        assertEquals(2, plan.getDatasetCount());
-        assertEquals(9L, plan.getPlacements().get(0).getDatasetId());
-        assertEquals(80.0, plan.getPlacements().get(0).getDataHeat());
-        assertEquals("COPY", plan.getAssignments().get(0).getAction());
-        assertEquals("MOVE", plan.getAssignments().get(1).getAction());
-        assertEquals(109L, plan.getAssignments().get(1).getReplicaId());
-        assertNotEquals(plan.getAssignments().get(0).getTargetNodeId(), plan.getAssignments().get(1).getTargetNodeId());
-        verifyNoInteractions(scheduling);
-    }
-
-    @Test
-    void usesSuccessfulConsumerEvidenceForNearCopyAndExplainsDecision() {
-        DatasetConsumerStat stat = new DatasetConsumerStat();
-        stat.setConsumerNodeId(2); stat.setAccessCount(4L); stat.setBytesRead(1024L);
-        when(accessEvents.recentConsumers(eq(9L), any())).thenReturn(Collections.singletonList(stat));
-
-        DatasetStoragePlan plan = service.preview("heat");
-
-        DatasetStoragePlan.Placement placement = plan.getPlacements().stream()
-                .filter(row -> row.getDatasetId().equals(9L)).findFirst().orElseThrow(AssertionError::new);
-        assertEquals("COPY", placement.getAction());
-        assertEquals(2, placement.getConsumerNodeId());
-        assertEquals("node-2", placement.getTargetNode());
-        assertTrue(placement.getReason().contains("实际读取 4 次"));
-    }
-
-    @Test
-    void clearsOnlyOneRedundantReplicaFromLowHeatDataset() {
-        when(datasets.listReplicas(10L)).thenReturn(Arrays.asList(
-                availableReplica(110L, 10L, 1, "/dataset/10.npz"),
-                availableReplica(210L, 10L, 2, "/dataset/10.npz")));
-
-        DatasetStoragePlan plan = service.preview("heat");
-        SchedulingPlanRequest.Assignment cleanup = plan.getAssignments().stream()
-                .filter(row -> row.getDatasetId().equals(10L)).findFirst().orElseThrow(AssertionError::new);
-        assertEquals("DELETE", cleanup.getAction());
-        assertEquals(cleanup.getSourceNodeId(), cleanup.getTargetNodeId());
-    }
-
-    @Test
-    void keepsTheOnlyVerifiedReplicaOfLowHeatData() {
-        DatasetStoragePlan plan = service.preview("heat");
-
-        assertTrue(plan.getAssignments().stream().noneMatch(row -> row.getDatasetId().equals(10L)));
-        assertTrue(plan.getNotices().stream().anyMatch(notice -> notice.contains("低热数据仅有一个已验证副本")));
-    }
-
-    @Test
     void bothModesRemainAvailableWithAndWithoutUnfinishedTasks() {
         for (int count : new int[]{0, 1, 5}) {
             when(tasks.countUnfinishedTasks()).thenReturn(count);
             assertEquals(true, service.policy().get("heatEnabled"));
             assertEquals(true, service.policy().get("aggregationEnabled"));
             assertEquals(count, service.policy().get("unfinishedTaskCount"));
-            assertFalse(service.preview("heat").getAssignments().isEmpty());
             assertFalse(service.preview("aggregation", Collections.singletonList(10L), 2).getAssignments().isEmpty());
         }
         assertThrows(RegistrationException.class, () -> service.preview("invalid"));
@@ -127,16 +74,8 @@ class DatasetStorageServiceTest {
     }
 
     @Test
-    void aggregationReusesTargetAndSkipsBusyDatasetsWhileHeatProcessesOthers() {
+    void aggregationReusesTargetAndSkipsBusyDatasets() {
         when(datasets.countActiveTaskReferences(9L, "same-name")).thenReturn(1);
-        when(datasets.listReplicas(10L)).thenReturn(Arrays.asList(
-                availableReplica(110L, 10L, 1, "/dataset/10.npz"),
-                availableReplica(310L, 10L, 3, "/dataset/10.npz")));
-        DatasetStoragePlan heat = service.preview("heat");
-        assertTrue(heat.getAssignments().stream().allMatch(a -> a.getDatasetId().equals(10L)));
-        assertFalse(heat.getAssignments().isEmpty());
-        when(datasets.listReplicas(10L)).thenReturn(Collections.singletonList(
-                availableReplica(110L, 10L, 1, "/dataset/10.npz")));
         DatasetStoragePlan aggregation = service.preview("aggregation", Arrays.asList(9L, 10L), 2);
         assertEquals(1, aggregation.getAssignments().size());
         assertTrue(aggregation.getNotices().get(0).contains("占用") || aggregation.getNotices().get(0).contains("未完成"));
@@ -171,47 +110,31 @@ class DatasetStorageServiceTest {
         assertThrows(RegistrationException.class, () -> service.preview("aggregation", Collections.singletonList(10L), 1));
         assertThrows(RegistrationException.class, () -> service.preview("aggregation", Collections.singletonList(999L), 2));
         DatasetStoragePlan.Submit request = new DatasetStoragePlan.Submit();
-        request.setMode("heat"); request.setExternalPlanId("changed-occupancy");
-        request.setAssignments(service.preview("heat").getAssignments());
-        when(datasets.countActiveTaskReferences(9L, "same-name")).thenReturn(1);
+        request.setMode("aggregation"); request.setExternalPlanId("changed-occupancy");
+        request.setDatasetIds(Collections.singletonList(10L)); request.setTargetNodeId(2);
+        request.setAssignments(service.preview("aggregation", Collections.singletonList(10L), 2).getAssignments());
+        assertFalse(request.getAssignments().isEmpty());
+        when(datasets.countActiveTaskReferences(10L, "same-name")).thenReturn(1);
         assertThrows(RegistrationException.class, () -> service.submit(request));
         verifyNoInteractions(scheduling);
     }
 
     @Test
-    void submitsReviewedAssignmentsToDataOnlySchedulingAndRejectsChangedPreview() {
-        DatasetStoragePlan.Submit request = new DatasetStoragePlan.Submit();
-        request.setExternalPlanId("storage-test-001");
-        request.setMode("heat");
-        request.setAssignments(service.preview("heat").getAssignments());
-        service.submit(request);
-        org.mockito.ArgumentCaptor<SchedulingPlanRequest> captor = org.mockito.ArgumentCaptor.forClass(SchedulingPlanRequest.class);
-        verify(scheduling).submitDataPlan(captor.capture());
-        assertEquals("热敏存储", captor.getValue().getAlgorithm().getName());
-        assertNull(captor.getValue().getTaskId());
-        when(topology.pathsFrom(1)).thenReturn(Collections.emptyMap());
-        assertThrows(RegistrationException.class, () -> service.submit(request));
-        verify(scheduling, times(1)).submitDataPlan(any());
-    }
+    void aggregationDoesNotCopyADatasetThatAlreadyHasTheMaximumReplicas() {
+        when(datasets.listReplicas(10L)).thenReturn(Arrays.asList(
+                availableReplica(110L, 10L, 1, "/dataset/10.npz"),
+                availableReplica(310L, 10L, 3, "/dataset/10.npz")));
 
-    @Test
-    void unavailableOrBusyDatasetsAreSkippedWithoutMovingUnrelatedReplicas() {
-        catalog.get(0).setStatus("DISABLED");
-        when(datasets.countActiveSchedulingReferences(10L)).thenReturn(1);
-        DatasetStoragePlan plan = service.preview("heat");
-        assertEquals(1, plan.getDatasetCount());
+        DatasetStoragePlan plan = service.preview("aggregation", Collections.singletonList(10L), 2);
+
         assertTrue(plan.getAssignments().isEmpty());
-        assertTrue(plan.getNotices().get(0).contains("未完成"));
+        assertTrue(plan.getNotices().get(0).contains("上限"));
     }
 
     @Test
-    void existingReplicasAndFullTargetsDoNotCauseDuplicateCopies() {
-        when(datasets.listReplicas(9L)).thenReturn(Arrays.asList(
-                availableReplica(109L, 9L, 1, "/dataset/9.npz"),
-                availableReplica(200L, 9L, 2, "/dataset/9.npz")));
-        nodes.selectAllNodes().get(2).setNumDataset(0);
-        DatasetStoragePlan plan = service.preview("heat");
-        assertTrue(plan.getAssignments().stream().noneMatch(a -> a.getDatasetId().equals(9L)));
+    void policyReportsTheHeatPlacementThresholds() {
+        assertEquals(30.0, service.policy().get("heatThreshold"));
+        assertEquals(1.0, service.policy().get("minLatencyGainMs"));
     }
 
     private RegisteredDataset dataset(long id, double heat) {
