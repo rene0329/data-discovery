@@ -181,6 +181,65 @@ class InPlacePlacementServiceTest {
                 .place(Collections.singletonList(replica(1, 5))).getComputeNode().getNodeName());
     }
 
+    @Test
+    void aFullSameSiteComputeNodeFallsBackToTheSecondBestNode() {
+        // The outline's case: yelp (sz-2) and epinions (sz-3) both prefer cluster-sz-1, which has room
+        // for one 2-CPU Job; epinions then runs on master-215, and master-40 stays excluded.
+        NodeManagement sz1 = node(13, "cluster-sz-1", "compute", "sz");
+        NodeManagement sz2 = node(12, "cluster-sz-2", "storage", "sz");
+        NodeManagement sz3 = node(11, "cluster-sz-3", "storage", "sz");
+        for (NodeManagement node : Arrays.asList(sz1, sz2, sz3)) when(nodes.getNodeById(node.getNodeId())).thenReturn(node);
+        List<NodeManagement> compute = Arrays.asList(master40, master215, sh1, sz1);
+        paths(11, path(13, 0.523, 4277L), path(3, 31.192, 114L), path(1, 31.430, 114L), path(7, 45.675, 6L));
+        NodeResourceLedger ledger = new NodeResourceLedger();
+        ledger.put("cluster-sz-1", 3.875, 7.18);
+        ledger.put("master-215", 102.5, 228.0);
+        JobResourceDemand demand = JobResourceDemand.of(2.0, 1.0);
+        InPlacePlacementService placement = centralAware("master-40", "");
+
+        InPlacePlacementService.Placement yelp = placement.place(
+                Collections.singletonList(replica(1, 12)), compute, demand, ledger);
+        InPlacePlacementService.Placement epinions = placement.place(
+                Collections.singletonList(replica(2, 11)), compute, demand, ledger);
+
+        assertEquals("cluster-sz-1", yelp.getComputeNode().getNodeName());
+        assertNull(yelp.getResourceNote());
+        assertEquals(InPlacePlacementService.Tier.NEAREST, epinions.getTier());
+        assertEquals("master-215", epinions.getComputeNode().getNodeName());
+        assertEquals("cluster-sz-1 资源不足（需要 2 CPU / 1 GiB，空闲 1.88 CPU / 6.18 GiB）", epinions.getResourceNote());
+    }
+
+    @Test
+    void aFullLocalComputeNodeIsSkippedToo() {
+        paths(7, path(3, 14.483, 6L), path(1, 14.245, 6L));
+        NodeResourceLedger ledger = new NodeResourceLedger();
+        ledger.put("cluster-sh-1", 0.5, 7.0);
+
+        InPlacePlacementService.Placement result = centralAware("master-40", "").place(
+                Collections.singletonList(replica(1, 7)), Arrays.asList(master40, master215, sh1),
+                JobResourceDemand.of(2.0, 1.0), ledger);
+
+        assertEquals("master-215", result.getComputeNode().getNodeName());
+        assertTrue(result.getResourceNote().startsWith("cluster-sh-1 资源不足"));
+    }
+
+    @Test
+    void noPlacementWhenNoReachableComputeNodeHasRoom() {
+        paths(5, path(1, 6.436, 140L), path(3, 6.446, 140L));
+        NodeResourceLedger ledger = new NodeResourceLedger();
+        ledger.put("master-40", 1.0, 1.0);
+        ledger.put("master-215", 1.0, 1.0);
+
+        InPlacePlacementService.Placement result = centralAware("master-40", "").place(
+                Collections.singletonList(replica(1, 5)), Arrays.asList(master40, master215),
+                JobResourceDemand.of(2.0, 1.0), ledger);
+
+        assertFalse(result.isFound());
+        assertTrue(result.getRejectedReasons().get(0).startsWith("no compute node has enough free resources: "));
+        assertTrue(result.getRejectedReasons().get(0).contains("master-215 资源不足"));
+        assertTrue(result.getRejectedReasons().get(0).contains("master-40 资源不足"));
+    }
+
     private InPlacePlacementService centralAware(String name, String ip) {
         return new InPlacePlacementService(nodes, replicas, nodeAvailability, topology, name, ip);
     }

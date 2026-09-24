@@ -275,7 +275,7 @@ public class TaskV1Service {
             checks.add(centralNodeCheck(availableNodes));
         }
         if (MODE_IN_PLACE.equals(executionMode) || MODE_COMPARISON.equals(executionMode)) {
-            checks.addAll(inPlaceChecks(request.getDatasetIds(), availableNodes));
+            checks.addAll(inPlaceChecks(request.getDatasetIds(), availableNodes, request.getResourceOverrides()));
         }
         return new TaskPreflightResult(checks, executionMode);
     }
@@ -295,18 +295,22 @@ public class TaskV1Service {
                 MODE_CENTRALIZED);
     }
 
-    private List<TaskPreflightCheck> inPlaceChecks(List<Long> datasetIds, List<NodeManagement> availableNodes) {
+    private List<TaskPreflightCheck> inPlaceChecks(List<Long> datasetIds, List<NodeManagement> availableNodes,
+                                                   ResourceRequirements overrides) {
         // Distributed placement is decided by InPlacePlacementService, the same helper the
         // orchestrator uses: the replica's own compute node, else a compute node in the
-        // replica's site, else the nearest reachable compute node in any site.
+        // replica's site, else the nearest reachable compute node in any site. Like the
+        // orchestrator, the datasets share one resource ledger in request order.
         List<TaskPreflightCheck> checks = new ArrayList<>();
+        NodeResourceLedger ledger = inPlacePlacement.resourceLedger(availableNodes);
         for (Long datasetId : datasetIds) {
             RegisteredDataset dataset = datasetMapper.findDatasetById(datasetId);
             List<DatasetReplica> replicas = dataset == null || !"ACTIVE".equals(dataset.getStatus())
                     ? Collections.emptyList() : datasetMapper.listReplicas(datasetId);
-            InPlacePlacementService.Placement placement = inPlacePlacement.place(replicas, availableNodes);
+            InPlacePlacementService.Placement placement = inPlacePlacement.place(replicas, availableNodes,
+                    dataset == null ? null : K8sTaskOrchestratorService.jobDemand(dataset, overrides), ledger);
             boolean found = placement.isFound();
-            String reason = found ? crossSiteNote(placement)
+            String reason = found ? placementNote(placement)
                     : dataset == null ? "registered dataset not found: " + datasetId
                     : placement.getRejectedReasons().isEmpty()
                         ? "dataset has no replicas: " + datasetId
@@ -318,6 +322,14 @@ public class TaskV1Service {
                     "DATASET_NO_IN_PLACE_COMPUTE_REPLICA", reason, MODE_IN_PLACE));
         }
         return checks;
+    }
+
+    /** Why the run is not on the first-choice node (resources) and/or leaves the replica's site. */
+    private static String placementNote(InPlacePlacementService.Placement placement) {
+        String crossSite = crossSiteNote(placement);
+        if (placement.getResourceNote() == null) return crossSite;
+        String resource = placement.getResourceNote() + "，改用次优计算节点 " + placement.getComputeNode().getNodeName();
+        return crossSite == null ? resource : resource + "; " + crossSite;
     }
 
     /** Informational note for a cross-site fallback; null when the run stays inside the replica's site. */

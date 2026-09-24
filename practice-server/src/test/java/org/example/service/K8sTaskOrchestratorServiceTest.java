@@ -664,6 +664,70 @@ class K8sTaskOrchestratorServiceTest {
                 && Boolean.TRUE.equals(summary.getExecutionEvidenceComplete())));
     }
 
+    @Test
+    void datasetsOfOneTaskShareTheNodeResourcesInRequestOrder() {
+        // cluster-sz-1 has room for one 2-CPU Job: yelp takes it, epinions runs on master-215.
+        DatasetRegistrationMapper datasets = mock(DatasetRegistrationMapper.class);
+        NodeManagementMapper nodes = mock(NodeManagementMapper.class);
+        TaskManagementMapper tasks = mock(TaskManagementMapper.class);
+        RuntimeImageMapper images = mock(RuntimeImageMapper.class);
+        K8sJobFactory jobs = mock(K8sJobFactory.class);
+        DatasetReplicaAvailabilityService availability = mock(DatasetReplicaAvailabilityService.class);
+        DatasetAccessAuthorizationService authorization = mock(DatasetAccessAuthorizationService.class);
+        NetworkTopologyService topology = mock(NetworkTopologyService.class);
+        NodeManagement master215 = NodeManagement.builder().nodeId(2).nodeName("master-215").type("compute").siteCode("core").build();
+        NodeManagement sz1 = NodeManagement.builder().nodeId(9).nodeName("cluster-sz-1").type("compute").siteCode("sz").build();
+        NodeManagement sz2 = NodeManagement.builder().nodeId(8).nodeName("cluster-sz-2").type("storage").siteCode("sz").build();
+        NodeManagement sz3 = NodeManagement.builder().nodeId(7).nodeName("cluster-sz-3").type("storage").siteCode("sz").build();
+        when(nodes.getComputeCapableNodes()).thenReturn(Arrays.asList(master215, sz1));
+        for (NodeManagement node : Arrays.asList(master215, sz1, sz2, sz3)) {
+            when(nodes.getNodeById(node.getNodeId())).thenReturn(node);
+            when(nodes.getNodeByName(node.getNodeName())).thenReturn(node);
+        }
+        Map<Integer, NetworkTopologyService.NetworkPath> fromSz3 = new java.util.HashMap<>();
+        fromSz3.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(7, 9), 0.523, 4277L));
+        fromSz3.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(7, 9, 2), 31.192, 114L));
+        when(topology.pathsFrom(7)).thenReturn(fromSz3);
+        registerDataset(datasets, availability, 6L, "yelp", 8);
+        registerDataset(datasets, availability, 4L, "epinions", 7);
+        RuntimeImage image = RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true)
+                .resolvedDigest("sha256:image").commandJson("[\"python\"]")
+                .argsTemplateJson("[\"run.py\"]").build();
+        when(images.findById(7L)).thenReturn(image);
+        AccessAuthorizationResult grant = new AccessAuthorizationResult();
+        grant.setToken("scoped-read-token");
+        when(authorization.issueInternal(any(), any())).thenReturn(grant);
+        when(jobs.createDataProcessingJob(anyString(), anyString(), anyString(), anyString(), anyString(),
+                isNull(), any(), any(), any(), same(image), eq("scoped-read-token")))
+                .thenThrow(new IllegalStateException("unit test stop"));
+        NodeResourceLedger ledger = new NodeResourceLedger();
+        ledger.put("cluster-sz-1", 3.875, 7.18);
+        ledger.put("master-215", 102.5, 228.0);
+        NodeResourceService resources = mock(NodeResourceService.class);
+        when(resources.snapshot(any())).thenReturn(ledger);
+        NodeAvailabilityService nodeAvailability = mock(NodeAvailabilityService.class);
+        when(nodeAvailability.isSchedulable(any())).thenReturn(true);
+        InPlacePlacementService placement = new InPlacePlacementService(nodes, availability, nodeAvailability,
+                topology, "master-40", "", resources);
+        K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
+                mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
+                jobs, datasets, images, new ObjectMapper(), "master-40", "", Runnable::run,
+                availability, mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
+                authorization, placement, mock(DatasetHeatService.class));
+        org.example.dto.registration.ResourceRequirements overrides = new org.example.dto.registration.ResourceRequirements();
+        overrides.setCpu(2.0);
+
+        service.executeRegisteredTask(30, Arrays.asList(6L, 4L), 7L, overrides, "IN_PLACE");
+
+        verify(jobs).createDataProcessingJob(startsWith("in-place-"), eq("cluster-sz-2"), eq("yelp.npz"),
+                eq("/dataset/yelp.npz"), eq("cluster-sz-1"), isNull(), eq(2.0), any(), any(), same(image),
+                eq("scoped-read-token"));
+        verify(jobs).createDataProcessingJob(startsWith("in-place-"), eq("cluster-sz-3"), eq("epinions.npz"),
+                eq("/dataset/epinions.npz"), eq("master-215"), isNull(), eq(2.0), any(), any(), same(image),
+                eq("scoped-read-token"));
+        verify(resources, times(1)).snapshot(any());
+    }
+
     private static InPlacePlacementService placement(NodeManagementMapper nodes,
                                                      DatasetReplicaAvailabilityService availability) {
         return placement(nodes, availability, mock(NetworkTopologyService.class));

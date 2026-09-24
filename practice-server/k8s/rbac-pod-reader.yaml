@@ -1,0 +1,25 @@
+# Lets practice-server count the resources already requested on each compute node
+# (allocatable minus the requests of every pod bound to it), which needs pods in every
+# namespace. Read-only. practice-server runs as the topic4-1 default ServiceAccount,
+# the same subject the existing node-reader binding uses.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: topic4-1-pod-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: topic4-1-practice-server-pod-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: topic4-1-pod-reader
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: topic4-1

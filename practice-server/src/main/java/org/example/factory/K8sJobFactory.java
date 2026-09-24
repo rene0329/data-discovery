@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.entity.NodeManagement;
 import org.example.entity.RuntimeImage;
 import org.example.service.DataTransferAddressResolver;
+import org.example.service.JobResourceDemand;
 import org.example.service.NetworkTopologyService;
 import org.example.mapper.NodeManagementMapper;
 import org.example.service.NodeAvailabilityService;
@@ -304,8 +305,9 @@ public class K8sJobFactory {
 
         // 未显式传入 runtimeImage 时，不再按数据集文件名猜测训练配置（旧的 training_profile
         // 关键字匹配已随注册中心的 RuntimeImage 体系下线），一律用固定的通用默认值。
-        double effectiveCpu = cpuRequest != null ? cpuRequest : 0.5;
-        double effectiveMem = memoryRequest != null ? memoryRequest : 1.0;
+        JobResourceDemand demand = JobResourceDemand.of(cpuRequest, memoryRequest);
+        double effectiveCpu = demand.getCpu();
+        double effectiveMem = demand.getMemoryGi();
         double effectiveGpu = gpuRequest != null ? gpuRequest
                 : (runtimeImage != null && runtimeImage.getDefaultGpu() != null ? runtimeImage.getDefaultGpu() : 0.0);
         String selectedMainImage = runtimeImage != null

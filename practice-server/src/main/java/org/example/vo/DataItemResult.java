@@ -21,4 +21,6 @@ public class DataItemResult {
     private Long inputBytes;
     private String inputChecksumSha256;
     private String outputChecksumSha256;
+    /** Better compute nodes skipped for lack of free resources (IN_PLACE); null when the first choice fit. */
+    private String placementNote;
 }

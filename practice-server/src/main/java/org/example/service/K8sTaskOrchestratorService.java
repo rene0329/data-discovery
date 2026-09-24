@@ -168,9 +168,11 @@ public class K8sTaskOrchestratorService {
                 executeComparisonTask(taskId, datasetIds, explicitRuntimeImageId, overrides);
                 return;
             }
+            Map<Long, InPlacePlacementService.Placement> inPlacePlan = TaskV1Service.MODE_IN_PLACE.equals(normalizedMode)
+                    ? planInPlace(datasetIds, overrides) : Collections.<Long, InPlacePlacementService.Placement>emptyMap();
             List<CompletableFuture<DataItemResult>> futures = datasetIds.stream()
                     .map(datasetId -> submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
-                            overrides, normalizedMode))
+                            overrides, normalizedMode, inPlacePlan.get(datasetId)))
                     .collect(Collectors.toList());
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
@@ -202,12 +204,13 @@ public class K8sTaskOrchestratorService {
                                        ResourceRequirements overrides) {
         List<CompletableFuture<DataItemResult>> inPlaceFutures = new ArrayList<>();
         List<CompletableFuture<DataItemResult>> centralizedFutures = new ArrayList<>();
+        Map<Long, InPlacePlacementService.Placement> inPlacePlan = planInPlace(datasetIds, overrides);
         // 按数据集交替提交两种模式：线程池排队时，两种模式获得同等的启动机会。
         for (Long datasetId : datasetIds) {
             inPlaceFutures.add(submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
-                    overrides, TaskV1Service.MODE_IN_PLACE));
+                    overrides, TaskV1Service.MODE_IN_PLACE, inPlacePlan.get(datasetId)));
             centralizedFutures.add(submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
-                    overrides, TaskV1Service.MODE_CENTRALIZED));
+                    overrides, TaskV1Service.MODE_CENTRALIZED, null));
         }
         List<CompletableFuture<DataItemResult>> all = new ArrayList<>(inPlaceFutures);
         all.addAll(centralizedFutures);
@@ -230,13 +233,39 @@ public class K8sTaskOrchestratorService {
         recordDatasetReads(taskId, readDatasets);
     }
 
+    /**
+     * 一个任务的分布式放置按数据集顺序一次算完，并在同一份节点资源账本上预留：
+     * 前面的数据集占用了某计算节点的资源，后面的数据集就会看到该节点资源不足而改用次优节点。
+     */
+    private Map<Long, InPlacePlacementService.Placement> planInPlace(List<Long> datasetIds,
+                                                                     ResourceRequirements overrides) {
+        Map<Long, InPlacePlacementService.Placement> plan = new java.util.HashMap<>();
+        List<NodeManagement> computeNodes = inPlacePlacement.schedulableComputeNodes();
+        NodeResourceLedger ledger = inPlacePlacement.resourceLedger(computeNodes);
+        for (Long datasetId : datasetIds) {
+            RegisteredDataset dataset = datasetRegistrationMapper.findDatasetById(datasetId);
+            if (dataset == null || !"ACTIVE".equals(dataset.getStatus()) || plan.containsKey(datasetId)) continue;
+            plan.put(datasetId, inPlacePlacement.place(datasetRegistrationMapper.listReplicas(datasetId),
+                    computeNodes, jobDemand(dataset, overrides), ledger));
+        }
+        return plan;
+    }
+
+    /** 与 processRegisteredDataItem 写入 Job 的 CPU/内存请求一致。 */
+    static JobResourceDemand jobDemand(RegisteredDataset dataset, ResourceRequirements overrides) {
+        return JobResourceDemand.of(
+                overrides != null && overrides.getCpu() != null ? overrides.getCpu() : dataset.getRequiredCpu(),
+                overrides != null && overrides.getMemoryGi() != null ? overrides.getMemoryGi() : dataset.getRequiredMemoryGi());
+    }
+
     private CompletableFuture<DataItemResult> submitRegisteredDataItem(Integer taskId, Long datasetId,
                                                                        Long explicitRuntimeImageId,
                                                                        ResourceRequirements overrides,
-                                                                       String executionMode) {
+                                                                       String executionMode,
+                                                                       InPlacePlacementService.Placement planned) {
         return CompletableFuture.supplyAsync(
                 () -> processRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
-                        overrides, executionMode),
+                        overrides, executionMode, planned),
                 dataProcessingExecutor).exceptionally(ex -> {
             log.error("注册数据集 {} ({}) 处理失败: {}", datasetId, executionMode, ex.getMessage());
             return null;
@@ -474,7 +503,8 @@ public class K8sTaskOrchestratorService {
     private DataItemResult processRegisteredDataItem(Integer taskId, Long datasetId,
                                                      Long explicitRuntimeImageId,
                                                      ResourceRequirements overrides,
-                                                     String executionMode) {
+                                                     String executionMode,
+                                                     InPlacePlacementService.Placement planned) {
         RegisteredDataset dataset = datasetRegistrationMapper.findDatasetById(datasetId);
         if (dataset == null || !"ACTIVE".equals(dataset.getStatus())) {
             throw new IllegalStateException("数据集不存在或不再处于 ACTIVE: " + datasetId);
@@ -482,17 +512,22 @@ public class K8sTaskOrchestratorService {
         List<DatasetReplica> replicas = datasetRegistrationMapper.listReplicas(datasetId);
         String targetNodeName;
         DatasetReplica replica;
+        String placementNote = null;
         if (TaskV1Service.MODE_IN_PLACE.equals(executionMode)) {
             // Same helper as TaskV1Service preflight: the replica's own compute node, else a
             // compute node in the replica's site, else the nearest reachable compute node in
             // any site (by network latency, then bandwidth).
-            InPlacePlacementService.Placement placement = inPlacePlacement.place(replicas);
+            InPlacePlacementService.Placement placement = planned != null ? planned : inPlacePlacement.place(replicas);
             if (!placement.isFound()) {
                 throw new IllegalStateException("数据集没有可到达计算节点的可用副本: " + datasetId
                         + " (" + String.join("; ", placement.getRejectedReasons()) + ")");
             }
             replica = placement.getReplica();
             targetNodeName = placement.getComputeNode().getNodeName();
+            if (placement.getResourceNote() != null) {
+                placementNote = placement.getResourceNote() + "，改用次优计算节点";
+                log.info("数据集 {} 分布式执行：{} -> {}", datasetId, placementNote, targetNodeName);
+            }
             if (placement.getTier() == InPlacePlacementService.Tier.NEAREST) {
                 log.info("数据集 {} 分布式执行跨站点回退: {} -> {} ({} ms)", datasetId,
                         placement.getReplicaNode().getNodeName(), targetNodeName,
@@ -564,7 +599,9 @@ public class K8sTaskOrchestratorService {
         result.setSourceNodeName(sourceNode.getNodeName());
         result.setTargetNodeName(selectedNodeOut.get());
         result.setScheduleT1(dataset.getDatasetCode() + ": " + sourceNode.getNodeName()
-                + " -> " + selectedNodeOut.get() + " [" + executionMode + "]");
+                + " -> " + selectedNodeOut.get() + " [" + executionMode + "]"
+                + (placementNote == null ? "" : "（" + placementNote + "）"));
+        result.setPlacementNote(placementNote);
         result.setPreparationStartedAt(evidence.preparationStartedAt);
         result.setPreparationReadyAt(evidence.preparationReadyAt);
         result.setComputeStartedAt(evidence.computeStartedAt);
@@ -1307,7 +1344,8 @@ public class K8sTaskOrchestratorService {
     private String comparisonScheduleLine(String datasetLabel, DataItemResult result) {
         return result == null
                 ? datasetLabel + ": 执行失败"
-                : datasetLabel + ": " + result.getSourceNodeName() + " -> " + result.getTargetNodeName();
+                : datasetLabel + ": " + result.getSourceNodeName() + " -> " + result.getTargetNodeName()
+                        + (result.getPlacementNote() == null ? "" : "（" + result.getPlacementNote() + "）");
     }
 
     private boolean hasCompleteEvidence(DataItemResult result) {
