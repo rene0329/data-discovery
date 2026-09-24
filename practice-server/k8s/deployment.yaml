@@ -39,9 +39,12 @@ spec:
               value: "10.15.16.40"
             - name: DISPATCH_CENTRAL_NODE_NAME
               value: "master-40"
-            # 模拟带宽受限：到分布式计算节点 master-215 限 2.5 MiB/s，到中心节点 master-40 限 1.5 MiB/s。
+            # 模拟带宽受限：到中心节点 master-40 限 1536k（1.5 MiB/s），到分布式计算节点
+            # （sh-1/sz-1/bj-1/master-215）限 2074k，为中心链路的 1.35 倍。两侧限速都低于实测带宽，
+            # 搬运耗时由限速决定，加速比稳定在约 1.35。cluster-sh-2 到中心的隧道实测只有约 0.65 MiB/s，
+            # 单独限 256k/346k（同为 1.35 倍），两路并发时仍低于真实带宽。
             - name: DISPATCH_JOB_CURL_LIMIT_RATE_PATHS
-              value: "*->master-215=2560k,*->master-40=1536k"
+              value: "cluster-sh-2->master-40=256k,cluster-sh-2->*=346k,*->master-40=1536k,*->cluster-sh-1=2074k,*->cluster-sz-1=2074k,*->cluster-bj-1=2074k,*->master-215=2074k"
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS
