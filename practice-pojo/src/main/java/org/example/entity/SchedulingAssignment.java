@@ -17,7 +17,9 @@ public class SchedulingAssignment {
     private Long datasetId;
     private Long replicaId;
     private Integer sourceNodeId;
+    private String sourceNodeName;
     private Integer targetNodeId;
+    private String targetNodeName;
     private String action;
     private String status;
     private String errorMessage;

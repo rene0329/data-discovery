@@ -89,6 +89,7 @@ class SchedulingControllerTest {
         SchedulingPlan plan = SchedulingPlan.builder().planId(40L).status("PARTIAL_COMPLETED").build();
         SchedulingAssignment assignment = SchedulingAssignment.builder().assignmentId(50L).planId(40L)
                 .datasetId(10L).replicaId(20L).sourceNodeId(3).targetNodeId(4)
+                .sourceNodeName("source-node").targetNodeName("target-node")
                 .action("COPY_AND_USE").status("FAILED").errorMessage("copy failed")
                 .updatedAt(LocalDateTime.of(2026, 9, 2, 20, 30)).build();
         when(service.getPlan(40L)).thenReturn(new SchedulingPlanDetail(plan, Collections.singletonList(assignment)));
@@ -97,7 +98,9 @@ class SchedulingControllerTest {
                 .andExpect(status().isOk()).andExpect(jsonPath("$.code").value(0))
                 .andExpect(jsonPath("$.data.plan.status").value("PARTIAL_COMPLETED"))
                 .andExpect(jsonPath("$.data.assignments[0].datasetId").value(10))
+                .andExpect(jsonPath("$.data.assignments[0].sourceNodeName").value("source-node"))
                 .andExpect(jsonPath("$.data.assignments[0].targetNodeId").value(4))
+                .andExpect(jsonPath("$.data.assignments[0].targetNodeName").value("target-node"))
                 .andExpect(jsonPath("$.data.assignments[0].errorMessage").value("copy failed"))
                 .andExpect(jsonPath("$.data.assignments[0].updatedAt").value("2026-09-02 20:30"));
     }

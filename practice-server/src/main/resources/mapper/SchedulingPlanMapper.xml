@@ -21,7 +21,9 @@
         <result property="datasetId" column="dataset_id"/>
         <result property="replicaId" column="replica_id"/>
         <result property="sourceNodeId" column="source_node_id"/>
+        <result property="sourceNodeName" column="source_node_name"/>
         <result property="targetNodeId" column="target_node_id"/>
+        <result property="targetNodeName" column="target_node_name"/>
         <result property="action" column="action"/>
         <result property="status" column="status"/>
         <result property="errorMessage" column="error_message"/>
@@ -56,7 +58,13 @@
     </select>
 
     <select id="listAssignments" resultMap="AssignmentMap">
-        SELECT * FROM scheduling_assignment WHERE plan_id = #{planId} ORDER BY assignment_id
+        SELECT assignment.*, source_node.node_name AS source_node_name,
+               target_node.node_name AS target_node_name
+        FROM scheduling_assignment assignment
+        LEFT JOIN node_management source_node ON source_node.node_id = assignment.source_node_id
+        LEFT JOIN node_management target_node ON target_node.node_id = assignment.target_node_id
+        WHERE assignment.plan_id = #{planId}
+        ORDER BY assignment.assignment_id
     </select>
 
     <sql id="PlanFilters">
