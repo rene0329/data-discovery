@@ -383,7 +383,7 @@
          discovery candidate for that path. No FK references dataset_replica; historical
          rows (scheduling_assignment.replica_id, dataset_access_event.source_replica_id)
          keep the plain id and are intentionally left untouched. -->
-    <delete id="deleteReplica">
+    <delete id="deleteReplicaForDataset">
         DELETE FROM dataset_replica WHERE replica_id = #{replicaId} AND dataset_id = #{datasetId}
     </delete>
 
