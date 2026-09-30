@@ -367,7 +367,7 @@ public class FileDiscoveryService {
             if (replica != null) {
                 log.warn("文件 '{}' 连续 {} 轮未观测到，确认丢失：删除注册副本记录 (replicaId={})",
                         path, missingConfirmScans, replica.getReplicaId());
-                datasetRegistrationMapper.deleteReplica(replica.getReplicaId());
+                datasetRegistrationMapper.deleteReplicaById(replica.getReplicaId());
             } else {
                 log.warn("文件 '{}' 连续 {} 轮未观测到，确认丢失：删除扫描候选记录", path, missingConfirmScans);
             }

@@ -601,7 +601,7 @@ public class DatasetRegistrationService {
             }
         }
 
-        mapper.deleteReplicaForDataset(replicaId, datasetId);
+        mapper.deleteReplica(replicaId, datasetId);
         int candidates = mapper.deleteCandidateByNodePath(replica.getNodeId(), replica.getFilePath());
         Map<String, Object> detail = new java.util.LinkedHashMap<>();
         detail.put("replicaId", replicaId);

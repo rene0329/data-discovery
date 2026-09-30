@@ -82,7 +82,7 @@ class DatasetReplicaRemovalServiceTest {
         order.verify(mapper).lockDataset(42L);
         order.verify(mapper).lockStorageNode(3);
         order.verify(uploadClient).delete(node, PATH, 42L, "1.0", "replica-delete-100-req-1", null);
-        order.verify(mapper).deleteReplicaForDataset(100L, 42L);
+        order.verify(mapper).deleteReplica(100L, 42L);
         order.verify(mapper).deleteCandidateByNodePath(3, PATH);
         verify(mapper).countActiveTaskReferences(42L, "sales");
         verify(mapper).countActiveMigrationReferences(42L, 7);
@@ -105,7 +105,7 @@ class DatasetReplicaRemovalServiceTest {
         service.removeReplica(42L, 100L, "req-2");
 
         verifyNoInteractions(uploadClient);
-        verify(mapper).deleteReplicaForDataset(100L, 42L);
+        verify(mapper).deleteReplica(100L, 42L);
         verify(mapper).deleteCandidateByNodePath(3, PATH);
         ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
         verify(auditMapper).insert(eq("DATASET"), eq("42"), eq("REMOVE_REPLICA"), anyString(),
@@ -140,7 +140,7 @@ class DatasetReplicaRemovalServiceTest {
         service.removeReplica(42L, 100L, "req-4");
 
         verify(uploadClient).delete(node, PATH, 42L, "1.0", "replica-delete-100-req-4", null);
-        verify(mapper).deleteReplicaForDataset(100L, 42L);
+        verify(mapper).deleteReplica(100L, 42L);
         verify(mapper, never()).listReplicas(any());
     }
 
@@ -238,7 +238,7 @@ class DatasetReplicaRemovalServiceTest {
     }
 
     private void assertNoChanges() {
-        verify(mapper, never()).deleteReplicaForDataset(any(), any());
+        verify(mapper, never()).deleteReplica(any(), any());
         verify(mapper, never()).deleteCandidateByNodePath(any(), any());
         verify(auditMapper, never()).insert(any(), any(), eq("REMOVE_REPLICA"), any(), any(), any());
     }

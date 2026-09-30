@@ -79,7 +79,7 @@ public interface DatasetRegistrationMapper {
     int updateReplicaAvailability(@Param("replicaId") Long replicaId,
                                   @Param("availability") String availability,
                                   @Param("verified") boolean verified);
-    int deleteReplica(@Param("replicaId") Long replicaId);
+    int deleteReplicaById(@Param("replicaId") Long replicaId);
     int updateReplicaIntegrity(@Param("replicaId") Long replicaId,
                                @Param("sizeBytes") Long sizeBytes,
                                @Param("checksumAlgorithm") String checksumAlgorithm,
@@ -88,7 +88,7 @@ public interface DatasetRegistrationMapper {
                                @Param("verificationMessage") String verificationMessage,
                                @Param("verified") boolean verified);
     int countAvailableReplicas(Long datasetId);
-    int deleteReplicaForDataset(@Param("replicaId") Long replicaId, @Param("datasetId") Long datasetId);
+    int deleteReplica(@Param("replicaId") Long replicaId, @Param("datasetId") Long datasetId);
     int deleteCandidateByNodePath(@Param("nodeId") Integer nodeId, @Param("filePath") String filePath);
 
     int upsertDatasetMetadata(DatasetMetadata metadata);
