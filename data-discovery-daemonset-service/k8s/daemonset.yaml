@@ -115,10 +115,10 @@ spec:
               cpu: "200m"
               memory: "256Mi"
             limits:
-              cpu: "500m"
+              cpu: "4"
               memory: "512Mi"
 
-          # Allow cold starts on the 500m CPU-limited edge nodes to finish
+          # Allow cold starts on resource-constrained edge nodes to finish
           # before liveness checks can restart the application.
           startupProbe:
             httpGet:
