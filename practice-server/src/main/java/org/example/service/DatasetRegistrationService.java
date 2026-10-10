@@ -208,8 +208,13 @@ public class DatasetRegistrationService {
             throw RegistrationException.conflict("dataset code and version already exist");
         }
 
-        FileIntegrityResult authority = verifyCandidate(node, candidate,
-                metadataDigest(metadataJson), null, request.getVersion(), requestId);
+        // Registration must only create the catalogue entry.  A strong
+        // verification streams every byte from the storage node and can take
+        // many minutes for a large dataset.  Doing that work here used to keep
+        // this transaction (and a JDBC connection) open for its whole
+        // duration.  Retried UI clicks could therefore exhaust the pool before
+        // the first request completed.  The explicit verify operation below is
+        // the only transition that makes this replica AVAILABLE.
 
         ResourceRequirements resources = request.getRequiredResources();
         RegisteredDataset dataset = RegisteredDataset.builder()
@@ -228,19 +233,16 @@ public class DatasetRegistrationService {
                 .rowVersion(0)
                 .build();
         mapper.insertDataset(dataset);
-        persistDatasetMetadata(dataset.getDatasetId(), metadataJson, request, authority);
+        persistDatasetMetadata(dataset.getDatasetId(), metadataJson, request, candidate);
 
         DatasetReplica replica = DatasetReplica.builder()
                 .datasetId(dataset.getDatasetId())
                 .nodeId(candidate.getNodeId())
                 .filePath(candidate.getFilePath())
-                .sizeBytes(authority.getSizeBytes())
-                .checksumAlgorithm("SHA-256")
-                .checksum(authority.getDigest())
-                .availability("AVAILABLE")
-                .verificationMessage("verified against dataset-version authority")
+                .sizeBytes(candidate.getSizeBytes())
+                .availability("UNVERIFIED")
+                .verificationMessage("registered; explicit SHA-256 verification is required")
                 .lastSeenAt(candidate.getLastSeenAt())
-                .verifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         mapper.insertReplica(replica);
         mapper.markCandidateRegistered(candidate.getCandidateId(), dataset.getDatasetId());
@@ -354,7 +356,6 @@ public class DatasetRegistrationService {
         return getDataset(datasetId);
     }
 
-    @Transactional(noRollbackFor = RegistrationException.class)
     public RegisteredDatasetView verify(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
         requireDatasetMutation(dataset);
@@ -939,16 +940,18 @@ public class DatasetRegistrationService {
 
     private void persistDatasetMetadata(Long datasetId, String metadataJson,
                                         RegisterDatasetRequest request,
-                                        FileIntegrityResult authority) {
+                                        DatasetDiscoveryCandidate candidate) {
         try {
             JsonNode root = blank(metadataJson) ? objectMapper.createObjectNode()
                     : objectMapper.readTree(metadataJson);
             DatasetMetadata metadata = DatasetMetadata.builder()
                     .datasetId(datasetId)
                     .metadataVersion(firstText(text(root, "metadataVersion"), "1.0"))
-                    .authoritativeSizeBytes(authority.getSizeBytes())
-                    .digestAlgorithm("SHA-256")
-                    .digestValue(normalizeSha256(authority.getDigest()))
+                    // A companion manifest may supply an authority in advance;
+                    // otherwise the first explicit verification establishes it.
+                    .authoritativeSizeBytes(candidate.getSizeBytes())
+                    .digestAlgorithm(blank(metadataDigest(metadataJson)) ? null : "SHA-256")
+                    .digestValue(metadataDigest(metadataJson))
                     .schemaJson(json(root.get("schema")))
                     .profileJson(json(root.get("profile")))
                     .sourceJson(json(root.get("source")))
@@ -959,27 +962,6 @@ public class DatasetRegistrationService {
         } catch (JsonProcessingException ex) {
             throw RegistrationException.invalid("invalid dataset metadata JSON");
         }
-    }
-
-    private FileIntegrityResult verifyCandidate(NodeManagement node,
-                                                DatasetDiscoveryCandidate candidate,
-                                                String expectedDigest,
-                                                Long datasetId,
-                                                String datasetVersion,
-                                                String requestId) {
-        FileIntegrityResult measurement = uploadClient.verify(node, candidate.getFilePath(),
-                candidate.getSizeBytes(), expectedDigest, datasetId,
-                datasetVersion, requestId, null);
-        boolean valid = validMeasurement(measurement, candidate.getSizeBytes())
-                && (expectedDigest == null || (measurement.isVerified()
-                    && expectedDigest.equals(normalizeSha256(measurement.getDigest()))));
-        mapper.updateCandidateIntegrity(candidate.getNodeId(), candidate.getFilePath(),
-                measurement.getSizeBytes(), measurement.getAlgorithm(), measurement.getDigest(),
-                valid ? "AVAILABLE" : "VERIFY_FAILED", valid);
-        if (!valid) {
-            throw RegistrationException.invalid("candidate failed SHA-256 verification");
-        }
-        return measurement;
     }
 
     private String metadataDigest(String metadataJson) {

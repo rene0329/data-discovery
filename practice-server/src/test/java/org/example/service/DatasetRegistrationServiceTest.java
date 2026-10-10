@@ -45,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -241,8 +242,15 @@ class DatasetRegistrationServiceTest {
         ArgumentCaptor<DatasetMetadata> metadataCaptor = ArgumentCaptor.forClass(DatasetMetadata.class);
         verify(mapper).upsertDatasetMetadata(metadataCaptor.capture());
         assertEquals("{\"sampleCount\":10}", metadataCaptor.getValue().getProfileJson());
-        assertEquals("SHA-256", metadataCaptor.getValue().getDigestAlgorithm());
-        assertEquals(SHA256, metadataCaptor.getValue().getDigestValue());
+        assertNull(metadataCaptor.getValue().getDigestAlgorithm());
+        assertNull(metadataCaptor.getValue().getDigestValue());
+        verify(uploadClient, never()).verify(any(NodeManagement.class), anyString(),
+                org.mockito.ArgumentMatchers.nullable(Long.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(Long.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class),
+                org.mockito.ArgumentMatchers.nullable(String.class));
     }
 
     @Test
