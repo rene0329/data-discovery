@@ -206,7 +206,9 @@ app:
 
   storage-transfer:
     connect-timeout-ms: 5000
-    read-timeout-ms: 2700000
+    # Full SHA-256 verification of large datasets is an agent-side streaming
+    # operation.  Allow sufficient time for low-throughput shared storage.
+    read-timeout-ms: 10800000
 
   node-sync:
     enabled: true   # 仅 practice-server 启用，heat-update-cronjob 不设此属性故默认 false
