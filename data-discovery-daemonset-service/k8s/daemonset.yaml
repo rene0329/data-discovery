@@ -115,7 +115,6 @@ spec:
               cpu: "200m"
               memory: "256Mi"
             limits:
-              cpu: "4"
               memory: "512Mi"
 
           # Allow cold starts on resource-constrained edge nodes to finish
