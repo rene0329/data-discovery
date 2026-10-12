@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: topic4-master215-aliyun-route
+  namespace: topic4-1
+  labels:
+    app: topic4-master215-aliyun-route
+spec:
+  selector:
+    matchLabels:
+      app: topic4-master215-aliyun-route
+  template:
+    metadata:
+      labels:
+        app: topic4-master215-aliyun-route
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/hostname: master-215
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: route-keeper
+          image: 10.15.16.40:30455/data-discovery-network-probe:v-3d3a1380a4efcadacf5479d35725f7d3b26d391b
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              while true; do
+                ip route replace 10.214.0.0/24 via 10.15.16.40
+                sleep 60
+              done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - NET_ADMIN
+              drop:
+                - ALL
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - ip route show 10.214.0.0/24 | grep -Fq 'via 10.15.16.40'
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
