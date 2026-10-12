@@ -1,0 +1,371 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topic4-zj-hangzhou-uplink-tunnel
+  namespace: topic4-1
+  labels:
+    app: topic4-zj-hangzhou-uplink-tunnel
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: topic4-zj-hangzhou-uplink-tunnel
+  template:
+    metadata:
+      labels:
+        app: topic4-zj-hangzhou-uplink-tunnel
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        kubernetes.io/hostname: master-141
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: tunnel
+          image: 10.15.16.40:30455/data-discovery-network-probe:v-2de5d9b0d6456ca025178774b0851e14c2bb840e
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -ec
+            - |
+              TUN_DEV=tun20
+              cleanup() {
+                ip route del 10.214.0.1/32 dev "$TUN_DEV" 2>/dev/null || true
+                ip addr del 10.214.0.2 peer 10.214.0.1 dev "$TUN_DEV" 2>/dev/null || true
+                if [ -n "${ssh_pid:-}" ]; then kill "$ssh_pid" 2>/dev/null || true; fi
+              }
+              trap cleanup EXIT INT TERM HUP
+              ssh -T -i /ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=10 \
+                -o ConnectionAttempts=1 -o ExitOnForwardFailure=yes \
+                -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/ssh/known_hosts \
+                -w 20:1 root@121.43.57.204 &
+              ssh_pid=$!
+              i=0
+              while [ ! -e /sys/class/net/"$TUN_DEV" ]; do
+                kill -0 "$ssh_pid" 2>/dev/null || wait "$ssh_pid"
+                i=$((i + 1)); [ "$i" -lt 100 ] || exit 1; sleep 0.1
+              done
+              ip link set "$TUN_DEV" up mtu 1400
+              ip addr replace 10.214.0.2 peer 10.214.0.1 dev "$TUN_DEV"
+              ip route replace 10.214.0.1/32 dev "$TUN_DEV" src 10.214.0.2
+              wait "$ssh_pid"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - NET_ADMIN
+              drop:
+                - ALL
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - ip route show 10.214.0.1/32 | grep -Fq 'dev tun20'
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          volumeMounts:
+            - name: ssh
+              mountPath: /ssh
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: ssh
+          secret:
+            secretName: topic4-zj-hangzhou-uplink-ssh
+            defaultMode: 0400
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topic4-zj-shenzhen-uplink-tunnel
+  namespace: topic4-1
+  labels:
+    app: topic4-zj-shenzhen-uplink-tunnel
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: topic4-zj-shenzhen-uplink-tunnel
+  template:
+    metadata:
+      labels:
+        app: topic4-zj-shenzhen-uplink-tunnel
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        kubernetes.io/hostname: master-215
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: tunnel
+          image: 10.15.16.40:30455/data-discovery-network-probe:v-2de5d9b0d6456ca025178774b0851e14c2bb840e
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -ec
+            - |
+              TUN_DEV=tun20
+              cleanup() {
+                ip route del 10.214.0.13/32 dev "$TUN_DEV" 2>/dev/null || true
+                ip route del 10.214.0.15/32 dev "$TUN_DEV" 2>/dev/null || true
+                ip route del 10.214.0.17/32 dev "$TUN_DEV" 2>/dev/null || true
+                ip addr del 10.214.0.14 peer 10.214.0.13 dev "$TUN_DEV" 2>/dev/null || true
+                if [ -n "${ssh_pid:-}" ]; then kill "$ssh_pid" 2>/dev/null || true; fi
+              }
+              trap cleanup EXIT INT TERM HUP
+              ssh -T -i /ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=10 \
+                -o ConnectionAttempts=1 -o ExitOnForwardFailure=yes \
+                -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/ssh/known_hosts \
+                -w 20:1 root@47.106.118.163 &
+              ssh_pid=$!
+              i=0
+              while [ ! -e /sys/class/net/"$TUN_DEV" ]; do
+                kill -0 "$ssh_pid" 2>/dev/null || wait "$ssh_pid"
+                i=$((i + 1)); [ "$i" -lt 100 ] || exit 1; sleep 0.1
+              done
+              ip link set "$TUN_DEV" up mtu 1400
+              ip addr replace 10.214.0.14 peer 10.214.0.13 dev "$TUN_DEV"
+              ip route replace 10.214.0.13/32 dev "$TUN_DEV" src 10.214.0.14
+              ip route replace 10.214.0.15/32 dev "$TUN_DEV" src 10.214.0.14
+              ip route replace 10.214.0.17/32 dev "$TUN_DEV" src 10.214.0.14
+              wait "$ssh_pid"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - NET_ADMIN
+              drop:
+                - ALL
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - ip route show 10.214.0.13/32 | grep -Fq 'dev tun20'
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          volumeMounts:
+            - name: ssh
+              mountPath: /ssh
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: ssh
+          secret:
+            secretName: topic4-zj-shenzhen-uplink-ssh
+            defaultMode: 0400
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topic4-zj-shenzhen-2-uplink-tunnel
+  namespace: topic4-1
+  labels:
+    app: topic4-zj-shenzhen-2-uplink-tunnel
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: topic4-zj-shenzhen-2-uplink-tunnel
+  template:
+    metadata:
+      labels:
+        app: topic4-zj-shenzhen-2-uplink-tunnel
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        kubernetes.io/hostname: master-215
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: tunnel
+          image: 10.15.16.40:30455/data-discovery-network-probe:v-2de5d9b0d6456ca025178774b0851e14c2bb840e
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -ec
+            - |
+              TUN_DEV=tun21
+              cleanup() {
+                ip route del 10.214.0.15/32 dev "$TUN_DEV" 2>/dev/null || true
+                ip addr del 10.214.0.16 peer 10.214.0.15 dev "$TUN_DEV" 2>/dev/null || true
+                if [ -n "${ssh_pid:-}" ]; then kill "$ssh_pid" 2>/dev/null || true; fi
+              }
+              trap cleanup EXIT INT TERM HUP
+              ssh -T -i /ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=10 \
+                -o ConnectionAttempts=1 -o ExitOnForwardFailure=yes \
+                -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/ssh/known_hosts \
+                -w 21:1 root@39.108.103.141 &
+              ssh_pid=$!
+              i=0
+              while [ ! -e /sys/class/net/"$TUN_DEV" ]; do
+                kill -0 "$ssh_pid" 2>/dev/null || wait "$ssh_pid"
+                i=$((i + 1)); [ "$i" -lt 100 ] || exit 1; sleep 0.1
+              done
+              ip link set "$TUN_DEV" up mtu 1400
+              ip addr replace 10.214.0.16 peer 10.214.0.15 dev "$TUN_DEV"
+              ip route replace 10.214.0.15/32 dev "$TUN_DEV" src 10.214.0.16
+              wait "$ssh_pid"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - NET_ADMIN
+              drop:
+                - ALL
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - ip route show 10.214.0.15/32 | grep -Fq 'dev tun21'
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          volumeMounts:
+            - name: ssh
+              mountPath: /ssh
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: ssh
+          secret:
+            secretName: topic4-zj-shenzhen-2-uplink-ssh
+            defaultMode: 0400
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: topic4-zj-shenzhen-3-uplink-tunnel
+  namespace: topic4-1
+  labels:
+    app: topic4-zj-shenzhen-3-uplink-tunnel
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: topic4-zj-shenzhen-3-uplink-tunnel
+  template:
+    metadata:
+      labels:
+        app: topic4-zj-shenzhen-3-uplink-tunnel
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        kubernetes.io/hostname: master-215
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: tunnel
+          image: 10.15.16.40:30455/data-discovery-network-probe:v-2de5d9b0d6456ca025178774b0851e14c2bb840e
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -ec
+            - |
+              TUN_DEV=tun22
+              cleanup() {
+                ip route del 10.214.0.17/32 dev "$TUN_DEV" 2>/dev/null || true
+                ip addr del 10.214.0.18 peer 10.214.0.17 dev "$TUN_DEV" 2>/dev/null || true
+                if [ -n "${ssh_pid:-}" ]; then kill "$ssh_pid" 2>/dev/null || true; fi
+              }
+              trap cleanup EXIT INT TERM HUP
+              ssh -T -i /ssh/id_ed25519 -o BatchMode=yes -o ConnectTimeout=10 \
+                -o ConnectionAttempts=1 -o ExitOnForwardFailure=yes \
+                -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/ssh/known_hosts \
+                -w 22:1 root@47.106.22.3 &
+              ssh_pid=$!
+              i=0
+              while [ ! -e /sys/class/net/"$TUN_DEV" ]; do
+                kill -0 "$ssh_pid" 2>/dev/null || wait "$ssh_pid"
+                i=$((i + 1)); [ "$i" -lt 100 ] || exit 1; sleep 0.1
+              done
+              ip link set "$TUN_DEV" up mtu 1400
+              ip addr replace 10.214.0.18 peer 10.214.0.17 dev "$TUN_DEV"
+              ip route replace 10.214.0.17/32 dev "$TUN_DEV" src 10.214.0.18
+              wait "$ssh_pid"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              add:
+                - NET_ADMIN
+              drop:
+                - ALL
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -ec
+                - ip route show 10.214.0.17/32 | grep -Fq 'dev tun22'
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          volumeMounts:
+            - name: ssh
+              mountPath: /ssh
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: ssh
+          secret:
+            secretName: topic4-zj-shenzhen-3-uplink-ssh
+            defaultMode: 0400
