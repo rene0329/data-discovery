@@ -39,11 +39,12 @@ spec:
               value: "10.15.16.40"
             - name: DISPATCH_CENTRAL_NODE_NAME
               value: "master-40"
-            # 将加速比控制在 1.4–1.5：通用中心路径限 1280k，分布式计算路径
-            # （sh-1/sz-1/bj-1/master-215）限 1856k，理论比值为 1.45。两侧上限均低于当前实测带宽，
-            # 为真实出口波动保留余量。cluster-sh-2 保留低速特例 256k/371k，理论比值约为 1.449。
+            # 将加速比控制在 1.4–1.5：通用中心路径限 960k，分布式计算路径
+            # （sh-1/sz-1/bj-1/master-215）限 1392k，理论比值为 1.45。两侧上限均低于任务中观察到的
+            # 瞬时有效带宽低谷，使出口带宽波动时仍由限速器控制。cluster-sh-2 保留低速特例
+            # 256k/371k，理论比值约为 1.449。
             - name: DISPATCH_JOB_CURL_LIMIT_RATE_PATHS
-              value: "cluster-sh-2->master-40=256k,cluster-sh-2->*=371k,*->master-40=1280k,*->cluster-sh-1=1856k,*->cluster-sz-1=1856k,*->cluster-bj-1=1856k,*->master-215=1856k"
+              value: "cluster-sh-2->master-40=256k,cluster-sh-2->*=371k,*->master-40=960k,*->cluster-sh-1=1392k,*->cluster-sz-1=1392k,*->cluster-bj-1=1392k,*->master-215=1392k"
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS
