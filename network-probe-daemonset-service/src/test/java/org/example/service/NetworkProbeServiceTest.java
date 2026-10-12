@@ -159,6 +159,10 @@ class NetworkProbeServiceTest {
         NetworkProbeService probe = spy(new NetworkProbeService());
         ReflectionTestUtils.setField(probe, "k8sClient", k8s);
         ReflectionTestUtils.setField(probe, "restTemplate", http);
+        ProbePermissionClient permissions = mock(ProbePermissionClient.class);
+        when(permissions.decide(anyString(), anyString()))
+                .thenReturn(ProbePermissionClient.Decision.allowed());
+        ReflectionTestUtils.setField(probe, "probePermissionClient", permissions);
         ReflectionTestUtils.setField(probe, "localNodeName", "master-88");
         ReflectionTestUtils.setField(probe, "probeAllNodes", true);
         ReflectionTestUtils.setField(probe, "targetEdges", "master-88/master-89");
@@ -178,5 +182,29 @@ class NetworkProbeServiceTest {
         probe.probeAndPushNetworkMetrics();
         probe.probeAndPushNetworkMetrics();
         server.verify();
+    }
+
+    @Test
+    void skipsTheWholeLinkProbeWhenBusinessTrafficIsActive() {
+        KubernetesClient k8s = mock(KubernetesClient.class, RETURNS_DEEP_STUBS);
+        when(k8s.nodes().list()).thenReturn(new NodeListBuilder().withItems(
+                new NodeBuilder().withNewMetadata().withName("master-88").endMetadata().build(),
+                new NodeBuilder().withNewMetadata().withName("master-89").endMetadata()
+                        .withNewStatus().addNewAddress().withType("InternalIP").withAddress("10.212.14.89")
+                        .endAddress().endStatus().build()).build());
+        ProbePermissionClient permissions = mock(ProbePermissionClient.class);
+        when(permissions.decide("master-88", "master-89"))
+                .thenReturn(ProbePermissionClient.Decision.denied("BUSINESS_TRANSFER_ACTIVE"));
+        NetworkProbeService probe = spy(new NetworkProbeService());
+        ReflectionTestUtils.setField(probe, "k8sClient", k8s);
+        ReflectionTestUtils.setField(probe, "localNodeName", "master-88");
+        ReflectionTestUtils.setField(probe, "probeAllNodes", true);
+        ReflectionTestUtils.setField(probe, "targetEdges", "master-88/master-89");
+        ReflectionTestUtils.setField(probe, "probePermissionClient", permissions);
+
+        probe.probeAndPushNetworkMetrics();
+
+        verify(probe, never()).probeLatency(anyString());
+        verify(probe, never()).probeBandwidth(anyString());
     }
 }

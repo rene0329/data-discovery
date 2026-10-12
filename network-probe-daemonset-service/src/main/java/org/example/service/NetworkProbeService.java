@@ -45,6 +45,9 @@ public class NetworkProbeService {
     @Autowired
     private RestTemplate restTemplate;
 
+    @Autowired
+    private ProbePermissionClient probePermissionClient;
+
     // 中央服务接收指标的 URL
     @Value("${central.metrics.url:http://my-core-backend-central-service:8080/api/network/metrics/batch}")
     private String centralMetricsUrl;
@@ -124,6 +127,14 @@ public class NetworkProbeService {
                 continue;
             }
 
+            ProbePermissionClient.Decision decision = probePermissionClient.decide(
+                    localNodeName, targetNodeName);
+            if (!decision.isPermitted()) {
+                log.info("跳过链路带宽探测 {} ↔ {}: {}", localNodeName, targetNodeName,
+                        decision.getReason());
+                continue;
+            }
+
             String targetIP = resolveTargetIp(targetNodeName, node);
             if (targetIP == null) {
                 log.warn("节点 {} 无 InternalIP，跳过", targetNodeName);
@@ -159,6 +170,13 @@ public class NetworkProbeService {
     private void appendExternalMetrics(List<NetworkMetricDto> metricsList) {
         if (!isExternalRunner()) return;
         for (ExternalProbeTarget target : parseExternalTargets(externalEdges)) {
+            ProbePermissionClient.Decision decision = probePermissionClient.decide(
+                    target.logicalLocalNode, target.remoteNode);
+            if (!decision.isPermitted()) {
+                log.info("跳过外部链路带宽探测 {} ↔ {}: {}", target.logicalLocalNode,
+                        target.remoteNode, decision.getReason());
+                continue;
+            }
             double latencyMs = probeLatency(target.tunnelIp);
             long bandwidthBps = probeBandwidth(target.tunnelIp);
             NetworkMetricDto dto = new NetworkMetricDto();

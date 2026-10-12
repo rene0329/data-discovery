@@ -9,6 +9,7 @@ public class DataTransferRateLimitConfiguration {
     private Long version;
     private Boolean enabled;
     private Boolean adaptiveEnabled;
+    private Boolean bandwidthProbeEnabled;
     private String defaultRate;
     private String pathRules;
     private BigDecimal targetMin;
@@ -29,6 +30,8 @@ public class DataTransferRateLimitConfiguration {
     public void setEnabled(Boolean enabled) { this.enabled = enabled; }
     public Boolean getAdaptiveEnabled() { return adaptiveEnabled; }
     public void setAdaptiveEnabled(Boolean adaptiveEnabled) { this.adaptiveEnabled = adaptiveEnabled; }
+    public Boolean getBandwidthProbeEnabled() { return bandwidthProbeEnabled; }
+    public void setBandwidthProbeEnabled(Boolean bandwidthProbeEnabled) { this.bandwidthProbeEnabled = bandwidthProbeEnabled; }
     public String getDefaultRate() { return defaultRate; }
     public void setDefaultRate(String defaultRate) { this.defaultRate = defaultRate; }
     public String getPathRules() { return pathRules; }

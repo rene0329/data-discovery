@@ -90,6 +90,10 @@ public class K8sTaskOrchestratorService {
     private final DatasetUploadClient datasetUploadClient;
     private final DatasetAccessAuthorizationService accessAuthorizationService;
 
+    // Optional for constructor-based unit tests; Spring injects it in the running service.
+    @Autowired(required = false)
+    private ActiveDataTransferRegistry activeDataTransfers;
+
     private final InPlacePlacementService inPlacePlacement;
     private final DatasetHeatService heat;
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
@@ -725,6 +729,7 @@ public class K8sTaskOrchestratorService {
             KubernetesClient client = null;
             boolean jobSubmitted = false;
             boolean cleanupOnExit = true;
+            boolean transferRegistered = false;
             String accessToken = null;
             try {
                 log.info("准备Job: {} (源: {}, 目标: {}, attempt={}/{})",
@@ -752,6 +757,11 @@ public class K8sTaskOrchestratorService {
 
                 NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(selectedTargetNodeName);
 
+                if (activeDataTransfers != null) {
+                    activeDataTransfers.begin(jobName, sourceNodeInfo.getNodeName(), selectedTargetNodeName);
+                    transferRegistered = true;
+                }
+
                 if (migrationTask == null) {
                     // 记录迁移任务：PLANNED -> COPYING -> VERIFYING -> SWITCHING -> COMPLETED/FAILED
                     migrationTask = MigrationTask.builder()
@@ -777,6 +787,10 @@ public class K8sTaskOrchestratorService {
 
                 InitContainerEvidence initEvidence = waitForInitContainerEvidence(
                         client, jobName, "data-transfer-container", waitTimeoutMinutes);
+                if (activeDataTransfers != null) {
+                    activeDataTransfers.complete(jobName);
+                    transferRegistered = false;
+                }
                 log.info("Job {} 在集群 {} 中已取得传输时间 {}ms",
                         jobName, getClusterIdFromClient(client), initEvidence.durationMs);
                 validateInputEvidence(dataInfo, initEvidence);
@@ -877,6 +891,9 @@ public class K8sTaskOrchestratorService {
                 }
                 return -1;
             } finally {
+                if (transferRegistered && activeDataTransfers != null) {
+                    activeDataTransfers.complete(jobName);
+                }
                 if (client != null && jobSubmitted && cleanupOnExit) {
                     cleanupJob(client, jobName);
                 }

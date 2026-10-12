@@ -95,6 +95,8 @@ public class DataTransferRateLimitService {
         boolean enabled = request.getEnabled() == null ? Boolean.TRUE.equals(current.getEnabled()) : request.getEnabled();
         boolean adaptiveEnabled = request.getAdaptiveEnabled() == null
                 ? Boolean.TRUE.equals(current.getAdaptiveEnabled()) : request.getAdaptiveEnabled();
+        boolean bandwidthProbeEnabled = request.getBandwidthProbeEnabled() == null
+                ? Boolean.TRUE.equals(current.getBandwidthProbeEnabled()) : request.getBandwidthProbeEnabled();
         String defaultRate = request.getDefaultRate() == null
                 ? current.getDefaultRate() : normalizeRate(request.getDefaultRate());
         String pathRules = request.getPathRules() == null ? current.getPathRules() : request.getPathRules().trim();
@@ -108,7 +110,8 @@ public class DataTransferRateLimitService {
                 ? current.getAdaptiveCentralNode() : request.getAdaptiveCentralNode().trim();
         validate(enabled, adaptiveEnabled, defaultRate, pathRules, targetMin, targetMax,
                 safetyFactor, maxAgeSeconds, centralNode);
-        return persist(current, enabled, adaptiveEnabled, defaultRate, pathRules, targetMin, targetMax,
+        return persist(current, enabled, adaptiveEnabled, bandwidthProbeEnabled,
+                defaultRate, pathRules, targetMin, targetMax,
                 safetyFactor, maxAgeSeconds, centralNode);
     }
 
@@ -127,7 +130,8 @@ public class DataTransferRateLimitService {
                 historical.getTargetMax(), historical.getAdaptiveSafetyFactor(),
                 historical.getMeasurementMaxAgeSeconds(), historical.getAdaptiveCentralNode());
         return persist(current, Boolean.TRUE.equals(historical.getEnabled()),
-                Boolean.TRUE.equals(historical.getAdaptiveEnabled()), historical.getDefaultRate(),
+                Boolean.TRUE.equals(historical.getAdaptiveEnabled()),
+                Boolean.TRUE.equals(historical.getBandwidthProbeEnabled()), historical.getDefaultRate(),
                 historical.getPathRules(), historical.getTargetMin(), historical.getTargetMax(),
                 historical.getAdaptiveSafetyFactor(), historical.getMeasurementMaxAgeSeconds(),
                 historical.getAdaptiveCentralNode());
@@ -135,13 +139,15 @@ public class DataTransferRateLimitService {
 
     private DataTransferRateLimitDtos.View persist(DataTransferRateLimitConfiguration current,
                                                     boolean enabled, boolean adaptiveEnabled,
+                                                    boolean bandwidthProbeEnabled,
                                                     String defaultRate, String pathRules,
                                                     BigDecimal targetMin, BigDecimal targetMax,
                                                     BigDecimal safetyFactor, Integer maxAgeSeconds,
                                                     String centralNode) {
         long newVersion = current.getVersion() + 1L;
         String username = currentUsers.currentUser().getUsername();
-        int changed = mapper.update(current.getVersion(), newVersion, enabled, adaptiveEnabled, defaultRate,
+        int changed = mapper.update(current.getVersion(), newVersion, enabled, adaptiveEnabled,
+                bandwidthProbeEnabled, defaultRate,
                 pathRules, targetMin, targetMax, safetyFactor, maxAgeSeconds, centralNode, username);
         if (changed != 1) {
             throw new AuthException(HttpStatus.CONFLICT, "RATE_LIMIT_VERSION_CONFLICT",
@@ -149,9 +155,9 @@ public class DataTransferRateLimitService {
         }
         mapper.insertCurrentHistory();
         DataTransferRateLimitConfiguration updated = requireCurrent();
-        log.info("管理员 {} 更新传输限速配置到版本 {}: enabled={}, adaptive={}, paths='{}'",
+        log.info("管理员 {} 更新传输限速配置到版本 {}: enabled={}, adaptive={}, bandwidthProbe={}, paths='{}'",
                 username, updated.getVersion(), updated.getEnabled(), updated.getAdaptiveEnabled(),
-                updated.getPathRules());
+                updated.getBandwidthProbeEnabled(), updated.getPathRules());
         return new DataTransferRateLimitDtos.View(updated);
     }
 

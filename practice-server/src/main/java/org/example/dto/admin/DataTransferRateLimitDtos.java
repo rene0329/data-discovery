@@ -12,6 +12,7 @@ public final class DataTransferRateLimitDtos {
         private Long version;
         private Boolean enabled;
         private Boolean adaptiveEnabled;
+        private Boolean bandwidthProbeEnabled;
         private String defaultRate;
         private String pathRules;
         private BigDecimal targetMin;
@@ -26,6 +27,8 @@ public final class DataTransferRateLimitDtos {
         public void setEnabled(Boolean enabled) { this.enabled = enabled; }
         public Boolean getAdaptiveEnabled() { return adaptiveEnabled; }
         public void setAdaptiveEnabled(Boolean adaptiveEnabled) { this.adaptiveEnabled = adaptiveEnabled; }
+        public Boolean getBandwidthProbeEnabled() { return bandwidthProbeEnabled; }
+        public void setBandwidthProbeEnabled(Boolean bandwidthProbeEnabled) { this.bandwidthProbeEnabled = bandwidthProbeEnabled; }
         public String getDefaultRate() { return defaultRate; }
         public void setDefaultRate(String defaultRate) { this.defaultRate = defaultRate; }
         public String getPathRules() { return pathRules; }
@@ -56,6 +59,7 @@ public final class DataTransferRateLimitDtos {
         private final Long version;
         private final Boolean enabled;
         private final Boolean adaptiveEnabled;
+        private final Boolean bandwidthProbeEnabled;
         private final String defaultRate;
         private final String pathRules;
         private final BigDecimal targetMin;
@@ -70,6 +74,7 @@ public final class DataTransferRateLimitDtos {
             this.version = value.getVersion();
             this.enabled = value.getEnabled();
             this.adaptiveEnabled = value.getAdaptiveEnabled();
+            this.bandwidthProbeEnabled = value.getBandwidthProbeEnabled();
             this.defaultRate = value.getDefaultRate();
             this.pathRules = value.getPathRules();
             this.targetMin = value.getTargetMin();
@@ -84,6 +89,7 @@ public final class DataTransferRateLimitDtos {
         public Long getVersion() { return version; }
         public Boolean getEnabled() { return enabled; }
         public Boolean getAdaptiveEnabled() { return adaptiveEnabled; }
+        public Boolean getBandwidthProbeEnabled() { return bandwidthProbeEnabled; }
         public String getDefaultRate() { return defaultRate; }
         public String getPathRules() { return pathRules; }
         public BigDecimal getTargetMin() { return targetMin; }

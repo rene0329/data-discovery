@@ -36,6 +36,8 @@ spec:
               value: http://10.15.16.40:30482/api/network/metrics/batch
             - name: CENTRAL_NODE_HEARTBEAT_URL
               value: http://10.15.16.40:30482/api/network/nodes/heartbeat
+            - name: CENTRAL_PROBE_DECISION_URL
+              value: http://10.15.16.40:30482/api/network/probe-decision
             - name: LOCAL_CLUSTER_ID
               value: in-cluster-default
             - name: CENTRAL_PUBLIC_IP_URL

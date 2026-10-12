@@ -3,6 +3,7 @@ package org.example.controller.admin;
 import org.example.dto.NetworkEdgeDto;
 import org.example.dto.NetworkMetricDto;
 import org.example.service.NetworkMetricsService;
+import org.example.service.BandwidthProbeControlService;
 import org.example.vo.ApiResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,6 +28,9 @@ public class NetworkMetricsController {
     @Autowired(required = false)
     private NetworkMetricsService networkMetricsService;
 
+    @Autowired(required = false)
+    private BandwidthProbeControlService bandwidthProbeControlService;
+
     @PostMapping("/metrics/batch")
     public ResponseEntity<ApiResponse<Void>> receiveNetworkMetrics(
             @RequestBody List<NetworkMetricDto> metrics) {
@@ -36,6 +40,18 @@ public class NetworkMetricsController {
         }
         networkMetricsService.processNetworkMetrics(metrics);
         return ResponseEntity.ok(ApiResponse.ok(null));
+    }
+
+    @PostMapping("/probe-decision")
+    public ResponseEntity<ApiResponse<BandwidthProbeControlService.Decision>> probeDecision(
+            @RequestBody ProbeDecisionRequest request) {
+        if (bandwidthProbeControlService == null) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.error(503, "Bandwidth probe control is unavailable"));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(bandwidthProbeControlService.decide(
+                request == null ? null : request.getSourceNode(),
+                request == null ? null : request.getTargetNode())));
     }
 
     @GetMapping("/allMetrics")
@@ -52,5 +68,15 @@ public class NetworkMetricsController {
             log.error("Failed to retrieve all network metrics.", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ApiResponse.error(500, "Failed to retrieve all network metrics"));
         }
+    }
+
+    public static class ProbeDecisionRequest {
+        private String sourceNode;
+        private String targetNode;
+
+        public String getSourceNode() { return sourceNode; }
+        public void setSourceNode(String sourceNode) { this.sourceNode = sourceNode; }
+        public String getTargetNode() { return targetNode; }
+        public void setTargetNode(String targetNode) { this.targetNode = targetNode; }
     }
 }

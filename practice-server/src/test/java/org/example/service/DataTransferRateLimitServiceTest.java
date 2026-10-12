@@ -80,7 +80,7 @@ class DataTransferRateLimitServiceTest {
         DataTransferRateLimitConfiguration after = configuration(4L, true,
                 "*->master-40=900k,*->master-215=1305k");
         when(mapper.findCurrent()).thenReturn(before, after);
-        when(mapper.update(anyLong(), anyLong(), anyBoolean(), anyBoolean(), any(), anyString(),
+        when(mapper.update(anyLong(), anyLong(), anyBoolean(), anyBoolean(), anyBoolean(), any(), anyString(),
                 any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), anyInt(),
                 anyString(), eq("admin"))).thenReturn(1);
 
@@ -96,7 +96,7 @@ class DataTransferRateLimitServiceTest {
 
         assertEquals(4L, result.getVersion());
         verify(mapper).insertCurrentHistory();
-        verify(mapper).update(eq(3L), eq(4L), eq(true), eq(false), eq(null),
+        verify(mapper).update(eq(3L), eq(4L), eq(true), eq(false), eq(false), eq(null),
                 eq("*->master-40=900k,*->master-215=1305k"),
                 eq(new BigDecimal("1.400")), eq(new BigDecimal("1.500")),
                 eq(new BigDecimal("0.800")), eq(900), eq("master-40"), eq("admin"));
@@ -108,6 +108,7 @@ class DataTransferRateLimitServiceTest {
         value.setVersion(version);
         value.setEnabled(enabled);
         value.setAdaptiveEnabled(false);
+        value.setBandwidthProbeEnabled(false);
         value.setDefaultRate(null);
         value.setPathRules(rules);
         value.setTargetMin(new BigDecimal("1.400"));
