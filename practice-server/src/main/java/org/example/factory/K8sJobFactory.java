@@ -541,8 +541,11 @@ public class K8sJobFactory {
         if (rateLimitConfigurations != null) {
             DataTransferRateLimitService.Resolution resolution = rateLimitConfigurations.resolve(srcNode, destNode);
             rate = resolution.getRate();
-            log.info("Job '{}' curl 限速: {} → {} = '{}' ({} v{})", jobName, srcNode, destNode,
-                    rate != null ? rate : "(无限速)", resolution.getSource(), resolution.getVersion());
+            log.info("Job '{}' curl 限速: {} → {} = '{}' ({} v{}, bandwidth={}Mbps, target={})",
+                    jobName, srcNode, destNode, rate != null ? rate : "(无限速)",
+                    resolution.getSource(), resolution.getVersion(),
+                    resolution.getBasisBandwidthMbps() == null ? "-" : resolution.getBasisBandwidthMbps(),
+                    resolution.getTargetRatio() == null ? "-" : resolution.getTargetRatio());
         } else {
             rate = resolveLimitRate(srcNode, destNode);
             log.info("Job '{}' curl 限速: {} → {} = '{}'", jobName, srcNode, destNode,

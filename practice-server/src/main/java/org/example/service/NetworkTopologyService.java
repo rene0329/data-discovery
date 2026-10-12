@@ -167,15 +167,27 @@ public class NetworkTopologyService {
 
     /** Minimum accumulated latency; bandwidth is the bottleneck along that same path. */
     public Map<Integer, NetworkPath> pathsFrom(Integer sourceId) {
+        return pathsFrom(sourceId, staleAfterSeconds);
+    }
+
+    /**
+     * Minimum accumulated latency using only measurements no older than the
+     * caller's limit. Adaptive throttling uses a much shorter window than the
+     * topology display so an old high-bandwidth sample cannot overdrive a link.
+     */
+    public Map<Integer, NetworkPath> pathsFrom(Integer sourceId, long maxMeasurementAgeSeconds) {
         Set<Integer> available = new HashSet<>();
         for (NodeManagement node : nodes.selectAllNodes()) {
             if (availability.isSchedulable(node)) available.add(node.getNodeId());
         }
         if (!available.contains(sourceId)) return Collections.emptyMap();
         Map<Integer, List<EdgeManagement>> adjacency = new HashMap<>();
+        Instant measurementCutoff = Instant.now().minusSeconds(Math.max(1L, maxMeasurementAgeSeconds));
         for (EdgeManagement edge : links()) {
             if (!available.contains(edge.getSourceId()) || !available.contains(edge.getTargetId())
-                    || !usable(edge)) continue;
+                    || !usable(edge)
+                    || edge.getMeasurementTime() == null
+                    || edge.getMeasurementTime().toInstant().isBefore(measurementCutoff)) continue;
             adjacency.computeIfAbsent(edge.getSourceId(), key -> new ArrayList<>()).add(edge);
             adjacency.computeIfAbsent(edge.getTargetId(), key -> new ArrayList<>()).add(edge);
         }

@@ -7,6 +7,7 @@ import org.example.dto.admin.DataTransferRateLimitDtos;
 import org.example.entity.DataTransferRateLimitConfiguration;
 import org.example.factory.PathRateLimits;
 import org.example.mapper.DataTransferRateLimitMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -25,17 +26,27 @@ public class DataTransferRateLimitService {
     private final CurrentUserService currentUsers;
     private final String fallbackDefaultRate;
     private final String fallbackPathRules;
+    private final AdaptiveTransferRateService adaptiveRates;
 
+    @Autowired
     public DataTransferRateLimitService(
             DataTransferRateLimitMapper mapper,
             CurrentUserService currentUsers,
             @Value("${dispatch.job.curl.limit-rate.default:}") String fallbackDefaultRate,
-            @Value("${dispatch.job.curl.limit-rate.paths:}") String fallbackPathRules) {
+            @Value("${dispatch.job.curl.limit-rate.paths:}") String fallbackPathRules,
+            AdaptiveTransferRateService adaptiveRates) {
         this.mapper = mapper;
         this.currentUsers = currentUsers;
         this.fallbackDefaultRate = normalizeRate(fallbackDefaultRate);
         this.fallbackPathRules = fallbackPathRules == null ? "" : fallbackPathRules.trim();
+        this.adaptiveRates = adaptiveRates;
         PathRateLimits.parse(this.fallbackPathRules);
+    }
+
+    /** Kept for isolated unit tests and compatibility with existing embedders. */
+    DataTransferRateLimitService(DataTransferRateLimitMapper mapper, CurrentUserService currentUsers,
+                                 String fallbackDefaultRate, String fallbackPathRules) {
+        this(mapper, currentUsers, fallbackDefaultRate, fallbackPathRules, null);
     }
 
     public DataTransferRateLimitDtos.View current() {
@@ -46,6 +57,13 @@ public class DataTransferRateLimitService {
         int limit = Math.max(1, Math.min(requestedLimit, 100));
         return mapper.listHistory(limit).stream()
                 .map(DataTransferRateLimitDtos.View::new).collect(Collectors.toList());
+    }
+
+    public DataTransferRateLimitDtos.Preview preview(String sourceNode, String targetNode) {
+        Resolution resolution = resolve(sourceNode, targetNode);
+        return new DataTransferRateLimitDtos.Preview(sourceNode, targetNode, resolution.getRate(),
+                resolution.getSource(), resolution.getVersion(), resolution.getBasisBandwidthMbps(),
+                resolution.getTargetRatio());
     }
 
     /**
@@ -63,6 +81,7 @@ public class DataTransferRateLimitService {
         DataTransferRateLimitConfiguration fallback = new DataTransferRateLimitConfiguration();
         fallback.setVersion(0L);
         fallback.setEnabled(true);
+        fallback.setAdaptiveEnabled(false);
         fallback.setDefaultRate(fallbackDefaultRate);
         fallback.setPathRules(fallbackPathRules);
         return resolve(fallback, sourceNode, targetNode, "deployment-fallback");
@@ -74,13 +93,23 @@ public class DataTransferRateLimitService {
         DataTransferRateLimitConfiguration current = requireCurrent();
         requireVersion(request.getVersion(), current.getVersion());
         boolean enabled = request.getEnabled() == null ? Boolean.TRUE.equals(current.getEnabled()) : request.getEnabled();
+        boolean adaptiveEnabled = request.getAdaptiveEnabled() == null
+                ? Boolean.TRUE.equals(current.getAdaptiveEnabled()) : request.getAdaptiveEnabled();
         String defaultRate = request.getDefaultRate() == null
                 ? current.getDefaultRate() : normalizeRate(request.getDefaultRate());
         String pathRules = request.getPathRules() == null ? current.getPathRules() : request.getPathRules().trim();
         BigDecimal targetMin = request.getTargetMin() == null ? current.getTargetMin() : request.getTargetMin();
         BigDecimal targetMax = request.getTargetMax() == null ? current.getTargetMax() : request.getTargetMax();
-        validate(enabled, defaultRate, pathRules, targetMin, targetMax);
-        return persist(current, enabled, defaultRate, pathRules, targetMin, targetMax);
+        BigDecimal safetyFactor = request.getAdaptiveSafetyFactor() == null
+                ? current.getAdaptiveSafetyFactor() : request.getAdaptiveSafetyFactor();
+        Integer maxAgeSeconds = request.getMeasurementMaxAgeSeconds() == null
+                ? current.getMeasurementMaxAgeSeconds() : request.getMeasurementMaxAgeSeconds();
+        String centralNode = request.getAdaptiveCentralNode() == null
+                ? current.getAdaptiveCentralNode() : request.getAdaptiveCentralNode().trim();
+        validate(enabled, adaptiveEnabled, defaultRate, pathRules, targetMin, targetMax,
+                safetyFactor, maxAgeSeconds, centralNode);
+        return persist(current, enabled, adaptiveEnabled, defaultRate, pathRules, targetMin, targetMax,
+                safetyFactor, maxAgeSeconds, centralNode);
     }
 
     @Transactional
@@ -93,27 +122,36 @@ public class DataTransferRateLimitService {
             throw new AuthException(HttpStatus.NOT_FOUND, "RATE_LIMIT_VERSION_NOT_FOUND",
                     "the requested rate-limit version was not found");
         }
-        validate(Boolean.TRUE.equals(historical.getEnabled()), historical.getDefaultRate(),
-                historical.getPathRules(), historical.getTargetMin(), historical.getTargetMax());
-        return persist(current, Boolean.TRUE.equals(historical.getEnabled()), historical.getDefaultRate(),
-                historical.getPathRules(), historical.getTargetMin(), historical.getTargetMax());
+        validate(Boolean.TRUE.equals(historical.getEnabled()), Boolean.TRUE.equals(historical.getAdaptiveEnabled()),
+                historical.getDefaultRate(), historical.getPathRules(), historical.getTargetMin(),
+                historical.getTargetMax(), historical.getAdaptiveSafetyFactor(),
+                historical.getMeasurementMaxAgeSeconds(), historical.getAdaptiveCentralNode());
+        return persist(current, Boolean.TRUE.equals(historical.getEnabled()),
+                Boolean.TRUE.equals(historical.getAdaptiveEnabled()), historical.getDefaultRate(),
+                historical.getPathRules(), historical.getTargetMin(), historical.getTargetMax(),
+                historical.getAdaptiveSafetyFactor(), historical.getMeasurementMaxAgeSeconds(),
+                historical.getAdaptiveCentralNode());
     }
 
     private DataTransferRateLimitDtos.View persist(DataTransferRateLimitConfiguration current,
-                                                    boolean enabled, String defaultRate, String pathRules,
-                                                    BigDecimal targetMin, BigDecimal targetMax) {
+                                                    boolean enabled, boolean adaptiveEnabled,
+                                                    String defaultRate, String pathRules,
+                                                    BigDecimal targetMin, BigDecimal targetMax,
+                                                    BigDecimal safetyFactor, Integer maxAgeSeconds,
+                                                    String centralNode) {
         long newVersion = current.getVersion() + 1L;
         String username = currentUsers.currentUser().getUsername();
-        int changed = mapper.update(current.getVersion(), newVersion, enabled, defaultRate,
-                pathRules, targetMin, targetMax, username);
+        int changed = mapper.update(current.getVersion(), newVersion, enabled, adaptiveEnabled, defaultRate,
+                pathRules, targetMin, targetMax, safetyFactor, maxAgeSeconds, centralNode, username);
         if (changed != 1) {
             throw new AuthException(HttpStatus.CONFLICT, "RATE_LIMIT_VERSION_CONFLICT",
                     "the configuration changed; reload it before saving");
         }
         mapper.insertCurrentHistory();
         DataTransferRateLimitConfiguration updated = requireCurrent();
-        log.info("管理员 {} 更新传输限速配置到版本 {}: enabled={}, paths='{}'",
-                username, updated.getVersion(), updated.getEnabled(), updated.getPathRules());
+        log.info("管理员 {} 更新传输限速配置到版本 {}: enabled={}, adaptive={}, paths='{}'",
+                username, updated.getVersion(), updated.getEnabled(), updated.getAdaptiveEnabled(),
+                updated.getPathRules());
         return new DataTransferRateLimitDtos.View(updated);
     }
 
@@ -121,6 +159,18 @@ public class DataTransferRateLimitService {
                                String sourceNode, String targetNode, String source) {
         if (!Boolean.TRUE.equals(configuration.getEnabled())) {
             return new Resolution(null, configuration.getVersion(), source);
+        }
+        if (Boolean.TRUE.equals(configuration.getAdaptiveEnabled()) && adaptiveRates != null) {
+            AdaptiveTransferRateService.Recommendation recommendation =
+                    adaptiveRates.recommend(configuration, sourceNode, targetNode);
+            if (recommendation.isAvailable()) {
+                return new Resolution(recommendation.getRate(), configuration.getVersion(),
+                        source + "-adaptive", recommendation.getBasisBandwidthMbps(),
+                        recommendation.getTargetRatio());
+            }
+            log.warn("自适应限速无法用于 {} → {}，使用人工规则回退: {}", sourceNode, targetNode,
+                    recommendation.getUnavailableReason());
+            source = source + "-static-fallback";
         }
         String pathRate = sourceNode == null || targetNode == null ? null
                 : PathRateLimits.parse(configuration.getPathRules()).resolve(sourceNode, targetNode);
@@ -137,11 +187,12 @@ public class DataTransferRateLimitService {
         return current;
     }
 
-    private void validate(boolean enabled, String defaultRate, String pathRules,
-                          BigDecimal targetMin, BigDecimal targetMax) {
+    private void validate(boolean enabled, boolean adaptiveEnabled, String defaultRate, String pathRules,
+                          BigDecimal targetMin, BigDecimal targetMax, BigDecimal safetyFactor,
+                          Integer maxAgeSeconds, String centralNode) {
         try {
             PathRateLimits parsed = PathRateLimits.parse(pathRules);
-            if (enabled && parsed.isEmpty() && defaultRate == null) {
+            if (enabled && !adaptiveEnabled && parsed.isEmpty() && defaultRate == null) {
                 invalid("enabled configuration must contain a default rate or at least one path rule");
             }
         } catch (IllegalArgumentException ex) {
@@ -151,6 +202,17 @@ public class DataTransferRateLimitService {
         if (targetMin == null || targetMax == null || targetMin.signum() <= 0
                 || targetMax.compareTo(targetMin) < 0 || targetMax.compareTo(MAX_TARGET) > 0) {
             invalid("target range must be positive, ordered and no greater than 100");
+        }
+        if (safetyFactor == null || safetyFactor.compareTo(new BigDecimal("0.100")) < 0
+                || safetyFactor.compareTo(new BigDecimal("0.990")) > 0) {
+            invalid("adaptive safety factor must be between 0.100 and 0.990");
+        }
+        if (maxAgeSeconds == null || maxAgeSeconds < 60 || maxAgeSeconds > 86400) {
+            invalid("measurement maximum age must be between 60 and 86400 seconds");
+        }
+        if (centralNode == null || centralNode.isEmpty() || centralNode.contains(",")
+                || centralNode.contains("->") || centralNode.contains("=")) {
+            invalid("adaptive central node is invalid");
         }
     }
 
@@ -175,15 +237,26 @@ public class DataTransferRateLimitService {
         private final String rate;
         private final Long version;
         private final String source;
+        private final Long basisBandwidthMbps;
+        private final BigDecimal targetRatio;
 
         Resolution(String rate, Long version, String source) {
+            this(rate, version, source, null, null);
+        }
+
+        Resolution(String rate, Long version, String source, Long basisBandwidthMbps,
+                   BigDecimal targetRatio) {
             this.rate = rate;
             this.version = version;
             this.source = source;
+            this.basisBandwidthMbps = basisBandwidthMbps;
+            this.targetRatio = targetRatio;
         }
 
         public String getRate() { return rate; }
         public Long getVersion() { return version; }
         public String getSource() { return source; }
+        public Long getBasisBandwidthMbps() { return basisBandwidthMbps; }
+        public BigDecimal getTargetRatio() { return targetRatio; }
     }
 }

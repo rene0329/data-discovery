@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -79,8 +80,9 @@ class DataTransferRateLimitServiceTest {
         DataTransferRateLimitConfiguration after = configuration(4L, true,
                 "*->master-40=900k,*->master-215=1305k");
         when(mapper.findCurrent()).thenReturn(before, after);
-        when(mapper.update(eq(3L), eq(4L), anyBoolean(), any(), anyString(),
-                any(BigDecimal.class), any(BigDecimal.class), eq("admin"))).thenReturn(1);
+        when(mapper.update(anyLong(), anyLong(), anyBoolean(), anyBoolean(), any(), anyString(),
+                any(BigDecimal.class), any(BigDecimal.class), any(BigDecimal.class), anyInt(),
+                anyString(), eq("admin"))).thenReturn(1);
 
         DataTransferRateLimitDtos.UpdateRequest request = new DataTransferRateLimitDtos.UpdateRequest();
         request.setVersion(3L);
@@ -94,9 +96,10 @@ class DataTransferRateLimitServiceTest {
 
         assertEquals(4L, result.getVersion());
         verify(mapper).insertCurrentHistory();
-        verify(mapper).update(eq(3L), eq(4L), eq(true), eq(null),
+        verify(mapper).update(eq(3L), eq(4L), eq(true), eq(false), eq(null),
                 eq("*->master-40=900k,*->master-215=1305k"),
-                eq(new BigDecimal("1.400")), eq(new BigDecimal("1.500")), eq("admin"));
+                eq(new BigDecimal("1.400")), eq(new BigDecimal("1.500")),
+                eq(new BigDecimal("0.800")), eq(900), eq("master-40"), eq("admin"));
     }
 
     private DataTransferRateLimitConfiguration configuration(Long version, boolean enabled, String rules) {
@@ -104,10 +107,14 @@ class DataTransferRateLimitServiceTest {
         value.setConfigId(1);
         value.setVersion(version);
         value.setEnabled(enabled);
+        value.setAdaptiveEnabled(false);
         value.setDefaultRate(null);
         value.setPathRules(rules);
         value.setTargetMin(new BigDecimal("1.400"));
         value.setTargetMax(new BigDecimal("1.500"));
+        value.setAdaptiveSafetyFactor(new BigDecimal("0.800"));
+        value.setMeasurementMaxAgeSeconds(900);
+        value.setAdaptiveCentralNode("master-40");
         value.setUpdatedBy("admin");
         return value;
     }

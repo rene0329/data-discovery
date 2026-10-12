@@ -27,6 +27,13 @@ public class DataTransferRateLimitController {
         return ApiV1Response.ok(service.current());
     }
 
+    @GetMapping("/preview")
+    public ApiV1Response<DataTransferRateLimitDtos.Preview> preview(
+            @RequestParam("sourceNode") String sourceNode,
+            @RequestParam("targetNode") String targetNode) {
+        return ApiV1Response.ok(service.preview(sourceNode, targetNode));
+    }
+
     @PutMapping
     public ApiV1Response<DataTransferRateLimitDtos.View> update(
             @RequestBody DataTransferRateLimitDtos.UpdateRequest request) {
