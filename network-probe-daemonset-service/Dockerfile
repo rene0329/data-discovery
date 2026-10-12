@@ -3,7 +3,7 @@
 # while the same Pod network path and service account work normally. Run the
 # Java 8-compatible application on a current TLS-capable runtime.
 FROM eclipse-temurin:17-jre-alpine
-RUN apk add --no-cache iperf3 iputils iptables openssh-client
+RUN apk add --no-cache iperf3 iputils iptables iptables-legacy openssh-client
 WORKDIR /app
 COPY target/network-probe-daemonset-service-*.jar app.jar
 ENTRYPOINT ["sh", "-c", "iperf3 -s -D && exec java -jar /app/app.jar"]
