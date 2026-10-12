@@ -25,7 +25,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: practice-server
-          image: 10.15.16.40:30455/data-discovery-practice-server:v-b8f3ef7b5e97b48b7c1931106ae1178c1646a93c
+          image: 10.15.16.40:30455/data-discovery-practice-server:v-51f5ab8db499d855e04895ae71ce68cbb1d9f64c
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
