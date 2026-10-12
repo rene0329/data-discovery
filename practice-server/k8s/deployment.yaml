@@ -40,26 +40,27 @@ spec:
             - name: DISPATCH_CENTRAL_NODE_NAME
               value: "master-40"
             # 同域与分布式路径使用统一基准 2048k。跨域路径按相对于浙江中心的物理距离
-            # 使用不同系数：杭州 0.75、上海 0.6875、北京 0.625、深圳 0.59375，
-            # 对应理论加速比约为 1.33、1.45、1.60、1.68。规则按顺序匹配：先匹配中心路径和同域路径，
+            # 使用经实测时间开销校准的系数：杭州 0.875、上海 0.8125、北京 0.75、深圳 0.6875。
+            # 系数随物理距离递减，同时补偿公网连接、校验与链路抖动对实测时长的影响。规则按顺序匹配：
+            # 先匹配中心路径和同域路径，
             # 再匹配分布式备选节点与其他跨域路径。
             - name: DISPATCH_JOB_CURL_LIMIT_RATE_DEFAULT
               value: "2048k"
             - name: DISPATCH_JOB_CURL_LIMIT_RATE_PATHS
               value: >-
-                cluster-hz-1->master-40=1536k,
-                cluster-sh-1->master-40=1408k,cluster-sh-2->master-40=1408k,cluster-sh-3->master-40=1408k,
-                cluster-bj-1->master-40=1280k,cluster-bj-2->master-40=1280k,
-                cluster-sz-1->master-40=1216k,cluster-sz-2->master-40=1216k,cluster-sz-3->master-40=1216k,
+                cluster-hz-1->master-40=1792k,
+                cluster-sh-1->master-40=1664k,cluster-sh-2->master-40=1664k,cluster-sh-3->master-40=1664k,
+                cluster-bj-1->master-40=1536k,cluster-bj-2->master-40=1536k,
+                cluster-sz-1->master-40=1408k,cluster-sz-2->master-40=1408k,cluster-sz-3->master-40=1408k,
                 cluster-sh-2->cluster-sh-1=2048k,cluster-sh-3->cluster-sh-1=2048k,
                 cluster-sz-2->cluster-sz-1=2048k,cluster-sz-3->cluster-sz-1=2048k,
                 cluster-bj-2->cluster-bj-1=2048k,
                 *->master-215=2048k,
-                *->cluster-sh-1=1408k,*->cluster-bj-1=1280k,*->cluster-sz-1=1216k,
-                cluster-hz-1->*=1536k,
-                cluster-sh-1->*=1408k,cluster-sh-2->*=1408k,cluster-sh-3->*=1408k,
-                cluster-bj-1->*=1280k,cluster-bj-2->*=1280k,
-                cluster-sz-1->*=1216k,cluster-sz-2->*=1216k,cluster-sz-3->*=1216k
+                *->cluster-sh-1=1664k,*->cluster-bj-1=1536k,*->cluster-sz-1=1408k,
+                cluster-hz-1->*=1792k,
+                cluster-sh-1->*=1664k,cluster-sh-2->*=1664k,cluster-sh-3->*=1664k,
+                cluster-bj-1->*=1536k,cluster-bj-2->*=1536k,
+                cluster-sz-1->*=1408k,cluster-sz-2->*=1408k,cluster-sz-3->*=1408k
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS
