@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.example.entity.NodeManagement;
 import org.example.entity.RuntimeImage;
 import org.example.service.DataTransferAddressResolver;
+import org.example.service.DataTransferRateLimitService;
 import org.example.service.JobResourceDemand;
 import org.example.service.NetworkTopologyService;
 import org.example.mapper.NodeManagementMapper;
@@ -52,6 +53,7 @@ public class K8sJobFactory {
     private final String wgetLimitRate;
     private final NodeAvailabilityService nodeAvailabilityService;
     private final DataTransferAddressResolver transferAddresses;
+    private final DataTransferRateLimitService rateLimitConfigurations;
 
     /** 路径级限速规则，格式见 {@link PathRateLimits}；init() 时解析。 */
     @Value("${dispatch.job.curl.limit-rate.paths:}")
@@ -159,7 +161,7 @@ public class K8sJobFactory {
                          NodeAvailabilityService nodeAvailabilityService) {
         this(kubeconfigPath, nodeManagementMapper, clusterDomain, initContainerImage, mainContainerImage,
                 discoveryService, discoveryNamespace, discoveryPort, wgetLimitRate, nEpochs,
-                networkTopologyService, nodeAvailabilityService, new DataTransferAddressResolver(""));
+                networkTopologyService, nodeAvailabilityService, new DataTransferAddressResolver(""), null);
     }
 
     @Autowired
@@ -176,7 +178,8 @@ public class K8sJobFactory {
             @Value("${dispatch.training.n-epochs:15}") int nEpochs,
             NetworkTopologyService networkTopologyService,
             NodeAvailabilityService nodeAvailabilityService,
-            DataTransferAddressResolver transferAddresses
+            DataTransferAddressResolver transferAddresses,
+            DataTransferRateLimitService rateLimitConfigurations
     ) {
         this.kubeconfigPath = kubeconfigPath;
         this.nodeManagementMapper = nodeManagementMapper;
@@ -191,6 +194,7 @@ public class K8sJobFactory {
         this.nEpochs = nEpochs;
         this.nodeAvailabilityService = nodeAvailabilityService;
         this.transferAddresses = transferAddresses;
+        this.rateLimitConfigurations = rateLimitConfigurations;
     }
 
     @PostConstruct
@@ -521,8 +525,17 @@ public class K8sJobFactory {
 
     /** 解析限速并打 INFO 日志，便于运行时验证是否注入成功。 */
     private String resolveAndLogLimitRate(String srcNode, String destNode, String jobName) {
-        String rate = resolveLimitRate(srcNode, destNode);
-        log.info("Job '{}' curl 限速: {} → {} = '{}'", jobName, srcNode, destNode, rate != null ? rate : "(无限速)");
+        String rate;
+        if (rateLimitConfigurations != null) {
+            DataTransferRateLimitService.Resolution resolution = rateLimitConfigurations.resolve(srcNode, destNode);
+            rate = resolution.getRate();
+            log.info("Job '{}' curl 限速: {} → {} = '{}' ({} v{})", jobName, srcNode, destNode,
+                    rate != null ? rate : "(无限速)", resolution.getSource(), resolution.getVersion());
+        } else {
+            rate = resolveLimitRate(srcNode, destNode);
+            log.info("Job '{}' curl 限速: {} → {} = '{}'", jobName, srcNode, destNode,
+                    rate != null ? rate : "(无限速)");
+        }
         return rate;
     }
 

@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
  * 路径级 curl --limit-rate 规则："源节点->目标节点=速率"，逗号分隔，* 匹配任意节点，
  * 按书写顺序取第一条匹配的规则，例如 "*->master-215=2560k,*->master-40=1536k"。
  */
-final class PathRateLimits {
+public final class PathRateLimits {
     private static final Pattern RATE = Pattern.compile("\\d+(\\.\\d+)?[kKmMgG]?");
     private final List<String[]> rules;
 
@@ -18,7 +18,7 @@ final class PathRateLimits {
     }
 
     /** 空配置表示没有路径级限速；写错的规则直接报错，避免限速被静默忽略。 */
-    static PathRateLimits parse(String spec) {
+    public static PathRateLimits parse(String spec) {
         List<String[]> rules = new ArrayList<>();
         if (spec != null) {
             for (String item : spec.split(",")) {
@@ -42,7 +42,7 @@ final class PathRateLimits {
     }
 
     /** 第一条匹配规则的速率；没有匹配时为 null。 */
-    String resolve(String source, String target) {
+    public String resolve(String source, String target) {
         for (String[] rule : rules) {
             if (matches(rule[0], source) && matches(rule[1], target)) return rule[2];
         }
@@ -51,6 +51,12 @@ final class PathRateLimits {
 
     private static boolean matches(String pattern, String node) {
         return "*".equals(pattern) || pattern.equalsIgnoreCase(node);
+    }
+
+    public boolean isEmpty() { return rules.isEmpty(); }
+
+    public static boolean isValidRate(String rate) {
+        return rate != null && RATE.matcher(rate.trim()).matches();
     }
 
     @Override
