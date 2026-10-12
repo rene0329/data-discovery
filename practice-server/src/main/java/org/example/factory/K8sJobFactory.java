@@ -164,6 +164,18 @@ public class K8sJobFactory {
                 networkTopologyService, nodeAvailabilityService, new DataTransferAddressResolver(""), null);
     }
 
+    /** 测试与兼容构造器：允许显式指定同站点数据传输地址规则。 */
+    public K8sJobFactory(String kubeconfigPath, NodeManagementMapper nodeManagementMapper,
+                         String clusterDomain, String initContainerImage, String mainContainerImage,
+                         String discoveryService, String discoveryNamespace, int discoveryPort,
+                         String wgetLimitRate, int nEpochs, NetworkTopologyService networkTopologyService,
+                         NodeAvailabilityService nodeAvailabilityService,
+                         DataTransferAddressResolver transferAddresses) {
+        this(kubeconfigPath, nodeManagementMapper, clusterDomain, initContainerImage, mainContainerImage,
+                discoveryService, discoveryNamespace, discoveryPort, wgetLimitRate, nEpochs,
+                networkTopologyService, nodeAvailabilityService, transferAddresses, null);
+    }
+
     @Autowired
     public K8sJobFactory(
             @Value("${dispatch.kubeconfig.path:C:/Users/xuty/.kube/config}") String kubeconfigPath,
