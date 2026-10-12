@@ -59,10 +59,10 @@ class AdaptiveTransferRateServiceTest {
         AdaptiveTransferRateService.Recommendation distributed =
                 service.recommend(configuration, "cluster-sz-3", "cluster-sz-1");
 
-        assertEquals("673k", centralized.getRate());
+        assertEquals("659k", centralized.getRate());
         assertEquals("976k", distributed.getRate());
         assertEquals(10L, centralized.getBasisBandwidthMbps());
-        assertEquals(new BigDecimal("1.450"), centralized.getTargetRatio());
+        assertEquals(new BigDecimal("1.480"), centralized.getTargetRatio());
         assertTrue(centralized.isCentralized());
         assertFalse(distributed.isCentralized());
     }

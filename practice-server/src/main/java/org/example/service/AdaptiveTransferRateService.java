@@ -13,6 +13,7 @@ import java.util.Map;
 /** Calculates a conservative per-transfer curl rate from recent topology measurements. */
 @Service
 public class AdaptiveTransferRateService {
+    private static final BigDecimal TARGET_RANGE_POSITION = new BigDecimal("0.800");
     private static final BigDecimal BITS_PER_BYTE = new BigDecimal("8");
     private static final BigDecimal BYTES_PER_KIB = new BigDecimal("1024");
     private static final BigDecimal BITS_PER_MEGABIT = new BigDecimal("1000000");
@@ -69,8 +70,13 @@ public class AdaptiveTransferRateService {
             return Recommendation.unavailable("fresh bandwidth floor is unavailable");
         }
 
-        BigDecimal targetRatio = configuration.getTargetMin().add(configuration.getTargetMax())
-                .divide(new BigDecimal("2"), 3, RoundingMode.HALF_UP);
+        // Transfer preparation contains a small fixed pod/startup/checksum cost on both paths.
+        // That common cost pulls the observed duration ratio towards 1, so use a point near the
+        // upper end of the accepted interval while retaining headroom for measurement jitter.
+        BigDecimal targetRatio = configuration.getTargetMin()
+                .add(configuration.getTargetMax().subtract(configuration.getTargetMin())
+                        .multiply(TARGET_RANGE_POSITION))
+                .setScale(3, RoundingMode.HALF_UP);
         BigDecimal safetyFactor = configuration.getAdaptiveSafetyFactor();
         BigDecimal bytesPerSecond = BigDecimal.valueOf(bandwidthFloorMbps)
                 .multiply(BITS_PER_MEGABIT)
