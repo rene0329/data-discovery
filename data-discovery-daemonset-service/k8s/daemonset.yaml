@@ -29,8 +29,8 @@ spec:
           operator: Exists
           effect: NoSchedule
 
-      # 数据访问入口和有界缓存也需要运行在纯计算节点上。
-      # 打标签命令：kubectl label node <node-name> node-role=storage
+      # 数据代理运行在中心存储节点和承载验收数据集的阿里云存储节点上。
+      # 使用明确的主机名，避免计算节点错误创建空的 /dataset 目录并被登记为副本来源。
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -41,6 +41,12 @@ spec:
                     values:
                       - master-40
                       - master-141
+                      - cluster-bj-2
+                      - cluster-hz-1
+                      - cluster-sh-2
+                      - cluster-sh-3
+                      - cluster-sz-2
+                      - cluster-sz-3
 
       # hostNetwork=true：Pod 直接使用宿主机网络，Pod IP = 节点 IP，重启后 IP 不变
       # 这样 practice-server 可以通过 node_management.internal_ip 稳定寻址，无需 DNS
@@ -100,8 +106,8 @@ spec:
 
             # MySQL 连接
             - name: SPRING_DATASOURCE_DRUID_URL
-              # master-141 的主机网络无法转发该 ClusterIP；headless DNS 会直接解析到 MySQL Pod。
-              value: "jdbc:mysql://mysql-headless.topic4-1.svc.cluster.local:3306/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8&sessionVariables=time_zone='%2B00:00'"
+              # 阿里云节点不能转发集群 Service/Pod 网段，统一经 master-40 的专用 NodePort 访问。
+              value: "jdbc:mysql://10.15.16.40:30436/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8&sessionVariables=time_zone='%2B00:00'"
             - name: SPRING_DATASOURCE_DRUID_USERNAME
               value: "root"
             - name: SPRING_DATASOURCE_DRUID_PASSWORD

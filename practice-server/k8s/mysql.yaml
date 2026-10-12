@@ -32,6 +32,27 @@ spec:
       targetPort: 3306
       protocol: TCP
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-nodeport
+  namespace: topic4-1
+  labels:
+    app: project4-mysql
+spec:
+  # 阿里云节点当前不能转发集群 Service/Pod 网段，但可以通过专线访问 master-40。
+  # 只在拥有 MySQL Pod 的 master-40 接收外部流量，供节点数据代理连接同一数据库。
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    workload.user.cattle.io/workloadselector: apps.deployment-topic4-1-mysql
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+      nodePort: 30436
+      protocol: TCP
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
