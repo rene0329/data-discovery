@@ -39,12 +39,27 @@ spec:
               value: "10.15.16.40"
             - name: DISPATCH_CENTRAL_NODE_NAME
               value: "master-40"
-            # 将加速比控制在 1.4–1.5：通用中心路径限 960k，分布式计算路径
-            # （sh-1/sz-1/bj-1/master-215）限 1392k，理论比值为 1.45。两侧上限均低于任务中观察到的
-            # 瞬时有效带宽低谷，使出口带宽波动时仍由限速器控制。cluster-sh-2 保留低速特例
-            # 256k/371k，理论比值约为 1.449。
+            # 同域与分布式路径使用统一基准 2048k。跨域路径按相对于浙江中心的物理距离
+            # 使用不同系数：杭州 0.75、上海 0.6875、北京 0.625、深圳 0.59375，
+            # 对应理论加速比约为 1.33、1.45、1.60、1.68。规则按顺序匹配：先匹配中心路径和同域路径，
+            # 再匹配分布式备选节点与其他跨域路径。
+            - name: DISPATCH_JOB_CURL_LIMIT_RATE_DEFAULT
+              value: "2048k"
             - name: DISPATCH_JOB_CURL_LIMIT_RATE_PATHS
-              value: "cluster-sh-2->master-40=256k,cluster-sh-2->*=371k,*->master-40=960k,*->cluster-sh-1=1392k,*->cluster-sz-1=1392k,*->cluster-bj-1=1392k,*->master-215=1392k"
+              value: >-
+                cluster-hz-1->master-40=1536k,
+                cluster-sh-1->master-40=1408k,cluster-sh-2->master-40=1408k,cluster-sh-3->master-40=1408k,
+                cluster-bj-1->master-40=1280k,cluster-bj-2->master-40=1280k,
+                cluster-sz-1->master-40=1216k,cluster-sz-2->master-40=1216k,cluster-sz-3->master-40=1216k,
+                cluster-sh-2->cluster-sh-1=2048k,cluster-sh-3->cluster-sh-1=2048k,
+                cluster-sz-2->cluster-sz-1=2048k,cluster-sz-3->cluster-sz-1=2048k,
+                cluster-bj-2->cluster-bj-1=2048k,
+                *->master-215=2048k,
+                *->cluster-sh-1=1408k,*->cluster-bj-1=1280k,*->cluster-sz-1=1216k,
+                cluster-hz-1->*=1536k,
+                cluster-sh-1->*=1408k,cluster-sh-2->*=1408k,cluster-sh-3->*=1408k,
+                cluster-bj-1->*=1280k,cluster-bj-2->*=1280k,
+                cluster-sz-1->*=1216k,cluster-sz-2->*=1216k,cluster-sz-3->*=1216k
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS
