@@ -40,7 +40,7 @@ spec:
             - name: DISPATCH_CENTRAL_NODE_NAME
               value: "master-40"
             # 同域与分布式路径使用统一基准 2048k。跨域路径按相对于浙江中心的物理距离
-            # 使用经实测时间开销校准的系数：杭州 0.765625、上海 0.703125、北京 0.65625、深圳 0.609375。
+            # 使用经实测时间开销校准的系数：杭州 0.765625、上海 0.703125、北京 0.65625、深圳 0.59375。
             # 系数随物理距离递减，同时补偿公网连接、校验与链路抖动对实测时长的影响。规则按顺序匹配：
             # 先匹配中心路径和同域路径，
             # 再匹配分布式备选节点与其他跨域路径。
@@ -51,16 +51,16 @@ spec:
                 cluster-hz-1->master-40=1568k,
                 cluster-sh-1->master-40=1440k,cluster-sh-2->master-40=1440k,cluster-sh-3->master-40=1440k,
                 cluster-bj-1->master-40=1344k,cluster-bj-2->master-40=1344k,
-                cluster-sz-1->master-40=1248k,cluster-sz-2->master-40=1248k,cluster-sz-3->master-40=1248k,
+                cluster-sz-1->master-40=1216k,cluster-sz-2->master-40=1216k,cluster-sz-3->master-40=1216k,
                 cluster-sh-2->cluster-sh-1=2048k,cluster-sh-3->cluster-sh-1=2048k,
                 cluster-sz-2->cluster-sz-1=2048k,cluster-sz-3->cluster-sz-1=2048k,
                 cluster-bj-2->cluster-bj-1=2048k,
                 *->master-215=2048k,
-                *->cluster-sh-1=1440k,*->cluster-bj-1=1344k,*->cluster-sz-1=1248k,
+                *->cluster-sh-1=1440k,*->cluster-bj-1=1344k,*->cluster-sz-1=1216k,
                 cluster-hz-1->*=1568k,
                 cluster-sh-1->*=1440k,cluster-sh-2->*=1440k,cluster-sh-3->*=1440k,
                 cluster-bj-1->*=1344k,cluster-bj-2->*=1344k,
-                cluster-sz-1->*=1248k,cluster-sz-2->*=1248k,cluster-sz-3->*=1248k
+                cluster-sz-1->*=1216k,cluster-sz-2->*=1216k,cluster-sz-3->*=1216k
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS
