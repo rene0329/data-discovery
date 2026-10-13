@@ -30,18 +30,25 @@ spec:
           imagePullPolicy: IfNotPresent
           command:
             - sh
-            - -c
+            - -ec
             - |
-              set -eu
-              while true; do
-                ip route replace 10.214.0.0/24 via 10.15.16.40
-                iptables-legacy -t nat -C POSTROUTING \
+              ensure_nat_rule() {
+                iptables-legacy -w 5 -t nat -C POSTROUTING \
                   -s 10.214.0.0/24 -d 10.15.0.0/16 -o ens25f2 \
                   -j SNAT --to-source 10.15.17.215 2>/dev/null || \
-                  iptables-legacy -t nat -I POSTROUTING 1 \
-                    -s 10.214.0.0/24 -d 10.15.0.0/16 -o ens25f2 \
-                    -j SNAT --to-source 10.15.17.215
-                sleep 60
+                iptables-legacy -w 5 -t nat -I POSTROUTING 1 \
+                  -s 10.214.0.0/24 -d 10.15.0.0/16 -o ens25f2 \
+                  -j SNAT --to-source 10.15.17.215
+              }
+
+              ensure_route_and_nat() {
+                ip route replace 10.214.0.0/24 via 10.15.16.40
+                ensure_nat_rule
+              }
+
+              ensure_route_and_nat
+              while sleep 300; do
+                ensure_route_and_nat
               done
           securityContext:
             privileged: true
@@ -49,18 +56,16 @@ spec:
             exec:
               command:
                 - sh
-                - -c
-                - >-
-                  ip route show 10.214.0.0/24 | grep -Fq 'via 10.15.16.40' &&
-                  iptables-legacy -t nat -C POSTROUTING
-                  -s 10.214.0.0/24 -d 10.15.0.0/16 -o ens25f2
-                  -j SNAT --to-source 10.15.17.215
+                - -ec
+                - ip route show 10.214.0.0/24 | grep -Fq 'via 10.15.16.40'
             initialDelaySeconds: 2
-            periodSeconds: 10
+            timeoutSeconds: 2
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             requests:
-              cpu: 5m
-              memory: 8Mi
+              cpu: 10m
+              memory: 64Mi
             limits:
-              cpu: 50m
-              memory: 32Mi
+              cpu: 200m
+              memory: 256Mi

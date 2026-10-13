@@ -72,7 +72,9 @@ spec:
                 - -ec
                 - ip route show 10.214.0.1/32 | grep -Fq 'dev tun20'
             initialDelaySeconds: 2
-            periodSeconds: 5
+            timeoutSeconds: 2
+            periodSeconds: 15
+            failureThreshold: 3
           volumeMounts:
             - name: ssh
               mountPath: /ssh
@@ -81,11 +83,11 @@ spec:
               mountPath: /dev/net/tun
           resources:
             requests:
-              cpu: 5m
-              memory: 16Mi
-            limits:
-              cpu: 100m
+              cpu: 25m
               memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
       volumes:
         - name: tun
           hostPath:
@@ -170,7 +172,9 @@ spec:
                 - -ec
                 - ip route show 10.214.0.13/32 | grep -Fq 'dev tun20'
             initialDelaySeconds: 2
-            periodSeconds: 5
+            timeoutSeconds: 2
+            periodSeconds: 15
+            failureThreshold: 3
           volumeMounts:
             - name: ssh
               mountPath: /ssh
@@ -179,11 +183,11 @@ spec:
               mountPath: /dev/net/tun
           resources:
             requests:
-              cpu: 5m
-              memory: 16Mi
-            limits:
-              cpu: 100m
+              cpu: 25m
               memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
       volumes:
         - name: tun
           hostPath:
@@ -268,7 +272,9 @@ spec:
                 - -ec
                 - ip route show 10.214.0.15/32 | grep -Fq 'dev tun21'
             initialDelaySeconds: 2
-            periodSeconds: 5
+            timeoutSeconds: 2
+            periodSeconds: 15
+            failureThreshold: 3
           volumeMounts:
             - name: ssh
               mountPath: /ssh
@@ -277,11 +283,11 @@ spec:
               mountPath: /dev/net/tun
           resources:
             requests:
-              cpu: 5m
-              memory: 16Mi
-            limits:
-              cpu: 100m
+              cpu: 25m
               memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
       volumes:
         - name: tun
           hostPath:
@@ -366,7 +372,9 @@ spec:
                 - -ec
                 - ip route show 10.214.0.17/32 | grep -Fq 'dev tun22'
             initialDelaySeconds: 2
-            periodSeconds: 5
+            timeoutSeconds: 2
+            periodSeconds: 15
+            failureThreshold: 3
           volumeMounts:
             - name: ssh
               mountPath: /ssh
@@ -375,11 +383,11 @@ spec:
               mountPath: /dev/net/tun
           resources:
             requests:
-              cpu: 5m
-              memory: 16Mi
-            limits:
-              cpu: 100m
+              cpu: 25m
               memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
       volumes:
         - name: tun
           hostPath:
