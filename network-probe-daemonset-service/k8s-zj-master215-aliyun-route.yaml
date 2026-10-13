@@ -52,16 +52,6 @@ spec:
               done
           securityContext:
             privileged: true
-          readinessProbe:
-            exec:
-              command:
-                - sh
-                - -ec
-                - ip route show 10.214.0.0/24 | grep -Fq 'via 10.15.16.40'
-            initialDelaySeconds: 2
-            timeoutSeconds: 2
-            periodSeconds: 30
-            failureThreshold: 3
           resources:
             requests:
               cpu: 10m

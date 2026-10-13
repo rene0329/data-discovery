@@ -66,11 +66,9 @@ spec:
               drop:
                 - ALL
           readinessProbe:
-            exec:
-              command:
-                - sh
-                - -ec
-                - ip route show 10.214.0.1/32 | grep -Fq 'dev tun20'
+            tcpSocket:
+              host: 10.214.0.1
+              port: 10250
             initialDelaySeconds: 2
             timeoutSeconds: 2
             periodSeconds: 15
@@ -166,11 +164,9 @@ spec:
               drop:
                 - ALL
           readinessProbe:
-            exec:
-              command:
-                - sh
-                - -ec
-                - ip route show 10.214.0.13/32 | grep -Fq 'dev tun20'
+            tcpSocket:
+              host: 10.214.0.13
+              port: 10250
             initialDelaySeconds: 2
             timeoutSeconds: 2
             periodSeconds: 15
@@ -266,11 +262,9 @@ spec:
               drop:
                 - ALL
           readinessProbe:
-            exec:
-              command:
-                - sh
-                - -ec
-                - ip route show 10.214.0.15/32 | grep -Fq 'dev tun21'
+            tcpSocket:
+              host: 10.214.0.15
+              port: 10250
             initialDelaySeconds: 2
             timeoutSeconds: 2
             periodSeconds: 15
@@ -366,11 +360,9 @@ spec:
               drop:
                 - ALL
           readinessProbe:
-            exec:
-              command:
-                - sh
-                - -ec
-                - ip route show 10.214.0.17/32 | grep -Fq 'dev tun22'
+            tcpSocket:
+              host: 10.214.0.17
+              port: 10250
             initialDelaySeconds: 2
             timeoutSeconds: 2
             periodSeconds: 15
