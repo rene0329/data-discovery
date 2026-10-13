@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: topic4-master141-shenzhen-route
+  namespace: topic4-1
+  labels:
+    app: topic4-master141-shenzhen-route
+spec:
+  selector:
+    matchLabels:
+      app: topic4-master141-shenzhen-route
+  template:
+    metadata:
+      labels:
+        app: topic4-master141-shenzhen-route
+    spec:
+      hostNetwork: true
+      nodeSelector:
+        kubernetes.io/hostname: master-141
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: route-keeper
+          image: 10.15.16.40:30455/data-discovery-network-probe:v-a3bd2e4f5d152f6432754a852c5d50ed0c64d8a5
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -ec
+            - |
+              ensure_routes() {
+                ip route replace 10.214.0.13/32 via 10.15.17.215 dev ens17f0
+                ip route replace 10.214.0.15/32 via 10.15.17.215 dev ens17f0
+                ip route replace 10.214.0.17/32 via 10.15.17.215 dev ens17f0
+              }
+
+              cleanup() {
+                ip route del 10.214.0.13/32 via 10.15.17.215 dev ens17f0 2>/dev/null || true
+                ip route del 10.214.0.15/32 via 10.15.17.215 dev ens17f0 2>/dev/null || true
+                ip route del 10.214.0.17/32 via 10.15.17.215 dev ens17f0 2>/dev/null || true
+              }
+
+              trap cleanup EXIT INT TERM HUP
+              ensure_routes
+              while sleep 300; do
+                ensure_routes
+              done
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 256Mi
