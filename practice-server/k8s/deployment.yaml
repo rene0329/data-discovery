@@ -48,6 +48,7 @@ spec:
               value: "1408k"
             - name: DISPATCH_JOB_CURL_LIMIT_RATE_PATHS
               value: >-
+                cluster-hz-1->cluster-hz-1=1408k,
                 cluster-hz-1->master-40=1080k,
                 cluster-sh-1->master-40=992k,cluster-sh-2->master-40=992k,cluster-sh-3->master-40=992k,
                 cluster-bj-1->master-40=928k,cluster-bj-2->master-40=928k,
