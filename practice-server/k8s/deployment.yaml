@@ -88,6 +88,15 @@ spec:
                   key: bootstrap-admin-password
             - name: APP_AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME
               value: "System Administrator"
+            # Intentionally grants administrator access to every client that can
+            # reach this API, without exposing the administrator password to the frontend.
+            - name: APP_AUTH_DIRECT_LOGIN_ENABLED
+              value: "true"
+            - name: APP_AUTH_DIRECT_LOGIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: topic4-auth-secrets
+                  key: bootstrap-admin-username
             - name: PRIVACY_LEGACY_A_DATASET_ID
               value: "28"
             - name: PRIVACY_LEGACY_A_DATASET_VERSION

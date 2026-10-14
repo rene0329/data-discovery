@@ -44,6 +44,40 @@ class AuthServiceTest {
     }
 
     @Test
+    void directLoginIssuesAdministratorTokenWithoutCheckingAPassword() {
+        AuthMapper mapper = mock(AuthMapper.class);
+        JwtTokenService tokens = new JwtTokenService("0123456789abcdef0123456789abcdef", 28800);
+        AuthUserRecord user = user(1L, "unused", true, 3);
+        user.setUsername("admin");
+        user.setDomainId(null);
+        user.setDomainEnabled(null);
+        when(mapper.findUserByUsername("admin")).thenReturn(user);
+        when(mapper.listRoleCodes(1L)).thenReturn(Collections.singletonList("ADMIN"));
+        AuthService service = new AuthService(mapper, new BCryptPasswordEncoder(4), tokens,
+                new CurrentUserService());
+
+        String token = service.directLogin(" ADMIN ").getToken();
+
+        assertEquals(1, ((Number) tokens.parse(token).get("uid")).intValue());
+        assertEquals(Collections.singletonList("ADMIN"), tokens.parse(token).get("roles"));
+    }
+
+    @Test
+    void directLoginRefusesAnAccountWithoutAdministratorRole() {
+        AuthMapper mapper = mock(AuthMapper.class);
+        AuthUserRecord user = user(5L, "unused", true, 0);
+        when(mapper.findUserByUsername("owner-a")).thenReturn(user);
+        when(mapper.listRoleCodes(5L)).thenReturn(Collections.singletonList("DATA_OWNER"));
+        AuthService service = new AuthService(mapper, new BCryptPasswordEncoder(4),
+                new JwtTokenService("0123456789abcdef0123456789abcdef", 28800),
+                new CurrentUserService());
+
+        AuthException error = assertThrows(AuthException.class, () -> service.directLogin("owner-a"));
+
+        assertEquals("DIRECT_LOGIN_ADMIN_UNAVAILABLE", error.getErrorCode());
+    }
+
+    @Test
     void administratorCanStartAuditedReadOnlyUserSwitch() {
         AuthMapper mapper = mock(AuthMapper.class);
         CurrentUserService currentUsers = mock(CurrentUserService.class);

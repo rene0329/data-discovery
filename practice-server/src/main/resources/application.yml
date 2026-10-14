@@ -184,6 +184,11 @@ app:
       username: ${APP_AUTH_BOOTSTRAP_ADMIN_USERNAME:}
       password: ${APP_AUTH_BOOTSTRAP_ADMIN_PASSWORD:}
       display-name: ${APP_AUTH_BOOTSTRAP_ADMIN_DISPLAY_NAME:System Administrator}
+    direct-login:
+      # Keep disabled by default. Enabling this grants ADMIN access to every client
+      # that can reach the API, so the deployment must provide a network boundary.
+      enabled: ${APP_AUTH_DIRECT_LOGIN_ENABLED:false}
+      username: ${APP_AUTH_DIRECT_LOGIN_USERNAME:${APP_AUTH_BOOTSTRAP_ADMIN_USERNAME:}}
 
   network-topology:
     # Daily bounded bandwidth probes: allow two hours for scheduling, retries and reporting.

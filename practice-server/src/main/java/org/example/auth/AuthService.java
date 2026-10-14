@@ -55,6 +55,33 @@ public class AuthService {
         return new AuthDtos.LoginResponse(tokens.create(user, roles));
     }
 
+    /**
+     * Issues a normal short-lived token for the configured administrator when
+     * passwordless entry has been explicitly enabled by the deployment.
+     */
+    public AuthDtos.LoginResponse directLogin(String configuredUsername) {
+        String username = trim(configuredUsername);
+        if (username == null) {
+            throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE, "DIRECT_LOGIN_NOT_CONFIGURED",
+                    "direct login administrator is not configured");
+        }
+        AuthUserRecord user = mapper.findUserByUsername(username.toLowerCase(Locale.ROOT));
+        if (user == null || !Boolean.TRUE.equals(user.getEnabled())) {
+            throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE, "DIRECT_LOGIN_ADMIN_UNAVAILABLE",
+                    "direct login administrator is unavailable");
+        }
+        if (user.getDomainId() != null && !Boolean.TRUE.equals(user.getDomainEnabled())) {
+            throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE, "DIRECT_LOGIN_ADMIN_UNAVAILABLE",
+                    "direct login administrator is unavailable");
+        }
+        List<String> roles = mapper.listRoleCodes(user.getUserId());
+        if (!roles.contains("ADMIN")) {
+            throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE, "DIRECT_LOGIN_ADMIN_UNAVAILABLE",
+                    "direct login account is not an administrator");
+        }
+        return new AuthDtos.LoginResponse(tokens.create(user, roles));
+    }
+
     public AuthDtos.MeResponse me() {
         return new AuthDtos.MeResponse(currentUsers.currentUser());
     }
