@@ -2,6 +2,7 @@ package org.example.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -39,6 +40,7 @@ public class OpenSslSha256FileDigestCalculator implements Sha256FileDigestCalcul
     private final long timeoutSeconds;
     private final Sha256FileDigestCalculator fallback;
 
+    @Autowired
     public OpenSslSha256FileDigestCalculator(
             @Value("${file.verification.openssl.path:/usr/bin/openssl}") String executable,
             @Value("${file.verification.openssl.timeout-seconds:2400}") long timeoutSeconds) {
