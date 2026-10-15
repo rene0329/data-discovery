@@ -43,7 +43,7 @@ public class OpenSslSha256FileDigestCalculator implements Sha256FileDigestCalcul
     @Autowired
     public OpenSslSha256FileDigestCalculator(
             @Value("${file.verification.openssl.path:/usr/bin/openssl}") String executable,
-            @Value("${file.verification.openssl.timeout-seconds:2400}") long timeoutSeconds) {
+            @Value("${file.verification.openssl.timeout-seconds:10800}") long timeoutSeconds) {
         this(Paths.get(executable), timeoutSeconds, new JavaSha256FileDigestCalculator());
     }
 

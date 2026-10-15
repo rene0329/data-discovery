@@ -32,7 +32,7 @@ class ReplicaReverifyWorkerTest {
                 mapper, nodeMapper, nodeAvailability, registrationService);
         ReflectionTestUtils.setField(worker, "maxDatasetsPerTick", 5);
         ReflectionTestUtils.setField(worker, "retryBackoffMinutes", 15L);
-        ReflectionTestUtils.setField(worker, "staleVerifyingMinutes", 50L);
+        ReflectionTestUtils.setField(worker, "staleVerifyingMinutes", 190L);
 
         RegisteredDataset dataset = RegisteredDataset.builder().datasetId(19L).status("ACTIVE").build();
         DatasetReplica healthy = DatasetReplica.builder().replicaId(18L).datasetId(19L)
@@ -63,10 +63,10 @@ class ReplicaReverifyWorkerTest {
                 mapper, nodeMapper, nodeAvailability, registrationService);
         ReflectionTestUtils.setField(worker, "maxDatasetsPerTick", 5);
         ReflectionTestUtils.setField(worker, "retryBackoffMinutes", 15L);
-        ReflectionTestUtils.setField(worker, "staleVerifyingMinutes", 50L);
+        ReflectionTestUtils.setField(worker, "staleVerifyingMinutes", 190L);
 
         RegisteredDataset interrupted = RegisteredDataset.builder().datasetId(19L).status("VERIFYING")
-                .updatedAt(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(60)).build();
+                .updatedAt(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(200)).build();
         RegisteredDataset inFlight = RegisteredDataset.builder().datasetId(20L).status("VERIFYING")
                 .updatedAt(LocalDateTime.now(ZoneOffset.UTC).minusMinutes(10)).build();
         when(mapper.listDatasets(null, "ACTIVE")).thenReturn(Collections.emptyList());

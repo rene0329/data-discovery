@@ -50,7 +50,7 @@ public class ReplicaReverifyWorker {
     @Value("${dataset.reverify.retry-backoff-minutes:15}")
     private long retryBackoffMinutes;
 
-    @Value("${dataset.reverify.stale-verifying-minutes:50}")
+    @Value("${dataset.reverify.stale-verifying-minutes:190}")
     private long staleVerifyingMinutes;
 
     // Per-dataset backoff so a dataset whose replica genuinely fails

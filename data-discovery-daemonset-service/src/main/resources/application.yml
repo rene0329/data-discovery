@@ -56,7 +56,7 @@ file:
   verification:
     openssl:
       path: ${FILE_VERIFICATION_OPENSSL_PATH:/usr/bin/openssl}
-      timeout-seconds: ${FILE_VERIFICATION_OPENSSL_TIMEOUT_SECONDS:2400}
+      timeout-seconds: ${FILE_VERIFICATION_OPENSSL_TIMEOUT_SECONDS:10800}
   discovery:
     data-directory: C:/test-data
     enable-md5: false
