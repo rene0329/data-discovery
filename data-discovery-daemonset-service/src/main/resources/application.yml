@@ -53,6 +53,10 @@ node:
 
 # 文件发现配置
 file:
+  verification:
+    openssl:
+      path: ${FILE_VERIFICATION_OPENSSL_PATH:/usr/bin/openssl}
+      timeout-seconds: ${FILE_VERIFICATION_OPENSSL_TIMEOUT_SECONDS:2400}
   discovery:
     data-directory: C:/test-data
     enable-md5: false

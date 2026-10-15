@@ -480,6 +480,37 @@ class DatasetRegistrationServiceTest {
         verify(mapper).updateDatasetStatus(42L, "DISABLED", null, false);
     }
 
+    @Test
+    void targetedReplicaVerificationDoesNotReadAHealthySibling() {
+        RegisteredDataset dataset = RegisteredDataset.builder().datasetId(19L)
+                .datasetVersion("1.0").name("criteo").status("ACTIVE").build();
+        DatasetReplica healthy = DatasetReplica.builder().replicaId(18L).datasetId(19L)
+                .nodeId(1).filePath("/dataset/criteo.csv").availability("AVAILABLE").build();
+        DatasetReplica stale = DatasetReplica.builder().replicaId(24L).datasetId(19L)
+                .nodeId(3).filePath("/dataset/criteo-copy.csv").sizeBytes(100L)
+                .availability("UNVERIFIED").build();
+        NodeManagement staleNode = NodeManagement.builder().nodeId(3).nodeName("master-40").build();
+        when(mapper.findDatasetById(19L)).thenReturn(dataset);
+        when(mapper.findReplicaById(24L)).thenReturn(stale);
+        when(mapper.findDatasetMetadata(19L)).thenReturn(DatasetMetadata.builder()
+                .datasetId(19L).authoritativeSizeBytes(100L)
+                .digestAlgorithm("SHA-256").digestValue(SHA256).build());
+        when(mapper.listReplicas(19L)).thenReturn(Arrays.asList(healthy, stale));
+        when(nodeMapper.getNodeById(3)).thenReturn(staleNode);
+
+        boolean verified = service.verifyReplica(19L, 24L, "targeted-reverify");
+
+        assertTrue(verified);
+        verify(uploadClient).verify(eq(staleNode), eq(stale.getFilePath()), eq(100L), eq(SHA256),
+                eq(19L), eq("1.0"), eq("targeted-reverify"), eq(null));
+        verify(uploadClient, never()).verify(any(NodeManagement.class), eq(healthy.getFilePath()),
+                any(), any(), any(), any(), any(), any());
+        verify(mapper).updateReplicaIntegrity(24L, 100L, "SHA-256", SHA256,
+                "AVAILABLE", "verified against dataset-version authority", true);
+        verify(mapper, never()).updateDatasetStatus(any(), any(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean());
+    }
+
     // ---- domain rule: registering and uploading ---------------------------------------
 
     @Test

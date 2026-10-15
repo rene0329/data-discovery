@@ -436,6 +436,66 @@ public class DatasetRegistrationService {
         return getDataset(datasetId);
     }
 
+    /**
+     * Re-verifies one stale replica without re-reading every healthy replica of
+     * the dataset. This is the automatic recovery path used by
+     * {@link ReplicaReverifyWorker}; the explicit dataset verification API
+     * above intentionally retains its full-dataset semantics.
+     */
+    public boolean verifyReplica(Long datasetId, Long replicaId, String requestId) {
+        RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
+        DatasetReplica replica = requireDatasetReplica(datasetId, replicaId);
+        if (!"UNVERIFIED".equals(replica.getAvailability())
+                && !"VERIFY_FAILED".equals(replica.getAvailability())) {
+            return replicaAvailabilityService.evaluate(replica).isUsable();
+        }
+
+        DatasetMetadata metadata = mapper.findDatasetMetadata(datasetId);
+        FileIntegrityResult measurement = null;
+        boolean valid = false;
+        String message;
+        try {
+            String authority = requireAuthority(metadata);
+            NodeManagement node = nodeMapper.getNodeById(replica.getNodeId());
+            if (node == null) throw new IllegalStateException("replica node is not registered");
+            measurement = uploadClient.verify(node, replica.getFilePath(),
+                    metadata.getAuthoritativeSizeBytes(), authority, datasetId,
+                    dataset.getDatasetVersion(), requestId, null);
+            valid = measurement != null && measurement.isVerified()
+                    && validMeasurement(measurement, metadata.getAuthoritativeSizeBytes())
+                    && authority.equals(normalizeSha256(measurement.getDigest()));
+            message = valid ? "verified against dataset-version authority"
+                    : measurement == null ? "integrity verification failed"
+                    : firstText(measurement.getMessage(), "integrity verification failed");
+        } catch (RuntimeException error) {
+            message = error.getMessage() == null ? "integrity verification failed" : error.getMessage();
+        }
+
+        mapper.updateReplicaIntegrity(replicaId,
+                measurement == null ? replica.getSizeBytes() : measurement.getSizeBytes(),
+                measurement == null ? null : measurement.getAlgorithm(),
+                measurement == null ? null : measurement.getDigest(),
+                valid ? "AVAILABLE" : "VERIFY_FAILED", message, valid);
+        mapper.updateCandidateIntegrity(replica.getNodeId(), replica.getFilePath(),
+                measurement == null ? replica.getSizeBytes() : measurement.getSizeBytes(),
+                measurement == null ? null : measurement.getAlgorithm(),
+                measurement == null ? null : measurement.getDigest(),
+                valid ? "AVAILABLE" : "VERIFY_FAILED", valid);
+
+        if (valid) {
+            audit("DATASET", String.valueOf(datasetId), "VERIFY_REPLICA", requestId,
+                    "replicaId=" + replicaId);
+            return true;
+        }
+        if (!hasUsableReplicaOtherThan(datasetId, replicaId)) {
+            mapper.updateDatasetStatus(datasetId, "VERIFY_FAILED", "no valid replica", false);
+        }
+        audit("DATASET", String.valueOf(datasetId), "VERIFY_REPLICA_FAILED", requestId,
+                "replicaId=" + replicaId + ",reason=" + message);
+        return false;
+    }
+
     @Transactional
     public RegisteredDatasetView activate(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);
@@ -799,6 +859,16 @@ public class DatasetRegistrationService {
             if (replicaAvailabilityService.evaluate(replica).isUsable()) count++;
         }
         return count;
+    }
+
+    private boolean hasUsableReplicaOtherThan(Long datasetId, Long replicaId) {
+        for (DatasetReplica candidate : mapper.listReplicas(datasetId)) {
+            if (!replicaId.equals(candidate.getReplicaId())
+                    && replicaAvailabilityService.evaluate(candidate).isUsable()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void validateRegisterRequest(RegisterDatasetRequest request) {

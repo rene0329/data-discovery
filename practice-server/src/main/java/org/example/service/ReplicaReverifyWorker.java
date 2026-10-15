@@ -70,7 +70,8 @@ public class ReplicaReverifyWorker {
         for (RegisteredDataset dataset : activeDatasets) {
             if (attempted >= maxDatasetsPerTick) break;
             Long datasetId = dataset.getDatasetId();
-            if (!needsReverify(datasetId)) continue;
+            List<DatasetReplica> staleReplicas = replicasNeedingReverify(datasetId);
+            if (staleReplicas.isEmpty()) continue;
 
             Instant last = lastAttempt.get(datasetId);
             if (last != null && Duration.between(last, Instant.now()).toMinutes() < retryBackoffMinutes) {
@@ -79,13 +80,22 @@ public class ReplicaReverifyWorker {
             lastAttempt.put(datasetId, Instant.now());
             attempted++;
             runAsSystem(() -> {
-                try {
-                    registrationService.verify(datasetId, "reverify-worker-" + UUID.randomUUID());
-                    log.info("自动重新校验数据集 {} 完成", datasetId);
-                } catch (RuntimeException error) {
-                    // verify() already records VERIFY_FAILED / the per-replica reason;
-                    // this loop must keep going for the remaining datasets.
-                    log.warn("自动重新校验数据集 {} 失败: {}", datasetId, error.getMessage());
+                for (DatasetReplica replica : staleReplicas) {
+                    try {
+                        String requestId = "reverify-worker-" + UUID.randomUUID();
+                        boolean verified = registrationService.verifyReplica(
+                                datasetId, replica.getReplicaId(), requestId);
+                        if (verified) {
+                            log.info("自动重新校验数据集 {} 的副本 {} 完成", datasetId, replica.getReplicaId());
+                        } else {
+                            log.warn("自动重新校验数据集 {} 的副本 {} 未通过", datasetId, replica.getReplicaId());
+                        }
+                    } catch (RuntimeException error) {
+                        // verifyReplica() records the per-replica reason when it
+                        // reaches the Agent. Keep processing other stale copies.
+                        log.warn("自动重新校验数据集 {} 的副本 {} 失败: {}",
+                                datasetId, replica.getReplicaId(), error.getMessage());
+                    }
                 }
             });
         }
@@ -112,9 +122,10 @@ public class ReplicaReverifyWorker {
         }
     }
 
-    private boolean needsReverify(Long datasetId) {
+    private List<DatasetReplica> replicasNeedingReverify(Long datasetId) {
         List<DatasetReplica> replicas = mapper.listReplicas(datasetId);
-        if (replicas == null) return false;
+        if (replicas == null || replicas.isEmpty()) return Collections.emptyList();
+        java.util.ArrayList<DatasetReplica> stale = new java.util.ArrayList<>();
         for (DatasetReplica replica : replicas) {
             if (!"UNVERIFIED".equals(replica.getAvailability())
                     && !"VERIFY_FAILED".equals(replica.getAvailability())) {
@@ -122,9 +133,9 @@ public class ReplicaReverifyWorker {
             }
             NodeManagement node = nodeMapper.getNodeById(replica.getNodeId());
             if (node != null && nodeAvailability.isSchedulable(node)) {
-                return true;
+                stale.add(replica);
             }
         }
-        return false;
+        return stale;
     }
 }

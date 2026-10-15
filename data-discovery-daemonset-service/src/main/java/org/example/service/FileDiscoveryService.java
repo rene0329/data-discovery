@@ -174,6 +174,12 @@ public class FileDiscoveryService {
     @Autowired
     private NodeManagementMapper nodeManagementMapper;
 
+    @Autowired(required = false)
+    private Sha256FileDigestCalculator sha256FileDigestCalculator;
+
+    private static final Sha256FileDigestCalculator JAVA_SHA256_FALLBACK =
+            new JavaSha256FileDigestCalculator();
+
     private Integer nodeId; // 当前节点的数据库 ID
 
     @Value("${file.discovery.missing-confirm-scans:3}")
@@ -447,22 +453,23 @@ public class FileDiscoveryService {
         if (file == null || !Files.isRegularFile(file) || !Files.isReadable(file)) {
             throw new NoSuchFileException(String.valueOf(file));
         }
-        long size = 0L;
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException impossible) {
-            throw new IllegalStateException("SHA-256 is not available", impossible);
-        }
-        try (InputStream input = new BufferedInputStream(Files.newInputStream(file))) {
-            byte[] buffer = new byte[1024 * 1024];
-            int read;
-            while ((read = input.read(buffer)) != -1) {
-                digest.update(buffer, 0, read);
-                size += read;
+        Path realFile = file.toRealPath();
+        if (DATA_DIRECTORY != null && !DATA_DIRECTORY.trim().isEmpty()) {
+            Path realRoot = Paths.get(DATA_DIRECTORY).toAbsolutePath().normalize().toRealPath();
+            if (!realFile.startsWith(realRoot)) {
+                throw new AccessDeniedException(file.toString(), null,
+                        "dataset file resolves outside the configured data directory");
             }
         }
-        String actual = toHex(digest.digest());
+        BasicFileAttributes before = Files.readAttributes(realFile, BasicFileAttributes.class);
+        String actual = digestCalculator().calculate(realFile);
+        BasicFileAttributes after = Files.readAttributes(realFile, BasicFileAttributes.class);
+        if (before.size() != after.size()
+                || !before.lastModifiedTime().equals(after.lastModifiedTime())
+                || !Objects.equals(before.fileKey(), after.fileKey())) {
+            throw new IOException("dataset file changed during SHA-256 verification");
+        }
+        long size = after.size();
         String expected = normalizeSha256(expectedSha256);
         boolean hasExpected = expected != null;
         boolean sizeMatches = expectedSize != null && expectedSize >= 0 && expectedSize == size;
@@ -476,17 +483,15 @@ public class FileDiscoveryService {
         return new FileIntegrityResult(file.toString(), size, "SHA-256", actual, verified, message);
     }
 
+    private Sha256FileDigestCalculator digestCalculator() {
+        return sha256FileDigestCalculator == null ? JAVA_SHA256_FALLBACK : sha256FileDigestCalculator;
+    }
+
     private String normalizeSha256(String value) {
         if (value == null) return null;
         String normalized = value.trim().toLowerCase(Locale.ROOT);
         if (normalized.startsWith("sha256:")) normalized = normalized.substring("sha256:".length());
         return normalized.matches("[0-9a-f]{64}") ? normalized : null;
-    }
-
-    private String toHex(byte[] value) {
-        StringBuilder result = new StringBuilder(value.length * 2);
-        for (byte item : value) result.append(String.format("%02x", item & 0xff));
-        return result.toString();
     }
 
     // ── 数据集元信息映射（按文件名去扩展名后的 baseName 匹配） ─────────────
