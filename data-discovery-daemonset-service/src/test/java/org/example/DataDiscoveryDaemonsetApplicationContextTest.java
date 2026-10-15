@@ -2,6 +2,8 @@ package org.example;
 
 import org.example.security.aggregation.worker.SecureAggregationWorkerService;
 import org.example.service.FileDiscoveryService;
+import org.example.service.OpenSslSha256FileDigestCalculator;
+import org.example.service.Sha256FileDigestCalculator;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
@@ -30,6 +32,9 @@ class DataDiscoveryDaemonsetApplicationContextTest {
     void daemonBeansStartWithoutImportingControlPlaneEndpoints() {
         assertTrue(context.containsBean("nodeDatasetAccessController"));
         assertTrue(context.getBeansOfType(SecureAggregationWorkerService.class).size() == 1);
+        assertTrue(context.getBeansOfType(Sha256FileDigestCalculator.class).size() == 1);
+        assertTrue(context.getBean(Sha256FileDigestCalculator.class)
+                instanceof OpenSslSha256FileDigestCalculator);
         assertFalse(context.containsBean("datasetAccessSecurityController"));
         assertFalse(context.containsBean("secureAggregationController"));
         assertFalse(context.containsBean("taskV1Controller"));

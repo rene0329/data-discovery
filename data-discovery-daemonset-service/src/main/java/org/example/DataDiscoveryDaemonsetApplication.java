@@ -15,6 +15,7 @@ import org.example.service.FileDiscoveryService;
 import org.example.service.NodeAvailabilityService;
 import org.example.service.NodeDatasetReadService;
 import org.example.service.NodeReadCacheService;
+import org.example.service.OpenSslSha256FileDigestCalculator;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -49,6 +50,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;  // 如果你
         DataDiscoveryController.class,
         DatasetAccessController.class,
         FileDiscoveryService.class,
+        OpenSslSha256FileDigestCalculator.class,
         NodeDatasetReadService.class,
         NodeReadCacheService.class,
         DatasetAccessScopeVerifier.class,
