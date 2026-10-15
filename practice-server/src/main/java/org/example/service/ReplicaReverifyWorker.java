@@ -17,6 +17,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +50,9 @@ public class ReplicaReverifyWorker {
     @Value("${dataset.reverify.retry-backoff-minutes:15}")
     private long retryBackoffMinutes;
 
+    @Value("${dataset.reverify.stale-verifying-minutes:50}")
+    private long staleVerifyingMinutes;
+
     // Per-dataset backoff so a dataset whose replica genuinely fails
     // verification (corrupt file, wrong node) isn't re-attempted every tick.
     private final Map<Long, Instant> lastAttempt = new ConcurrentHashMap<>();
@@ -63,15 +69,21 @@ public class ReplicaReverifyWorker {
 
     @Scheduled(fixedDelayString = "${dataset.reverify.interval-ms:300000}")
     public void reverifyStaleReplicas() {
-        List<RegisteredDataset> activeDatasets = mapper.listDatasets(null, "ACTIVE");
-        if (activeDatasets == null || activeDatasets.isEmpty()) return;
+        List<RegisteredDataset> datasets = new ArrayList<>();
+        addAll(datasets, mapper.listDatasets(null, "ACTIVE"));
+        addAll(datasets, mapper.listDatasets(null, "VERIFYING"));
+        if (datasets.isEmpty()) return;
 
         int attempted = 0;
-        for (RegisteredDataset dataset : activeDatasets) {
+        for (RegisteredDataset dataset : datasets) {
             if (attempted >= maxDatasetsPerTick) break;
             Long datasetId = dataset.getDatasetId();
+            boolean interruptedVerification = staleVerifying(dataset);
+            if ("VERIFYING".equals(dataset.getStatus()) && !interruptedVerification) {
+                continue;
+            }
             List<DatasetReplica> staleReplicas = replicasNeedingReverify(datasetId);
-            if (staleReplicas.isEmpty()) continue;
+            if (staleReplicas.isEmpty() && !interruptedVerification) continue;
 
             Instant last = lastAttempt.get(datasetId);
             if (last != null && Duration.between(last, Instant.now()).toMinutes() < retryBackoffMinutes) {
@@ -80,11 +92,11 @@ public class ReplicaReverifyWorker {
             lastAttempt.put(datasetId, Instant.now());
             attempted++;
             runAsSystem(() -> {
+                String recoveryRequestId = "reverify-worker-" + UUID.randomUUID();
                 for (DatasetReplica replica : staleReplicas) {
                     try {
-                        String requestId = "reverify-worker-" + UUID.randomUUID();
                         boolean verified = registrationService.verifyReplica(
-                                datasetId, replica.getReplicaId(), requestId);
+                                datasetId, replica.getReplicaId(), recoveryRequestId);
                         if (verified) {
                             log.info("自动重新校验数据集 {} 的副本 {} 完成", datasetId, replica.getReplicaId());
                         } else {
@@ -97,8 +109,30 @@ public class ReplicaReverifyWorker {
                                 datasetId, replica.getReplicaId(), error.getMessage());
                     }
                 }
+                if (interruptedVerification) {
+                    boolean recovered = registrationService.completeInterruptedVerification(
+                            datasetId, recoveryRequestId);
+                    if (recovered) {
+                        log.info("数据集 {} 的超时校验状态已恢复为 ACTIVE", datasetId);
+                    } else {
+                        log.warn("数据集 {} 的超时校验状态已置为 VERIFY_FAILED", datasetId);
+                    }
+                }
             });
         }
+    }
+
+    private void addAll(List<RegisteredDataset> target, List<RegisteredDataset> source) {
+        if (source != null) target.addAll(source);
+    }
+
+    private boolean staleVerifying(RegisteredDataset dataset) {
+        if (!"VERIFYING".equals(dataset.getStatus()) || dataset.getUpdatedAt() == null) {
+            return false;
+        }
+        LocalDateTime deadline = LocalDateTime.now(ZoneOffset.UTC)
+                .minusMinutes(Math.max(1L, staleVerifyingMinutes));
+        return !dataset.getUpdatedAt().isAfter(deadline);
     }
 
     /**

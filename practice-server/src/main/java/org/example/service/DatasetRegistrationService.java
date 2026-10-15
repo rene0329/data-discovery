@@ -496,6 +496,31 @@ public class DatasetRegistrationService {
         return false;
     }
 
+    /**
+     * Completes a dataset-wide verification that was interrupted after the
+     * dataset entered VERIFYING. The reverify worker calls this only after the
+     * configured stale interval, so a normal in-flight verification is not
+     * changed underneath its caller.
+     */
+    public boolean completeInterruptedVerification(Long datasetId, String requestId) {
+        RegisteredDataset dataset = requireDataset(datasetId);
+        requireDatasetMutation(dataset);
+        if (!"VERIFYING".equals(dataset.getStatus())) {
+            return "ACTIVE".equals(dataset.getStatus());
+        }
+        if (countUsableReplicas(datasetId) > 0) {
+            mapper.updateDatasetStatus(datasetId, "ACTIVE",
+                    "recovered after interrupted verification", true);
+            audit("DATASET", String.valueOf(datasetId), "VERIFY_RECOVERED", requestId,
+                    "at least one usable replica remains");
+            return true;
+        }
+        mapper.updateDatasetStatus(datasetId, "VERIFY_FAILED", "no valid replica", false);
+        audit("DATASET", String.valueOf(datasetId), "VERIFY_RECOVERY_FAILED", requestId,
+                "no valid replica");
+        return false;
+    }
+
     @Transactional
     public RegisteredDatasetView activate(Long datasetId, String requestId) {
         RegisteredDataset dataset = requireDataset(datasetId);

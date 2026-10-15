@@ -58,6 +58,14 @@ logging:
     com.sky.service: info
     com.sky.controller: info
 
+dataset:
+  reverify:
+    interval-ms: ${DATASET_REVERIFY_INTERVAL_MS:300000}
+    max-datasets-per-tick: ${DATASET_REVERIFY_MAX_DATASETS_PER_TICK:5}
+    retry-backoff-minutes: ${DATASET_REVERIFY_RETRY_BACKOFF_MINUTES:15}
+    # 超过控制面 45 分钟读取超时后再留出 5 分钟，才接管中断的 VERIFYING 状态。
+    stale-verifying-minutes: ${DATASET_REVERIFY_STALE_VERIFYING_MINUTES:50}
+
 # ===================================================================
 # 你的自定义配置 (原先在 practice 块中，现在平铺，以便 @Value("${dispatch.*}") 直接获取)
 # ===================================================================

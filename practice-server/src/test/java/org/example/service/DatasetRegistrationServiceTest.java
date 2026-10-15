@@ -511,6 +511,24 @@ class DatasetRegistrationServiceTest {
                 org.mockito.ArgumentMatchers.anyBoolean());
     }
 
+    @Test
+    void interruptedVerificationReturnsToActiveWhenAUsableReplicaRemains() {
+        RegisteredDataset dataset = RegisteredDataset.builder().datasetId(19L)
+                .status("VERIFYING").build();
+        DatasetReplica healthy = DatasetReplica.builder().replicaId(18L).datasetId(19L)
+                .availability("AVAILABLE").build();
+        when(mapper.findDatasetById(19L)).thenReturn(dataset);
+        when(mapper.listReplicas(19L)).thenReturn(Collections.singletonList(healthy));
+        when(replicaAvailabilityService.evaluate(healthy))
+                .thenReturn(new ReplicaAvailability("USABLE", true, null));
+        login(ADMIN);
+
+        assertTrue(service.completeInterruptedVerification(19L, "recover-verification"));
+
+        verify(mapper).updateDatasetStatus(19L, "ACTIVE",
+                "recovered after interrupted verification", true);
+    }
+
     // ---- domain rule: registering and uploading ---------------------------------------
 
     @Test
