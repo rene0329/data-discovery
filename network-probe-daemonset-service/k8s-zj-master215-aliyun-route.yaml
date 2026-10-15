@@ -43,6 +43,10 @@ spec:
 
               ensure_route_and_nat() {
                 ip route replace 10.214.0.0/24 via 10.15.16.40
+                # The Hangzhou tunnel terminates on master-141.  Keep the request
+                # path symmetric with the return path so master-40 conntrack does
+                # not classify post-handshake TCP packets as INVALID.
+                ip route replace 10.214.0.1/32 via 10.15.16.141 dev ens25f2
                 ensure_nat_rule
               }
 
