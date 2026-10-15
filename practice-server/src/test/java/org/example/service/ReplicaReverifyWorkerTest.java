@@ -12,6 +12,7 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -39,15 +40,12 @@ class ReplicaReverifyWorkerTest {
         when(mapper.listReplicas(19L)).thenReturn(Arrays.asList(healthy, stale));
         when(nodeMapper.getNodeById(3)).thenReturn(node);
         when(nodeAvailability.isSchedulable(node)).thenReturn(true);
-        when(registrationService.verifyReplica(org.mockito.ArgumentMatchers.eq(19L),
-                org.mockito.ArgumentMatchers.eq(24L), anyString())).thenReturn(true);
+        when(registrationService.verifyReplica(eq(19L), eq(24L), anyString())).thenReturn(true);
 
         worker.reverifyStaleReplicas();
 
-        verify(registrationService).verifyReplica(org.mockito.ArgumentMatchers.eq(19L),
-                org.mockito.ArgumentMatchers.eq(24L), anyString());
-        verify(registrationService, never()).verify(19L, org.mockito.ArgumentMatchers.anyString());
-        verify(registrationService, never()).verifyReplica(org.mockito.ArgumentMatchers.eq(19L),
-                org.mockito.ArgumentMatchers.eq(18L), anyString());
+        verify(registrationService).verifyReplica(eq(19L), eq(24L), anyString());
+        verify(registrationService, never()).verify(eq(19L), anyString());
+        verify(registrationService, never()).verifyReplica(eq(19L), eq(18L), anyString());
     }
 }
