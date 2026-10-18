@@ -241,6 +241,10 @@ SELECT
   p.external_plan_id,
   p.status AS plan_status,
   p.error_message AS plan_error,
+  p.algorithm_name,
+  p.algorithm_version,
+  p.task_id,
+  p.internal_task_id,
   p.created_at AS plan_created_at_utc,
   p.updated_at AS plan_updated_at_utc,
   a.assignment_id,
@@ -296,7 +300,7 @@ ORDER BY event_id;"
 fi
 
 echo
-echo "3. data-discovery Pod 日志（log_since=${LOG_SINCE}）"
+echo "3. practice-server 调度日志（log_since=${LOG_SINCE}）"
 PLAN_FILE_PATHS="$(mysql_raw "
 SELECT DISTINCT file_path
 FROM dataset_access_audit_event
@@ -309,6 +313,35 @@ SELECT
   DATE_FORMAT(DATE_ADD(updated_at, INTERVAL 2 MINUTE), '%Y-%m-%dT%H:%i:%s')
 FROM scheduling_plan
 WHERE plan_id = ${PLAN_ID};")"
+SCHEDULING_LOGS="$(
+  kubectl logs -n "${NAMESPACE}" -l app=practice-server \
+    --all-containers=true --prefix=true --max-log-requests=20 \
+    --tail=-1 --since="${LOG_SINCE}" 2>/dev/null \
+    | awk -v start="${PLAN_LOG_START}" -v end="${PLAN_LOG_END}" '
+        {
+          timestamp = $2 "T" $3
+          in_window = timestamp >= start && timestamp <= end
+          if (!in_window) next
+          if ($0 ~ /SCHEDULING_|STORAGE_PLACEMENT_|scheduling_plan|scheduling_assignment|DatasetSchedulingExecutor|SchedulingService|智能调度流程|调度方案/) {
+            print
+            remaining = 2
+            next
+          }
+          if (remaining > 0) {
+            print
+            remaining--
+          }
+        }' \
+    | tail -n 100 || true
+)"
+if [[ -n "${SCHEDULING_LOGS}" ]]; then
+  printf '%s\n' "${SCHEDULING_LOGS}"
+else
+  echo "scheduling_log_count=0"
+fi
+
+echo
+echo "4. data-discovery Pod 日志（log_since=${LOG_SINCE}）"
 RECENT_ACTION_LOGS=""
 if [[ -n "${PLAN_FILE_PATHS}" ]]; then
   RECENT_ACTION_LOGS="$(
@@ -329,7 +362,7 @@ else
 fi
 
 echo
-echo "4. 目标节点文件状态"
+echo "5. 目标节点文件状态"
 LIVE_TOTAL=0
 LIVE_CONFIRMED=0
 if [[ "${LIVE_FILE_CHECK}" == "1" ]]; then
@@ -422,7 +455,7 @@ read -r TOTAL_ASSIGNMENTS CONFIRMED_ASSIGNMENTS DELETE_ASSIGNMENTS \
   <<<"$(database_match_counts)"
 
 echo
-echo "5. 后端记录与文件统计"
+echo "6. 后端记录与文件统计"
 echo "plan_status=${STATUS}"
 echo "assignment_total=${TOTAL_ASSIGNMENTS}"
 echo "database_match_assignments=${CONFIRMED_ASSIGNMENTS}"
