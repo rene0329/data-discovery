@@ -16,6 +16,7 @@ MYSQL_DATABASE="${TOPIC4_MYSQL_DATABASE:-Project4}"
 WAIT_SECONDS="${WAIT_SECONDS:-600}"
 POLL_SECONDS="${POLL_SECONDS:-2}"
 LOG_SINCE="${LOG_SINCE:-30m}"
+LIVE_FILE_CHECK="${LIVE_FILE_CHECK:-1}"
 
 usage() {
   cat <<'EOF'
@@ -26,6 +27,7 @@ usage() {
   --wait-seconds <秒>  等待计划进入终态的最长时间，默认 600
   --poll-seconds <秒>  等待期间的查询间隔，默认 2
   --log-since <时长>   节点容器日志查询范围，默认 30m
+  --no-live-check      不进入目标节点计算文件大小和 SHA-256
   --no-wait            不等待，立即展示当前状态
   -h, --help           显示帮助
 
@@ -77,6 +79,10 @@ while (($# > 0)); do
       WAIT_SECONDS=0
       shift
       ;;
+    --no-live-check)
+      LIVE_FILE_CHECK=0
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -125,25 +131,57 @@ mysql_raw() {
     env MYSQL_PWD="${DB_PASSWORD}" \
     mysql --connect-timeout=5 --default-character-set=utf8mb4 \
       -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" \
-      --batch --raw --skip-column-names -e "$1"
+      --batch --raw --skip-column-names \
+      --init-command="SET time_zone='+00:00'" -e "$1"
 }
 
 mysql_table() {
   kubectl exec -n "${NAMESPACE}" "${MYSQL_WORKLOAD}" -- \
     env MYSQL_PWD="${DB_PASSWORD}" \
     mysql --connect-timeout=5 --default-character-set=utf8mb4 \
-      -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --table -e "$1"
+      -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --table \
+      --init-command="SET time_zone='+00:00'" -e "$1"
 }
 
 mysql_vertical() {
   kubectl exec -n "${NAMESPACE}" "${MYSQL_WORKLOAD}" -- \
     env MYSQL_PWD="${DB_PASSWORD}" \
     mysql --connect-timeout=5 --default-character-set=utf8mb4 \
-      -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --vertical -e "$1"
+      -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --vertical \
+      --init-command="SET time_zone='+00:00'" -e "$1"
 }
 
 plan_status() {
   mysql_raw "SELECT status FROM scheduling_plan WHERE plan_id=${PLAN_ID};"
+}
+
+database_evidence_counts() {
+  mysql_raw "
+SELECT
+  COUNT(*) AS total_assignments,
+  COALESCE(SUM(CASE WHEN a.status = 'COMPLETED'
+            AND a.action IN ('COPY', 'MOVE')
+            AND EXISTS (
+              SELECT 1
+              FROM dataset_replica r
+              JOIN dataset_discovery_candidate c
+                ON c.node_id = r.node_id AND c.file_path = r.file_path
+              WHERE r.dataset_id = a.dataset_id
+                AND r.node_id = a.target_node_id
+                AND r.availability = 'AVAILABLE'
+                AND UPPER(r.checksum_algorithm) = 'SHA-256'
+                AND r.checksum REGEXP '^[0-9A-Fa-f]{64}$'
+                AND r.verified_at >= p.created_at
+                AND r.verified_at <= p.updated_at + INTERVAL 10 MINUTE
+                AND c.availability = 'AVAILABLE'
+                AND UPPER(c.checksum_algorithm) = 'SHA-256'
+                AND c.checksum = r.checksum
+                AND c.last_seen_at >= p.updated_at
+            ) THEN 1 ELSE 0 END), 0) AS confirmed_assignments,
+  COALESCE(SUM(CASE WHEN a.action = 'DELETE' THEN 1 ELSE 0 END), 0) AS delete_assignments
+FROM scheduling_plan p
+JOIN scheduling_assignment a ON a.plan_id = p.plan_id
+WHERE p.plan_id = ${PLAN_ID};"
 }
 
 echo "Topic4 后端调度执行证据"
@@ -171,6 +209,29 @@ if ((WAIT_SECONDS > 0)); then
     STATUS="$(plan_status)"
   done
   printf '%*s\r' 100 ''
+
+  if [[ "${STATUS}" == "COMPLETED" && "${TIMED_OUT}" == "0" ]]; then
+    while true; do
+      read -r WAIT_TOTAL WAIT_CONFIRMED WAIT_DELETE <<<"$(database_evidence_counts)"
+      if [[ "${WAIT_TOTAL}" != "0" && "${WAIT_TOTAL}" == "${WAIT_CONFIRMED}" ]]; then
+        break
+      fi
+      # DELETE is proved by its node-side log and absence rather than a target
+      # replica, so do not wait for the COPY/MOVE evidence predicate.
+      if ((WAIT_DELETE > 0)); then
+        break
+      fi
+      NOW="$(date +%s)"
+      if ((NOW >= DEADLINE)); then
+        TIMED_OUT=1
+        break
+      fi
+      printf '等待目标副本和 SHA-256 证据稳定：已确认 %s/%s，剩余最多 %s 秒\r' \
+        "${WAIT_CONFIRMED}" "${WAIT_TOTAL}" "$((DEADLINE - NOW))"
+      sleep "${POLL_SECONDS}"
+    done
+    printf '%*s\r' 120 ''
+  fi
 fi
 
 echo "1. 调度计划、分配项与目标文件证据"
@@ -190,6 +251,7 @@ SELECT
         AND UPPER(r.checksum_algorithm) = 'SHA-256'
         AND r.checksum REGEXP '^[0-9A-Fa-f]{64}$'
         AND r.verified_at >= p.created_at
+        AND r.verified_at <= p.updated_at + INTERVAL 10 MINUTE
         AND c.availability = 'AVAILABLE'
         AND UPPER(c.checksum_algorithm) = 'SHA-256'
         AND c.checksum = r.checksum
@@ -271,12 +333,20 @@ FROM dataset_access_audit_event
 WHERE request_id LIKE 'storage-plan-${PLAN_ID}-assignment-%'
   AND file_path IS NOT NULL
   AND file_path <> '';")"
+IFS=$'\t' read -r PLAN_LOG_START PLAN_LOG_END <<<"$(mysql_raw "
+SELECT
+  DATE_FORMAT(DATE_SUB(created_at, INTERVAL 2 MINUTE), '%Y-%m-%dT%H:%i:%s'),
+  DATE_FORMAT(DATE_ADD(updated_at, INTERVAL 2 MINUTE), '%Y-%m-%dT%H:%i:%s')
+FROM scheduling_plan
+WHERE plan_id = ${PLAN_ID};")"
 RECENT_ACTION_LOGS=""
 if [[ -n "${PLAN_FILE_PATHS}" ]]; then
   RECENT_ACTION_LOGS="$(
     kubectl logs -n "${NAMESPACE}" -l app=data-discovery \
       --all-containers=true --prefix=true --max-log-requests=50 \
-      --since="${LOG_SINCE}" 2>/dev/null \
+      --tail=-1 --since="${LOG_SINCE}" 2>/dev/null \
+      | awk -v start="${PLAN_LOG_START}" -v end="${PLAN_LOG_END}" \
+          '{ timestamp = $2 "T" $3; if (timestamp >= start && timestamp <= end) print }' \
       | grep -E '节点间流式复制(成功|失败)|删除文件:|文件上传(成功|失败)' \
       | grep -F -f <(printf '%s\n' "${PLAN_FILE_PATHS}") \
       | tail -n 30 || true
@@ -285,34 +355,101 @@ fi
 if [[ -n "${RECENT_ACTION_LOGS}" ]]; then
   printf '%s\n' "${RECENT_ACTION_LOGS}"
 else
-  echo "当前 Pod 日志范围内没有物理复制或删除记录；数据库证据仍显示在上方。"
+  echo "任务执行时间窗口内没有保留物理复制或删除日志；数据库证据仍显示在上方。"
 fi
 
-read -r TOTAL_ASSIGNMENTS CONFIRMED_ASSIGNMENTS DELETE_ASSIGNMENTS <<<"$(mysql_raw "
+echo
+echo "4. 目标节点实时文件校验"
+LIVE_TOTAL=0
+LIVE_CONFIRMED=0
+if [[ "${LIVE_FILE_CHECK}" == "1" ]]; then
+  while IFS=$'\t' read -r ASSIGNMENT_ID ACTION TARGET_NODE TARGET_FILE \
+      EXPECTED_SIZE EXPECTED_SHA256 PLAN_CREATED_EPOCH PLAN_UPDATED_EPOCH; do
+    [[ -n "${ASSIGNMENT_ID}" ]] || continue
+    LIVE_TOTAL=$((LIVE_TOTAL + 1))
+    echo "assignment_id=${ASSIGNMENT_ID} action=${ACTION} target_node=${TARGET_NODE}"
+    echo "target_file=${TARGET_FILE}"
+
+    TARGET_POD="$(kubectl get pods -n "${NAMESPACE}" -l app=data-discovery \
+      --field-selector "spec.nodeName=${TARGET_NODE}" \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+    if [[ -z "${TARGET_POD}" ]]; then
+      echo "live_file_evidence=TARGET_AGENT_POD_NOT_FOUND"
+      echo
+      continue
+    fi
+
+    LIVE_OUTPUT=""
+    if ! LIVE_OUTPUT="$(kubectl exec -n "${NAMESPACE}" "${TARGET_POD}" -- \
+      sh -c '
+        file_path="$1"
+        actual_size=$(wc -c <"$file_path")
+        modified_epoch=$(stat -c %Y "$file_path")
+        checksum_line=$(sha256sum "$file_path")
+        actual_sha256=${checksum_line%% *}
+        printf "%s\t%s\t%s\n" "$actual_size" "$actual_sha256" "$modified_epoch"
+      ' sh "${TARGET_FILE}" 2>/dev/null)"; then
+      echo "target_pod=${TARGET_POD}"
+      echo "live_file_evidence=TARGET_FILE_CHECK_FAILED"
+      echo
+      continue
+    fi
+
+    IFS=$'\t' read -r ACTUAL_SIZE ACTUAL_SHA256 MODIFIED_EPOCH <<<"${LIVE_OUTPUT}"
+    echo "target_pod=${TARGET_POD}"
+    echo "actual_size=${ACTUAL_SIZE} expected_size=${EXPECTED_SIZE}"
+    echo "actual_sha256=${ACTUAL_SHA256}"
+    echo "expected_sha256=${EXPECTED_SHA256}"
+    echo "file_modified_epoch=${MODIFIED_EPOCH} plan_window_epoch=${PLAN_CREATED_EPOCH}-${PLAN_UPDATED_EPOCH}"
+
+    # A matching file alone cannot prove which historical plan created it.
+    # Require its mtime to fall within this plan's execution window, allowing
+    # two minutes for clock skew between cluster nodes.
+    if [[ "${ACTUAL_SIZE}" == "${EXPECTED_SIZE}"
+        && "${ACTUAL_SHA256,,}" == "${EXPECTED_SHA256,,}"
+        && "${MODIFIED_EPOCH}" =~ ^[0-9]+$
+        && "${PLAN_CREATED_EPOCH}" =~ ^[0-9]+$
+        && "${PLAN_UPDATED_EPOCH}" =~ ^[0-9]+$
+        && ${MODIFIED_EPOCH} -ge $((PLAN_CREATED_EPOCH - 120))
+        && ${MODIFIED_EPOCH} -le $((PLAN_UPDATED_EPOCH + 120)) ]]; then
+      LIVE_CONFIRMED=$((LIVE_CONFIRMED + 1))
+      echo "live_file_evidence=LIVE_FILE_CONFIRMED"
+    else
+      echo "live_file_evidence=LIVE_FILE_NOT_ATTRIBUTABLE_TO_PLAN"
+    fi
+    echo
+  done < <(mysql_raw "
 SELECT
-  COUNT(*) AS total_assignments,
-  COALESCE(SUM(CASE WHEN a.status = 'COMPLETED'
-            AND a.action IN ('COPY', 'MOVE')
-            AND EXISTS (
-              SELECT 1
-              FROM dataset_replica r
-              JOIN dataset_discovery_candidate c
-                ON c.node_id = r.node_id AND c.file_path = r.file_path
-              WHERE r.dataset_id = a.dataset_id
-                AND r.node_id = a.target_node_id
-                AND r.availability = 'AVAILABLE'
-                AND UPPER(r.checksum_algorithm) = 'SHA-256'
-                AND r.checksum REGEXP '^[0-9A-Fa-f]{64}$'
-                AND r.verified_at >= p.created_at
-                AND c.availability = 'AVAILABLE'
-                AND UPPER(c.checksum_algorithm) = 'SHA-256'
-                AND c.checksum = r.checksum
-                AND c.last_seen_at >= p.updated_at
-            ) THEN 1 ELSE 0 END), 0) AS confirmed_assignments,
-  COALESCE(SUM(CASE WHEN a.action = 'DELETE' THEN 1 ELSE 0 END), 0) AS delete_assignments
+  a.assignment_id,
+  a.action,
+  dst.node_name,
+  COALESCE((
+    SELECT e.file_path
+    FROM dataset_access_audit_event e
+    WHERE e.request_id = CONCAT('storage-plan-', p.plan_id,
+                                '-assignment-', a.assignment_id)
+      AND e.action = 'COPY'
+      AND e.decision = 'ALLOWED'
+    ORDER BY e.event_id DESC
+    LIMIT 1
+  ), 'NULL') AS target_file,
+  COALESCE(m.authoritative_size_bytes, -1) AS expected_size,
+  COALESCE(LOWER(m.digest_value), 'NULL') AS expected_sha256,
+  FLOOR(UNIX_TIMESTAMP(p.created_at)) AS plan_created_epoch,
+  FLOOR(UNIX_TIMESTAMP(p.updated_at)) AS plan_updated_epoch
 FROM scheduling_plan p
 JOIN scheduling_assignment a ON a.plan_id = p.plan_id
-WHERE p.plan_id = ${PLAN_ID};")"
+JOIN node_management dst ON dst.node_id = a.target_node_id
+LEFT JOIN dataset_metadata m ON m.dataset_id = a.dataset_id
+WHERE p.plan_id = ${PLAN_ID}
+  AND a.action IN ('COPY', 'MOVE')
+ORDER BY a.assignment_id;")
+else
+  echo "已通过 --no-live-check 跳过实时文件校验。"
+fi
+
+read -r TOTAL_ASSIGNMENTS CONFIRMED_ASSIGNMENTS DELETE_ASSIGNMENTS \
+  <<<"$(database_evidence_counts)"
 
 echo
 if ((TIMED_OUT == 1)); then
@@ -327,10 +464,20 @@ if ((DELETE_ASSIGNMENTS > 0)); then
   echo "结论：计划包含 DELETE；请以上方节点删除日志作为物理删除证据。" >&2
   exit 4
 fi
-if [[ "${TOTAL_ASSIGNMENTS}" == "${CONFIRMED_ASSIGNMENTS}" && "${TOTAL_ASSIGNMENTS}" != "0" ]]; then
+if [[ "${TOTAL_ASSIGNMENTS}" == "${CONFIRMED_ASSIGNMENTS}"
+    && "${TOTAL_ASSIGNMENTS}" != "0"
+    && ("${LIVE_FILE_CHECK}" != "1" || "${LIVE_TOTAL}" == "${LIVE_CONFIRMED}") ]]; then
   echo "结论：REAL_ACTION_CONFIRMED（${CONFIRMED_ASSIGNMENTS}/${TOTAL_ASSIGNMENTS} 个分配项）"
-  echo "调度状态、目标副本、SHA-256 和目标节点扫描记录相互一致。"
+  echo "调度状态、数据库副本、节点扫描和目标文件实时 SHA-256 相互一致。"
   exit 0
+fi
+
+if [[ "${LIVE_FILE_CHECK}" == "1"
+    && "${LIVE_TOTAL}" == "${LIVE_CONFIRMED}"
+    && "${LIVE_TOTAL}" != "0" ]]; then
+  echo "结论：REAL_TRANSFER_CONFIRMED_BUT_METADATA_INCONSISTENT" >&2
+  echo "目标节点文件大小、修改时间和 SHA-256 证明传输已发生，但数据库副本状态不一致。" >&2
+  exit 4
 fi
 
 echo "结论：EVIDENCE_INCOMPLETE（已确认 ${CONFIRMED_ASSIGNMENTS}/${TOTAL_ASSIGNMENTS} 个分配项）。" >&2
