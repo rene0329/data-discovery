@@ -22,7 +22,7 @@ usage() {
 用法：
   show-tc42-evidence.sh baseline [dataset_id ...]
   show-tc42-evidence.sh task <task_id> [--log-since <时长>] [--no-logs]
-  show-tc42-evidence.sh decision <task_id>
+  show-tc42-evidence.sh decision <task_id> [--selected]
   show-tc42-evidence.sh plan <plan_id> [show-scheduling-evidence.sh 选项]
   show-tc42-evidence.sh heat <dataset_id ...>
   show-tc42-evidence.sh access <principal> <dataset_id> [task_id]
@@ -32,7 +32,8 @@ usage() {
 示例：
   ./scripts/show-tc42-evidence.sh baseline 1 4 6
   ./scripts/show-tc42-evidence.sh task 224 --log-since 1h
-  ./scripts/show-tc42-evidence.sh decision 225
+  ./scripts/show-tc42-evidence.sh decision 226
+  ./scripts/show-tc42-evidence.sh decision 226 --selected
   ./scripts/show-tc42-evidence.sh plan 64 --wait-seconds 1800 --log-since 1h
   ./scripts/show-tc42-evidence.sh heat 7 9
   ./scripts/show-tc42-evidence.sh access owner-a 3 92
@@ -256,6 +257,10 @@ WHERE task_id = ${task_id};")"
 
 show_placement_events() {
   local task_id="$1"
+  local selected_filter=""
+  if [[ "${2:-0}" == "1" ]]; then
+    selected_filter="AND event_type='PLACEMENT_SELECTED'"
+  fi
   echo
   echo "[backend.task_placement_events]"
   mysql_raw "
@@ -281,20 +286,26 @@ SELECT CONCAT(
 )
 FROM task_execution_event
 WHERE task_id=${task_id} AND event_type LIKE 'PLACEMENT_%'
+  ${selected_filter}
 ORDER BY event_id;"
   echo "placement_event_count=$(mysql_raw "SELECT COUNT(*) FROM task_execution_event
-    WHERE task_id=${task_id} AND event_type LIKE 'PLACEMENT_%';")"
+    WHERE task_id=${task_id} AND event_type LIKE 'PLACEMENT_%' ${selected_filter};")"
 }
 
 show_decision() {
-  (($# == 1)) || fail "decision 需要一个 task_id"
+  (($# == 1 || $# == 2)) || fail "decision 需要 task_id，可选 --selected"
   require_positive_integer "task_id" "$1"
+  local selected_only=0
+  if (($# == 2)); then
+    [[ "$2" == "--selected" ]] || fail "decision 的未知选项：$2"
+    selected_only=1
+  fi
   if [[ "$(mysql_raw "SELECT COUNT(*) FROM task_management WHERE task_id=$1;")" != "1" ]]; then
     echo "task_id=$1 record_count=0"
     exit 2
   fi
   print_metadata
-  show_placement_events "$1"
+  show_placement_events "$1" "${selected_only}"
 }
 
 show_task() {
