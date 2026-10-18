@@ -54,7 +54,7 @@ practice:
       # 每次重试前的等待秒数
       job-retry-backoff-seconds: 5
 
-    # 数据热度：访问时做有上限 EMA，空闲时按真实时长衰减
+    # 数据温度：访问时做有上限 EMA，空闲时按真实时长衰减
     heat-update:
       access-alpha: 0.90
       max-heat: 100

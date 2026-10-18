@@ -71,7 +71,7 @@ class DatasetHeatPlacementTest {
         assertEquals(MASTER_141, move.getTargetNodeId());
         DatasetStoragePlan.Placement row = plan.getPlacements().get(0);
         assertEquals(MASTER_215, row.getConsumerNodeId());
-        assertEquals("热度 46.85 ≥ 30；就近计算节点 master-215；到计算节点时延 6.45 → 0.09 ms", row.getReason());
+        assertEquals("温度 46.85 ≥ 30；就近计算节点 master-215；到计算节点时延 6.45 → 0.09 ms", row.getReason());
         verifyNoInteractions(scheduling);
     }
 
@@ -83,7 +83,7 @@ class DatasetHeatPlacementTest {
         DatasetStoragePlan plan = service(30, 1).preview("heat");
 
         assertTrue(plan.getAssignments().isEmpty());
-        assertEquals(Collections.singletonList("2 个数据集热度低于阈值 30，保持不动"), plan.getNotices());
+        assertEquals(Collections.singletonList("2 个数据集温度低于阈值 30，保持不动"), plan.getNotices());
     }
 
     @Test

@@ -56,11 +56,11 @@ public interface DataManagementMapper {
 
     List<NodeManagement> getCentralityNodes();
 
-    List<DataManagement> getAllDataByHeat(); // 按热度从高到低排序所有数据
+    List<DataManagement> getAllDataByHeat(); // 按温度从高到低排序所有数据
 
     void updateBackupServer(DataManagement dataManagement); // 更新备份服务器字段
 
-    /** 先按实际经过时长衰减，再将热度向上限做一次 EMA 平滑。 */
+    /** 先按实际经过时长衰减，再将温度向上限做一次 EMA 平滑。 */
     int updateDataHeatOnAccess(@Param("dataName") String dataName,
                                @Param("accessAlpha") double accessAlpha,
                                @Param("maxHeat") double maxHeat,

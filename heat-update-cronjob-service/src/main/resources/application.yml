@@ -20,11 +20,11 @@ mybatis:
   configuration:
     map-underscore-to-camel-case: true  # 驼峰映射
 
-# 自定义业务配置（热度参数）
+# 自定义业务配置（温度参数）
 app:
   heat-update:
-    half-life-hours: 24 # 超出下限的热度每 24 小时减半
-    threshold: 10       # 热度下限，只趋近而不重置
+    half-life-hours: 24 # 超出下限的温度每 24 小时减半
+    threshold: 10       # 温度下限，只趋近而不重置
 
 # 日志配置（可选，调试用）
 logging:

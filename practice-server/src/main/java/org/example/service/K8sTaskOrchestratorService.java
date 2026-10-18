@@ -345,16 +345,16 @@ public class K8sTaskOrchestratorService {
 
     /**
      * 任务真实读取数据才算一次访问：Job 完整读到输入且字节数、SHA-256 与副本一致后，
-     * 每个任务对每个数据集只加一次热度。提交、数据搬运和失败的 Job 都不加热度。
+     * 每个任务对每个数据集只加一次温度。提交、数据搬运和失败的 Job 都不加温度。
      */
     private void recordDatasetReads(Integer taskId, Set<Long> datasetIds) {
         for (Long datasetId : datasetIds) {
             try {
                 heat.recordAccess(datasetId);
-                log.info("任务 {} 读取数据集 {} 已计入热度", taskId, datasetId);
+                log.info("任务 {} 读取数据集 {} 已计入温度", taskId, datasetId);
             } catch (Exception e) {
-                // 热度只影响后续存储决策，记录失败不改变已回写的任务结果。
-                log.warn("任务 {} 读取数据集 {} 计入热度失败: {}", taskId, datasetId, e.getMessage());
+                // 温度只影响后续存储决策，记录失败不改变已回写的任务结果。
+                log.warn("任务 {} 读取数据集 {} 计入温度失败: {}", taskId, datasetId, e.getMessage());
             }
         }
     }

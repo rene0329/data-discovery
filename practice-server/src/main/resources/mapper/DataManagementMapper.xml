@@ -135,7 +135,7 @@
 
     <!--
       访问时先衰减到当前时刻，再执行 H' = alpha * H + (1-alpha) * maxHeat。
-      GREATEST 保证一次访问永远不会让热度降低；单条 UPDATE 保证并发请求不丢更新。
+      GREATEST 保证一次访问永远不会让温度降低；单条 UPDATE 保证并发请求不丢更新。
     -->
     <update id="updateDataHeatOnAccess" parameterType="map">
         UPDATE data_management

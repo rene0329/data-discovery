@@ -17,7 +17,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * 热敏存储：热度达到阈值的数据集，迁到离它的就近计算节点最近的纯存储节点。
+ * 热敏存储：温度达到阈值的数据集，迁到离它的就近计算节点最近的纯存储节点。
  * 原位汇聚：把所选数据复制到所选计算节点附近。
  */
 @Service
@@ -82,7 +82,7 @@ public class DatasetStorageService {
     }
 
     /**
-     * 只处理热度达到阈值的数据集，只做 MOVE（有效副本数不变）：
+     * 只处理温度达到阈值的数据集，只做 MOVE（有效副本数不变）：
      * 1. 用就近计算调度算法（InPlacePlacementService）得到副本和它的计算节点 C；
      * 2. 在"副本节点 → C"这条路径上找离 C 最近、还有容量的纯存储节点（不含计算存储节点）；
      * 3. 只有到 C 的时延至少缩短 minLatencyGainMs 才迁移，数据只会沿着通往计算节点的路径靠近。
@@ -106,7 +106,7 @@ public class DatasetStorageService {
                 cold++;
                 continue;
             }
-            String label = dataset.getName() + "（热度 " + format(heat) + "）";
+            String label = dataset.getName() + "（温度 " + format(heat) + "）";
             if (DatasetOperationGuard.busy(datasets, dataset)) {
                 result.getNotices().add(label + "：有进行中的任务或调度，待其结束后再迁移");
                 continue;
@@ -175,13 +175,13 @@ public class DatasetStorageService {
                 continue;
             }
             add(result, dataset, source, from, target, "MOVE", compute.getNodeId(),
-                    "热度 " + format(heat) + " ≥ " + format(hotThreshold) + "；就近计算节点 " + compute.getNodeName()
+                    "温度 " + format(heat) + " ≥ " + format(hotThreshold) + "；就近计算节点 " + compute.getNodeName()
                             + "；到计算节点时延 " + format(route.getLatencyMs()) + " → "
                             + format(targetPath.getLatencyMs()) + " ms");
             used.merge(target.getNodeId(), 1, Integer::sum);
         }
         if (cold > 0) {
-            result.getNotices().add(cold + " 个数据集热度低于阈值 " + format(hotThreshold) + "，保持不动");
+            result.getNotices().add(cold + " 个数据集温度低于阈值 " + format(hotThreshold) + "，保持不动");
         }
         return result;
     }
