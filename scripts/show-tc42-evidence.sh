@@ -364,7 +364,9 @@ SELECT
   reason,
   created_at
 FROM dataset_access_audit_event
-WHERE run_id = (SELECT acceptance_run_id FROM task_management WHERE task_id = ${task_id})
+WHERE BINARY run_id = BINARY (
+        SELECT acceptance_run_id FROM task_management WHERE task_id = ${task_id}
+      )
    OR request_id LIKE CONCAT('task-', ${task_id}, '-%')
 ORDER BY event_id;"
 
@@ -486,20 +488,20 @@ LIMIT 50;"
   echo "[backend.access_grants]"
   mysql_table "
 SELECT
-  grant.grant_id,
-  user.username,
+  grant_row.grant_id,
+  user_row.username,
   dataset.dataset_id,
   dataset.dataset_code,
   dataset.name,
-  grant.reason,
-  grant.created_at,
-  grant.expires_at
-FROM dataset_access_grant grant
-JOIN app_user user ON user.user_id = grant.user_id
-JOIN registered_dataset dataset ON dataset.dataset_id = grant.dataset_id
-WHERE user.username = '${principal}'
+  grant_row.reason,
+  grant_row.created_at,
+  grant_row.expires_at
+FROM dataset_access_grant grant_row
+JOIN app_user user_row ON user_row.user_id = grant_row.user_id
+JOIN registered_dataset dataset ON dataset.dataset_id = grant_row.dataset_id
+WHERE user_row.username = '${principal}'
   AND dataset.dataset_id = ${dataset_id}
-ORDER BY grant.grant_id DESC;"
+ORDER BY grant_row.grant_id DESC;"
 
   if [[ -n "${task_id}" ]]; then
     echo
