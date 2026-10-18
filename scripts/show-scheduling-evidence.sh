@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Read-only evidence viewer for Topic4 data scheduling. Run it on the ZJ build
+# Read-only backend state viewer for Topic4 data scheduling. Run it on the ZJ build
 # host after the scheduling API returns a plan_id. The script does not create,
 # update, or delete any Kubernetes or database resource.
 
@@ -40,11 +40,11 @@ usage() {
   TOPIC4_MYSQL_SECRET_KEY、TOPIC4_MYSQL_USER、TOPIC4_MYSQL_DATABASE
 
 退出码：
-  0  所有分配项均有后端执行和目标文件校验证据
+  0  后端记录与目标文件校验一致
   1  参数或运行环境错误
   2  计划不存在
   3  等待超时
-  4  计划失败、部分完成或后端证据不完整
+  4  计划未完成，或后端记录与目标文件校验不一致
 EOF
 }
 
@@ -155,7 +155,7 @@ plan_status() {
   mysql_raw "SELECT status FROM scheduling_plan WHERE plan_id=${PLAN_ID};"
 }
 
-database_evidence_counts() {
+database_match_counts() {
   mysql_raw "
 SELECT
   COUNT(*) AS total_assignments,
@@ -184,8 +184,8 @@ JOIN scheduling_assignment a ON a.plan_id = p.plan_id
 WHERE p.plan_id = ${PLAN_ID};"
 }
 
-echo "Topic4 后端调度执行证据"
-echo "plan_id=${PLAN_ID} namespace=${NAMESPACE} 查询时间=$(date '+%Y-%m-%d %H:%M:%S %Z')"
+echo "Topic4 后端调度信息"
+echo "plan_id=${PLAN_ID} namespace=${NAMESPACE} query_time=$(date '+%Y-%m-%d %H:%M:%S %Z')"
 echo
 
 STATUS="$(plan_status)"
@@ -203,7 +203,7 @@ if ((WAIT_SECONDS > 0)); then
       TIMED_OUT=1
       break
     fi
-    printf '等待调度完成：status=%s，剩余最多 %s 秒\r' \
+    printf 'plan_status=%s wait_remaining_seconds=%s\r' \
       "${STATUS}" "$((DEADLINE - NOW))"
     sleep "${POLL_SECONDS}"
     STATUS="$(plan_status)"
@@ -212,7 +212,7 @@ if ((WAIT_SECONDS > 0)); then
 
   if [[ "${STATUS}" == "COMPLETED" && "${TIMED_OUT}" == "0" ]]; then
     while true; do
-      read -r WAIT_TOTAL WAIT_CONFIRMED WAIT_DELETE <<<"$(database_evidence_counts)"
+      read -r WAIT_TOTAL WAIT_CONFIRMED WAIT_DELETE <<<"$(database_match_counts)"
       if [[ "${WAIT_TOTAL}" != "0" && "${WAIT_TOTAL}" == "${WAIT_CONFIRMED}" ]]; then
         break
       fi
@@ -226,7 +226,7 @@ if ((WAIT_SECONDS > 0)); then
         TIMED_OUT=1
         break
       fi
-      printf '等待目标副本和 SHA-256 证据稳定：已确认 %s/%s，剩余最多 %s 秒\r' \
+      printf 'database_match_assignments=%s assignment_total=%s wait_remaining_seconds=%s\r' \
         "${WAIT_CONFIRMED}" "${WAIT_TOTAL}" "$((DEADLINE - NOW))"
       sleep "${POLL_SECONDS}"
     done
@@ -234,39 +234,9 @@ if ((WAIT_SECONDS > 0)); then
   fi
 fi
 
-echo "1. 调度计划、分配项与目标文件证据"
+echo "1. scheduling_plan、scheduling_assignment、dataset_replica"
 mysql_vertical "
 SELECT
-  CASE
-    WHEN p.status <> 'COMPLETED' OR a.status <> 'COMPLETED'
-      THEN 'NOT_COMPLETED'
-    WHEN a.action IN ('COPY', 'MOVE') AND EXISTS (
-      SELECT 1
-      FROM dataset_replica r
-      JOIN dataset_discovery_candidate c
-        ON c.node_id = r.node_id AND c.file_path = r.file_path
-      WHERE r.dataset_id = a.dataset_id
-        AND r.node_id = a.target_node_id
-        AND r.availability = 'AVAILABLE'
-        AND UPPER(r.checksum_algorithm) = 'SHA-256'
-        AND r.checksum REGEXP '^[0-9A-Fa-f]{64}$'
-        AND r.verified_at >= p.created_at
-        AND r.verified_at <= p.updated_at + INTERVAL 10 MINUTE
-        AND c.availability = 'AVAILABLE'
-        AND UPPER(c.checksum_algorithm) = 'SHA-256'
-        AND c.checksum = r.checksum
-        AND c.last_seen_at >= p.updated_at
-    ) THEN 'REAL_ACTION_CONFIRMED'
-    WHEN a.action = 'DELETE' AND EXISTS (
-      SELECT 1
-      FROM dataset_access_audit_event e
-      WHERE e.request_id = CONCAT('storage-plan-', p.plan_id,
-                                  '-assignment-', a.assignment_id)
-        AND e.action = 'DELETE'
-        AND e.decision = 'ALLOWED'
-    ) THEN 'DELETE_RECORDED_CHECK_NODE_LOG'
-    ELSE 'EVIDENCE_INCOMPLETE'
-  END AS backend_evidence,
   p.plan_id,
   p.external_plan_id,
   p.status AS plan_status,
@@ -309,13 +279,13 @@ WHERE p.plan_id = ${PLAN_ID}
 ORDER BY a.assignment_id;"
 
 echo
-echo "2. 后端授权与数据动作审计轨迹"
+echo "2. dataset_access_audit_event"
 AUDIT_COUNT="$(mysql_raw "
 SELECT COUNT(*)
 FROM dataset_access_audit_event
 WHERE request_id LIKE 'storage-plan-${PLAN_ID}-assignment-%';")"
 if [[ "${AUDIT_COUNT}" == "0" ]]; then
-  echo "未找到该计划的数据动作审计记录。"
+  echo "audit_event_count=0"
 else
   mysql_table "
 SELECT event_id, request_id, dataset_id, action, target_node,
@@ -326,7 +296,7 @@ ORDER BY event_id;"
 fi
 
 echo
-echo "3. 数据节点最近的物理复制或删除日志（${LOG_SINCE}）"
+echo "3. data-discovery Pod 日志（log_since=${LOG_SINCE}）"
 PLAN_FILE_PATHS="$(mysql_raw "
 SELECT DISTINCT file_path
 FROM dataset_access_audit_event
@@ -355,11 +325,11 @@ fi
 if [[ -n "${RECENT_ACTION_LOGS}" ]]; then
   printf '%s\n' "${RECENT_ACTION_LOGS}"
 else
-  echo "任务执行时间窗口内没有保留物理复制或删除日志；数据库证据仍显示在上方。"
+  echo "physical_action_log_count=0"
 fi
 
 echo
-echo "4. 目标节点实时文件校验"
+echo "4. 目标节点文件状态"
 LIVE_TOTAL=0
 LIVE_CONFIRMED=0
 if [[ "${LIVE_FILE_CHECK}" == "1" ]]; then
@@ -374,7 +344,7 @@ if [[ "${LIVE_FILE_CHECK}" == "1" ]]; then
       --field-selector "spec.nodeName=${TARGET_NODE}" \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
     if [[ -z "${TARGET_POD}" ]]; then
-      echo "live_file_evidence=TARGET_AGENT_POD_NOT_FOUND"
+      echo "live_file_check_status=TARGET_AGENT_POD_NOT_FOUND"
       echo
       continue
     fi
@@ -390,7 +360,7 @@ if [[ "${LIVE_FILE_CHECK}" == "1" ]]; then
         printf "%s\t%s\t%s\n" "$actual_size" "$actual_sha256" "$modified_epoch"
       ' sh "${TARGET_FILE}" 2>/dev/null)"; then
       echo "target_pod=${TARGET_POD}"
-      echo "live_file_evidence=TARGET_FILE_CHECK_FAILED"
+      echo "live_file_check_status=TARGET_FILE_CHECK_FAILED"
       echo
       continue
     fi
@@ -413,9 +383,9 @@ if [[ "${LIVE_FILE_CHECK}" == "1" ]]; then
         && ${MODIFIED_EPOCH} -ge $((PLAN_CREATED_EPOCH - 120))
         && ${MODIFIED_EPOCH} -le $((PLAN_UPDATED_EPOCH + 120)) ]]; then
       LIVE_CONFIRMED=$((LIVE_CONFIRMED + 1))
-      echo "live_file_evidence=LIVE_FILE_CONFIRMED"
+      echo "live_file_check_status=SIZE_SHA256_AND_MTIME_MATCH"
     else
-      echo "live_file_evidence=LIVE_FILE_NOT_ATTRIBUTABLE_TO_PLAN"
+      echo "live_file_check_status=SIZE_SHA256_OR_MTIME_MISMATCH"
     fi
     echo
   done < <(mysql_raw "
@@ -445,41 +415,46 @@ WHERE p.plan_id = ${PLAN_ID}
   AND a.action IN ('COPY', 'MOVE')
 ORDER BY a.assignment_id;")
 else
-  echo "已通过 --no-live-check 跳过实时文件校验。"
+  echo "live_file_check_status=SKIPPED"
 fi
 
 read -r TOTAL_ASSIGNMENTS CONFIRMED_ASSIGNMENTS DELETE_ASSIGNMENTS \
-  <<<"$(database_evidence_counts)"
+  <<<"$(database_match_counts)"
 
 echo
+echo "5. 校验状态"
+echo "plan_status=${STATUS}"
+echo "assignment_total=${TOTAL_ASSIGNMENTS}"
+echo "database_match_assignments=${CONFIRMED_ASSIGNMENTS}"
+echo "delete_assignment_total=${DELETE_ASSIGNMENTS}"
+echo "live_file_check_enabled=${LIVE_FILE_CHECK}"
+echo "live_file_total=${LIVE_TOTAL}"
+echo "live_file_match=${LIVE_CONFIRMED}"
 if ((TIMED_OUT == 1)); then
-  echo "结论：等待超时，当前计划状态为 ${STATUS}。" >&2
+  echo "check_status=TIMEOUT"
   exit 3
 fi
 if [[ "${STATUS}" != "COMPLETED" ]]; then
-  echo "结论：计划终态为 ${STATUS}，未形成完整成功证据。" >&2
+  echo "check_status=PLAN_NOT_COMPLETED"
   exit 4
 fi
 if ((DELETE_ASSIGNMENTS > 0)); then
-  echo "结论：计划包含 DELETE；请以上方节点删除日志作为物理删除证据。" >&2
+  echo "check_status=DELETE_ASSIGNMENT_PRESENT"
   exit 4
 fi
 if [[ "${TOTAL_ASSIGNMENTS}" == "${CONFIRMED_ASSIGNMENTS}"
     && "${TOTAL_ASSIGNMENTS}" != "0"
     && ("${LIVE_FILE_CHECK}" != "1" || "${LIVE_TOTAL}" == "${LIVE_CONFIRMED}") ]]; then
-  echo "结论：REAL_ACTION_CONFIRMED（${CONFIRMED_ASSIGNMENTS}/${TOTAL_ASSIGNMENTS} 个分配项）"
-  echo "调度状态、数据库副本、节点扫描和目标文件实时 SHA-256 相互一致。"
+  echo "check_status=PASS"
   exit 0
 fi
 
 if [[ "${LIVE_FILE_CHECK}" == "1"
     && "${LIVE_TOTAL}" == "${LIVE_CONFIRMED}"
     && "${LIVE_TOTAL}" != "0" ]]; then
-  echo "结论：REAL_TRANSFER_CONFIRMED_BUT_METADATA_INCONSISTENT" >&2
-  echo "目标节点文件大小、修改时间和 SHA-256 证明传输已发生，但数据库副本状态不一致。" >&2
+  echo "check_status=DATABASE_RECORD_MISMATCH"
   exit 4
 fi
 
-echo "结论：EVIDENCE_INCOMPLETE（已确认 ${CONFIRMED_ASSIGNMENTS}/${TOTAL_ASSIGNMENTS} 个分配项）。" >&2
-echo "不要仅凭前端页面或 scheduling_plan 状态宣称数据动作完成。" >&2
+echo "check_status=MISMATCH"
 exit 4
