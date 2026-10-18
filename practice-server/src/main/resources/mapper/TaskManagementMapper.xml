@@ -190,6 +190,7 @@
     <select id="listWithAnalysis" resultType="org.example.entity.TaskManagement">
         SELECT tm.* FROM task_management tm
         WHERE tm.T1 IS NOT NULL AND tm.T2 IS NOT NULL AND tm.rating IS NOT NULL
+        AND (tm.execution_mode IS NULL OR tm.execution_mode = 'COMPARISON')
         <!-- 兼容过滤历史单路径记录：它们曾将同一次耗时同时写入 T1/T2。 -->
         AND (
             tm.schedule IS NULL

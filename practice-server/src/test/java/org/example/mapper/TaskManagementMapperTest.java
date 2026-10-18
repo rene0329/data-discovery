@@ -30,6 +30,7 @@ class TaskManagementMapperTest {
                 "org.example.mapper.TaskManagementMapper.listWithAnalysis").getBoundSql(params);
         String sql = boundSql.getSql().replaceAll("\\s+", " ");
 
+        assertTrue(sql.contains("(tm.execution_mode IS NULL OR tm.execution_mode = 'COMPARISON')"));
         assertTrue(sql.contains("LOCATE('中心化调度方案:', tm.schedule) = 0"));
         assertTrue(sql.contains("TRIM(SUBSTRING_INDEX(tm.schedule, '中心化调度方案:', -1)) != ''"));
         assertTrue(sql.contains("tm.task_name LIKE CONCAT('%', ?, '%')"));
