@@ -173,7 +173,7 @@ public class K8sTaskOrchestratorService {
                 return;
             }
             Map<Long, InPlacePlacementService.Placement> inPlacePlan = TaskV1Service.MODE_IN_PLACE.equals(normalizedMode)
-                    ? planInPlace(datasetIds, overrides) : Collections.<Long, InPlacePlacementService.Placement>emptyMap();
+                    ? planInPlace(taskId, datasetIds, overrides) : Collections.<Long, InPlacePlacementService.Placement>emptyMap();
             List<CompletableFuture<DataItemResult>> futures = datasetIds.stream()
                     .map(datasetId -> submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
                             overrides, normalizedMode, inPlacePlan.get(datasetId)))
@@ -208,7 +208,7 @@ public class K8sTaskOrchestratorService {
                                        ResourceRequirements overrides) {
         List<CompletableFuture<DataItemResult>> inPlaceFutures = new ArrayList<>();
         List<CompletableFuture<DataItemResult>> centralizedFutures = new ArrayList<>();
-        Map<Long, InPlacePlacementService.Placement> inPlacePlan = planInPlace(datasetIds, overrides);
+        Map<Long, InPlacePlacementService.Placement> inPlacePlan = planInPlace(taskId, datasetIds, overrides);
         // 按数据集交替提交两种模式：线程池排队时，两种模式获得同等的启动机会。
         for (Long datasetId : datasetIds) {
             inPlaceFutures.add(submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
@@ -241,7 +241,7 @@ public class K8sTaskOrchestratorService {
      * 一个任务的分布式放置按数据集顺序一次算完，并在同一份节点资源账本上预留：
      * 前面的数据集占用了某计算节点的资源，后面的数据集就会看到该节点资源不足而改用次优节点。
      */
-    private Map<Long, InPlacePlacementService.Placement> planInPlace(List<Long> datasetIds,
+    private Map<Long, InPlacePlacementService.Placement> planInPlace(Integer taskId, List<Long> datasetIds,
                                                                      ResourceRequirements overrides) {
         Map<Long, InPlacePlacementService.Placement> plan = new java.util.HashMap<>();
         List<NodeManagement> computeNodes = inPlacePlacement.schedulableComputeNodes();
@@ -249,10 +249,30 @@ public class K8sTaskOrchestratorService {
         for (Long datasetId : datasetIds) {
             RegisteredDataset dataset = datasetRegistrationMapper.findDatasetById(datasetId);
             if (dataset == null || !"ACTIVE".equals(dataset.getStatus()) || plan.containsKey(datasetId)) continue;
-            plan.put(datasetId, inPlacePlacement.place(datasetRegistrationMapper.listReplicas(datasetId),
-                    computeNodes, jobDemand(dataset, overrides), ledger));
+            InPlacePlacementService.Placement placement = inPlacePlacement.place(
+                    datasetRegistrationMapper.listReplicas(datasetId), computeNodes, jobDemand(dataset, overrides), ledger);
+            for (Map<String, Object> event : placement.getDecisionEvents()) {
+                recordPlacementEvent(taskId, datasetId, TaskV1Service.MODE_IN_PLACE, event);
+            }
+            plan.put(datasetId, placement);
         }
         return plan;
+    }
+
+    private void recordPlacementEvent(Integer taskId, Long datasetId, String mode,
+                                      Map<String, Object> details) {
+        String eventType = (String) details.get("eventType");
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(details);
+        } catch (Exception e) {
+            throw new IllegalStateException("无法序列化节点选择记录", e);
+        }
+        log.info("TASK_{} taskId={} datasetId={} mode={} details={}", eventType, taskId, datasetId, mode, json);
+        taskManagementMapper.insertExecutionEvent(TaskExecutionEvent.builder()
+                .taskId(taskId).datasetId(datasetId).executionMode(mode).eventType(eventType)
+                .occurredAt(LocalDateTime.now(ZoneOffset.UTC))
+                .nodeName((String) details.get("targetNode")).detailsJson(json).build());
     }
 
     /** 与 processRegisteredDataItem 写入 Job 的 CPU/内存请求一致。 */
@@ -544,6 +564,14 @@ public class K8sTaskOrchestratorService {
             targetNodeName = resolveCentralNodeName();
             NodeManagement central = nodeManagementMapper.getNodeByName(targetNodeName);
             if (central == null) throw new IllegalStateException("中心计算节点不存在: " + targetNodeName);
+            Map<String, Object> centralDecision = new LinkedHashMap<>();
+            centralDecision.put("eventType", "PLACEMENT_STARTED");
+            centralDecision.put("targetNode", targetNodeName);
+            centralDecision.put("targetSite", central.getSiteCode());
+            centralDecision.put("tier", "CENTRALIZED");
+            centralDecision.put("outcome", "STARTED");
+            centralDecision.put("reason", "集中式执行使用 dispatch.central-node 配置的中心计算节点；优先使用中心节点已有副本，否则按可用副本顺序选择");
+            recordPlacementEvent(taskId, datasetId, executionMode, centralDecision);
             replica = usableReplicas.stream()
                     .sorted((left, right) -> Boolean.compare(
                             !central.getNodeId().equals(left.getNodeId()),
@@ -553,6 +581,18 @@ public class K8sTaskOrchestratorService {
         }
         NodeManagement sourceNode = nodeManagementMapper.getNodeById(replica.getNodeId());
         if (sourceNode == null) throw new IllegalStateException("副本源节点不存在: " + replica.getNodeId());
+        if (TaskV1Service.MODE_CENTRALIZED.equals(executionMode)) {
+            Map<String, Object> selected = new LinkedHashMap<>();
+            selected.put("eventType", "PLACEMENT_SELECTED");
+            selected.put("replicaId", replica.getReplicaId());
+            selected.put("sourceNode", sourceNode.getNodeName());
+            selected.put("sourceSite", sourceNode.getSiteCode());
+            selected.put("targetNode", targetNodeName);
+            selected.put("tier", "CENTRALIZED");
+            selected.put("outcome", "SELECTED");
+            selected.put("reason", "按集中式模式配置选择中心计算节点；源副本通过可用性检查");
+            recordPlacementEvent(taskId, datasetId, executionMode, selected);
+        }
         Long imageId = explicitRuntimeImageId != null
                 ? explicitRuntimeImageId : dataset.getDefaultRuntimeImageId();
         RuntimeImage image = runtimeImageMapper.findById(imageId);
@@ -732,8 +772,8 @@ public class K8sTaskOrchestratorService {
             boolean transferRegistered = false;
             String accessToken = null;
             try {
-                log.info("准备Job: {} (源: {}, 目标: {}, attempt={}/{})",
-                        jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
+                log.info("TASK_JOB_PREPARING taskId={} datasetId={} jobName={} sourceNode={} targetNode={} attempt={}/{}",
+                        taskId, registeredDatasetId, jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
 
                 accessToken = issueReadToken(taskId, jobName, registeredDatasetId,
                         dataInfo, sourceNodeInfo);
@@ -791,8 +831,9 @@ public class K8sTaskOrchestratorService {
                     activeDataTransfers.complete(jobName);
                     transferRegistered = false;
                 }
-                log.info("Job {} 在集群 {} 中已取得传输时间 {}ms",
-                        jobName, getClusterIdFromClient(client), initEvidence.durationMs);
+                log.info("TASK_TRANSFER_READY taskId={} datasetId={} jobName={} nodeName={} bytes={} sha256={} durationMs={}",
+                        taskId, registeredDatasetId, jobName, initEvidence.nodeName, initEvidence.inputBytes,
+                        initEvidence.inputChecksumSha256, initEvidence.durationMs);
                 validateInputEvidence(dataInfo, initEvidence);
                 if (registeredDatasetId != null) {
                     persistPreparationEvents(taskId, registeredDatasetId, type, jobName,

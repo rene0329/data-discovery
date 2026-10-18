@@ -29,6 +29,16 @@ public final class NodeResourceLedger {
         available[1] -= demand.getMemoryGi();
     }
 
+    public Double availableCpu(String nodeName) {
+        double[] available = free.get(nodeName);
+        return available == null ? null : available[0];
+    }
+
+    public Double availableMemoryGi(String nodeName) {
+        double[] available = free.get(nodeName);
+        return available == null ? null : available[1];
+    }
+
     /** e.g. "cluster-sz-1 资源不足（需要 2 CPU / 1 GiB，空闲 1.88 CPU / 7.18 GiB）" */
     public String shortage(String nodeName, JobResourceDemand demand) {
         double[] available = free.get(nodeName);

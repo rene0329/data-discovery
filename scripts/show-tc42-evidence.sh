@@ -15,12 +15,14 @@ MYSQL_USER="${TOPIC4_MYSQL_USER:-root}"
 MYSQL_DATABASE="${TOPIC4_MYSQL_DATABASE:-Project4}"
 LOG_SINCE="${LOG_SINCE:-30m}"
 DB_PASSWORD=""
+SCHEDULING_LOG_PATTERN='TASK_PLACEMENT_|TASK_JOB_|TASK_TRANSFER_|JOB_TARGET_ASSIGNED|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行'
 
 usage() {
   cat <<'EOF'
 用法：
   show-tc42-evidence.sh baseline [dataset_id ...]
   show-tc42-evidence.sh task <task_id> [--log-since <时长>] [--no-logs]
+  show-tc42-evidence.sh decision <task_id>
   show-tc42-evidence.sh plan <plan_id> [show-scheduling-evidence.sh 选项]
   show-tc42-evidence.sh heat <dataset_id ...>
   show-tc42-evidence.sh access <principal> <dataset_id> [task_id]
@@ -30,6 +32,7 @@ usage() {
 示例：
   ./scripts/show-tc42-evidence.sh baseline 1 4 6
   ./scripts/show-tc42-evidence.sh task 224 --log-since 1h
+  ./scripts/show-tc42-evidence.sh decision 225
   ./scripts/show-tc42-evidence.sh plan 64 --wait-seconds 1800 --log-since 1h
   ./scripts/show-tc42-evidence.sh heat 7 9
   ./scripts/show-tc42-evidence.sh access owner-a 3 92
@@ -210,6 +213,7 @@ show_task_logs() {
   local started_at
   local finished_at
   local logs
+  local job_names
 
   window="$(mysql_raw "
 SELECT
@@ -218,6 +222,8 @@ SELECT
 FROM task_management
 WHERE task_id = ${task_id};")"
   read -r started_at finished_at <<<"${window}"
+  job_names="$(mysql_raw "SELECT DISTINCT job_name FROM task_execution_event
+                         WHERE task_id=${task_id} AND job_name IS NOT NULL;")"
 
   echo
   echo "[backend.practice_server_scheduling_logs]"
@@ -227,11 +233,17 @@ WHERE task_id = ${task_id};")"
     kubectl logs -n "${NAMESPACE}" -l app=practice-server \
       --all-containers=true --prefix=true --max-log-requests=20 \
       --tail=-1 --since="${log_since}" 2>/dev/null || true
-  } | awk -v start="${started_at}" -v end="${finished_at}" '
+  } | awk -v start="${started_at}" -v end="${finished_at}" -v id="${task_id}" \
+          -v jobs="${job_names}" -v pattern="${SCHEDULING_LOG_PATTERN}" '
+      BEGIN { count = split(jobs, names, "\n") }
       {
-        timestamp = $2 "T" $3
+        timestamp = $2 "T" substr($3, 1, 8)
         if (timestamp < start || timestamp > end) next
-        if ($0 ~ /TASK_PLACEMENT_|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行/) print
+        belongs = $0 ~ ("taskId=" id "([^0-9]|$)") || $0 ~ ("任务 " id "([^0-9]|$)")
+        for (i = 1; i <= count && !belongs; i++) {
+          if (names[i] != "" && index($0, names[i]) > 0) belongs = 1
+        }
+        if (belongs && $0 ~ pattern) print
       }' | tail -n 200)"
 
   if [[ -n "${logs}" ]]; then
@@ -240,6 +252,49 @@ WHERE task_id = ${task_id};")"
   else
     echo "scheduling_log_count=0"
   fi
+}
+
+show_placement_events() {
+  local task_id="$1"
+  echo
+  echo "[backend.task_placement_events]"
+  mysql_raw "
+SELECT CONCAT(
+  DATE_FORMAT(occurred_at, '%Y-%m-%d %H:%i:%s.%f'), ' ', event_type,
+  ' task_id=', task_id, ' dataset_id=', dataset_id, ' mode=', execution_mode,
+  CHAR(10), '  tier=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.tier')), 'null'),
+  ' outcome=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.outcome')), 'null'),
+  ' replica=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.replicaId')), 'null'),
+  ' source=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.sourceNode')), 'null'),
+  ' target=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.targetNode')), 'null'),
+  ' source_site=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.sourceSite')), 'null'),
+  ' target_site=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.targetSite')), 'null'),
+  CHAR(10), '  cpu_requested=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.cpuRequested')), 'null'),
+  ' cpu_free=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.cpuFree')), 'null'),
+  ' memory_requested_gi=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.memoryRequestedGi')), 'null'),
+  ' memory_free_gi=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.memoryFreeGi')), 'null'),
+  ' resource_check=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.resourceCheck')), 'null'),
+  CHAR(10), '  latency_ms=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.latencyMs')), 'null'),
+  ' bandwidth_mbps=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.bandwidthMbps')), 'null'),
+  ' path_node_ids=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.pathNodeIds')), 'null'),
+  CHAR(10), '  reason=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.reason')), 'null')
+)
+FROM task_execution_event
+WHERE task_id=${task_id} AND event_type LIKE 'PLACEMENT_%'
+ORDER BY event_id;"
+  echo "placement_event_count=$(mysql_raw "SELECT COUNT(*) FROM task_execution_event
+    WHERE task_id=${task_id} AND event_type LIKE 'PLACEMENT_%';")"
+}
+
+show_decision() {
+  (($# == 1)) || fail "decision 需要一个 task_id"
+  require_positive_integer "task_id" "$1"
+  if [[ "$(mysql_raw "SELECT COUNT(*) FROM task_management WHERE task_id=$1;")" != "1" ]]; then
+    echo "task_id=$1 record_count=0"
+    exit 2
+  fi
+  print_metadata
+  show_placement_events "$1"
 }
 
 show_task() {
@@ -304,6 +359,8 @@ SELECT
 FROM task_management
 WHERE task_id = ${task_id};"
 
+  show_placement_events "${task_id}"
+
   echo
   echo "[backend.task_execution_events]"
   mysql_table "
@@ -323,6 +380,7 @@ SELECT
   occurred_at
 FROM task_execution_event
 WHERE task_id = ${task_id}
+  AND event_type NOT LIKE 'PLACEMENT_%'
 ORDER BY event_id;"
 
   echo
@@ -641,11 +699,11 @@ show_live_logs() {
   if [[ "${follow}" == "1" ]]; then
     kubectl "${args[@]}" 2>&1 \
       | grep --line-buffered -E \
-        'TASK_PLACEMENT_|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行'
+        "${SCHEDULING_LOG_PATTERN}"
   else
     kubectl "${args[@]}" 2>&1 \
       | grep -E \
-        'TASK_PLACEMENT_|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行' \
+        "${SCHEDULING_LOG_PATTERN}" \
       || true
   fi
 }
@@ -661,12 +719,13 @@ case "${COMMAND}" in
     (($# > 0)) || fail "plan 缺少 plan_id"
     exec "${SCRIPT_DIR}/show-scheduling-evidence.sh" "$@"
     ;;
-  baseline|task|heat|access|speedup|logs)
+  baseline|task|decision|heat|access|speedup|logs)
     shift
     backend_init
     case "${COMMAND}" in
       baseline) show_baseline "$@" ;;
       task) show_task "$@" ;;
+      decision) show_decision "$@" ;;
       heat) show_heat "$@" ;;
       access) show_access "$@" ;;
       speedup) show_speedup "$@" ;;

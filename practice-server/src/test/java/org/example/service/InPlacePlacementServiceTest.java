@@ -71,6 +71,15 @@ class InPlacePlacementServiceTest {
         assertEquals(InPlacePlacementService.Tier.SAME_SITE, result.getTier());
         assertEquals("cluster-sh-1", result.getComputeNode().getNodeName());
         assertNull(result.getPath());
+        Map<String, Object> selected = result.getDecisionEvents().stream()
+                .filter(event -> "PLACEMENT_SELECTED".equals(event.get("eventType")))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertEquals(InPlacePlacementService.Tier.SAME_SITE, selected.get("tier"));
+        assertEquals("cluster-sh-2", selected.get("sourceNode"));
+        assertEquals("cluster-sh-1", selected.get("targetNode"));
+        assertEquals("UNAVAILABLE", selected.get("resourceCheck"));
+        assertNull(selected.get("latencyMs"));
+        assertNull(selected.get("bandwidthMbps"));
         verify(topology, never()).pathsFrom(any());
     }
 
@@ -207,6 +216,21 @@ class InPlacePlacementServiceTest {
         assertEquals(InPlacePlacementService.Tier.NEAREST, epinions.getTier());
         assertEquals("master-215", epinions.getComputeNode().getNodeName());
         assertEquals("cluster-sz-1 资源不足（需要 2 CPU / 1 GiB，空闲 1.88 CPU / 6.18 GiB）", epinions.getResourceNote());
+        Map<String, Object> rejected = epinions.getDecisionEvents().stream()
+                .filter(event -> "PLACEMENT_CANDIDATE".equals(event.get("eventType"))
+                        && "cluster-sz-1".equals(event.get("targetNode"))
+                        && "REJECTED".equals(event.get("outcome")))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertEquals("INSUFFICIENT", rejected.get("resourceCheck"));
+        assertEquals(1.875, rejected.get("cpuFree"));
+        Map<String, Object> selected = epinions.getDecisionEvents().stream()
+                .filter(event -> "PLACEMENT_SELECTED".equals(event.get("eventType")))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertEquals("master-215", selected.get("targetNode"));
+        assertEquals(102.5, selected.get("cpuFree"));
+        assertEquals("PASSED", selected.get("resourceCheck"));
+        assertEquals(31.192, selected.get("latencyMs"));
+        assertEquals(114L, selected.get("bandwidthMbps"));
     }
 
     @Test

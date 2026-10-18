@@ -136,7 +136,14 @@ class K8sTaskOrchestratorServiceTest {
                 && "/dataset/test.npz".equals(scope.getPath())
                 && "READ".equals(scope.getAction())
                 && "node-a".equals(scope.getTargetNode())), any());
-        verify(tasks, times(4)).insertExecutionEvent(any());
+        verify(tasks, times(4)).insertExecutionEvent(argThat(event ->
+                !event.getEventType().startsWith("PLACEMENT_")));
+        verify(tasks).insertExecutionEvent(argThat(event -> "PLACEMENT_SELECTED".equals(event.getEventType())
+                && Integer.valueOf(30).equals(event.getTaskId())
+                && Long.valueOf(10L).equals(event.getDatasetId())
+                && "IN_PLACE".equals(event.getExecutionMode())
+                && "node-a".equals(event.getNodeName())
+                && event.getDetailsJson().contains("\"tier\":\"LOCAL\"")));
         verify(tasks).updateExecutionSummary(argThat(summary -> "已完成".equals(summary.getStatus())
                 && Long.valueOf(1000L).equals(summary.getDataPreparationMs())
                 && Long.valueOf(2000L).equals(summary.getComputeDurationMs())
@@ -304,11 +311,13 @@ class K8sTaskOrchestratorServiceTest {
                 anyString(), isNull(), any(), any(), any(), any(), anyString());
 
         ArgumentCaptor<TaskExecutionEvent> events = ArgumentCaptor.forClass(TaskExecutionEvent.class);
-        verify(tasks, times(4)).insertExecutionEvent(events.capture());
-        assertTrue(events.getAllValues().stream().allMatch(event -> Integer.valueOf(30).equals(event.getTaskId())
-                && "JOB_FAILED".equals(event.getEventType())));
+        verify(tasks, atLeastOnce()).insertExecutionEvent(events.capture());
+        List<TaskExecutionEvent> failedEvents = events.getAllValues().stream()
+                .filter(event -> "JOB_FAILED".equals(event.getEventType())).collect(Collectors.toList());
+        assertEquals(4, failedEvents.size());
+        assertTrue(failedEvents.stream().allMatch(event -> Integer.valueOf(30).equals(event.getTaskId())));
         assertEquals(new HashSet<>(Arrays.asList("10/IN_PLACE", "10/CENTRALIZED", "11/IN_PLACE", "11/CENTRALIZED")),
-                events.getAllValues().stream().map(event -> event.getDatasetId() + "/" + event.getExecutionMode())
+                failedEvents.stream().map(event -> event.getDatasetId() + "/" + event.getExecutionMode())
                         .collect(Collectors.toSet()));
 
         verify(tasks).updateExecutionSummary(argThat(summary -> "执行中".equals(summary.getStatus())
@@ -402,8 +411,13 @@ class K8sTaskOrchestratorServiceTest {
 
         // Execution evidence is keyed by (task, dataset, mode, job).
         ArgumentCaptor<TaskExecutionEvent> events = ArgumentCaptor.forClass(TaskExecutionEvent.class);
-        verify(tasks, times(8)).insertExecutionEvent(events.capture());
-        Map<String, Set<String>> jobsByMode = events.getAllValues().stream().collect(Collectors.groupingBy(
+        verify(tasks, atLeastOnce()).insertExecutionEvent(events.capture());
+        List<TaskExecutionEvent> executionEvents = events.getAllValues().stream()
+                .filter(event -> !event.getEventType().startsWith("PLACEMENT_")).collect(Collectors.toList());
+        assertEquals(8, executionEvents.size());
+        assertEquals(2, events.getAllValues().stream()
+                .filter(event -> "PLACEMENT_SELECTED".equals(event.getEventType())).count());
+        Map<String, Set<String>> jobsByMode = executionEvents.stream().collect(Collectors.groupingBy(
                 TaskExecutionEvent::getExecutionMode,
                 Collectors.mapping(TaskExecutionEvent::getJobName, Collectors.toSet())));
         assertEquals(Collections.singleton(inPlaceJob), jobsByMode.get("IN_PLACE"));
