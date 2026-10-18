@@ -407,7 +407,7 @@ class TaskV1ServiceTest {
                 .filter(check -> "IN_PLACE_DATASET".equals(check.getResourceType())).findFirst().get();
         assertTrue(inPlace.isAvailable());
         assertNull(inPlace.getMessage());
-        verify(topology, never()).pathsFrom(any());
+        verify(topology).pathsFrom(7);
     }
 
     /** Dataset 11 with one usable replica on storage-only cluster-hz-1 (site hz); compute node 3 is in site center. */

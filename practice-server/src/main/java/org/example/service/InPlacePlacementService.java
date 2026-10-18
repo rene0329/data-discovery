@@ -195,9 +195,13 @@ public class InPlacePlacementService {
             String siteCode = candidate.node.getSiteCode();
             if (siteCode == null) continue;
             for (NodeManagement compute : computeNodes) {
-                if (siteCode.equals(compute.getSiteCode())
-                        && fit.accepts(candidate, compute, Tier.SAME_SITE, null, true)) {
-                    return fit.placement(candidate.replica, candidate.node, compute, Tier.SAME_SITE, null, reasons);
+                if (siteCode.equals(compute.getSiteCode())) {
+                    // Record available path measurements without changing same-site priority.
+                    NetworkPath path = networkTopologyService.pathsFrom(candidate.node.getNodeId())
+                            .get(compute.getNodeId());
+                    if (fit.accepts(candidate, compute, Tier.SAME_SITE, path, true)) {
+                        return fit.placement(candidate.replica, candidate.node, compute, Tier.SAME_SITE, path, reasons);
+                    }
                 }
             }
         }

@@ -70,7 +70,7 @@ class InPlacePlacementServiceTest {
 
         assertEquals(InPlacePlacementService.Tier.SAME_SITE, result.getTier());
         assertEquals("cluster-sh-1", result.getComputeNode().getNodeName());
-        assertNull(result.getPath());
+        assertEquals(30.0, result.getPath().getLatencyMs());
         Map<String, Object> selected = result.getDecisionEvents().stream()
                 .filter(event -> "PLACEMENT_SELECTED".equals(event.get("eventType")))
                 .findFirst().orElseThrow(AssertionError::new);
@@ -78,9 +78,33 @@ class InPlacePlacementServiceTest {
         assertEquals("cluster-sh-2", selected.get("sourceNode"));
         assertEquals("cluster-sh-1", selected.get("targetNode"));
         assertEquals("UNAVAILABLE", selected.get("resourceCheck"));
+        assertEquals(30.0, selected.get("latencyMs"));
+        assertEquals(10L, selected.get("bandwidthMbps"));
+        assertEquals(Arrays.asList(0, 7), selected.get("pathNodeIds"));
+        Map<String, Object> candidate = result.getDecisionEvents().stream()
+                .filter(event -> "PLACEMENT_CANDIDATE".equals(event.get("eventType")))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertEquals(30.0, candidate.get("latencyMs"));
+    }
+
+    @Test
+    void sameSitePlacementStillSucceedsWithoutPathMeasurements() {
+        NodeManagement shStorage = node(8, "cluster-sh-2", "storage", "sh");
+        when(nodes.getNodeById(8)).thenReturn(shStorage);
+        when(topology.pathsFrom(8)).thenReturn(Collections.emptyMap());
+
+        InPlacePlacementService.Placement result = placement.place(Collections.singletonList(replica(1, 8)));
+
+        assertTrue(result.isFound());
+        assertEquals(InPlacePlacementService.Tier.SAME_SITE, result.getTier());
+        assertEquals("cluster-sh-1", result.getComputeNode().getNodeName());
+        assertNull(result.getPath());
+        Map<String, Object> selected = result.getDecisionEvents().stream()
+                .filter(event -> "PLACEMENT_SELECTED".equals(event.get("eventType")))
+                .findFirst().orElseThrow(AssertionError::new);
         assertNull(selected.get("latencyMs"));
         assertNull(selected.get("bandwidthMbps"));
-        verify(topology, never()).pathsFrom(any());
+        assertNull(selected.get("pathNodeIds"));
     }
 
     @Test
