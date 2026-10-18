@@ -422,7 +422,7 @@ read -r TOTAL_ASSIGNMENTS CONFIRMED_ASSIGNMENTS DELETE_ASSIGNMENTS \
   <<<"$(database_match_counts)"
 
 echo
-echo "5. 校验状态"
+echo "5. 后端记录与文件统计"
 echo "plan_status=${STATUS}"
 echo "assignment_total=${TOTAL_ASSIGNMENTS}"
 echo "database_match_assignments=${CONFIRMED_ASSIGNMENTS}"
@@ -431,30 +431,18 @@ echo "live_file_check_enabled=${LIVE_FILE_CHECK}"
 echo "live_file_total=${LIVE_TOTAL}"
 echo "live_file_match=${LIVE_CONFIRMED}"
 if ((TIMED_OUT == 1)); then
-  echo "check_status=TIMEOUT"
   exit 3
 fi
 if [[ "${STATUS}" != "COMPLETED" ]]; then
-  echo "check_status=PLAN_NOT_COMPLETED"
   exit 4
 fi
 if ((DELETE_ASSIGNMENTS > 0)); then
-  echo "check_status=DELETE_ASSIGNMENT_PRESENT"
   exit 4
 fi
 if [[ "${TOTAL_ASSIGNMENTS}" == "${CONFIRMED_ASSIGNMENTS}"
     && "${TOTAL_ASSIGNMENTS}" != "0"
     && ("${LIVE_FILE_CHECK}" != "1" || "${LIVE_TOTAL}" == "${LIVE_CONFIRMED}") ]]; then
-  echo "check_status=PASS"
   exit 0
 fi
 
-if [[ "${LIVE_FILE_CHECK}" == "1"
-    && "${LIVE_TOTAL}" == "${LIVE_CONFIRMED}"
-    && "${LIVE_TOTAL}" != "0" ]]; then
-  echo "check_status=DATABASE_RECORD_MISMATCH"
-  exit 4
-fi
-
-echo "check_status=MISMATCH"
 exit 4
