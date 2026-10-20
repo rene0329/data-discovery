@@ -129,7 +129,11 @@ class K8sTaskOrchestratorServiceTest {
 
         service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
 
-        verify(jobApi).create(any(Job.class));
+        ArgumentCaptor<Job> submittedJob = ArgumentCaptor.forClass(Job.class);
+        verify(jobApi).create(submittedJob.capture());
+        assertEquals("30", submittedJob.getValue().getMetadata().getLabels().get(InterruptedTaskRecovery.TASK_LABEL));
+        assertEquals("30", submittedJob.getValue().getSpec().getTemplate().getMetadata()
+                .getLabels().get(InterruptedTaskRecovery.TASK_LABEL));
         verify(podResource, atLeastOnce()).inContainer("processing-container");
         verify(authorization).issueInternal(argThat(scope -> "10".equals(scope.getDatasetId())
                 && "v1".equals(scope.getDatasetVersion())

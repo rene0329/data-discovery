@@ -7,6 +7,9 @@ metadata:
     app: practice-server
 spec:
   replicas: 1
+  # Task execution is owned by one JVM; stop it before startup recovery runs in its replacement.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: practice-server

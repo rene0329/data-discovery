@@ -7,6 +7,7 @@ import io.fabric8.kubernetes.api.model.ContainerStatus;
 import io.fabric8.kubernetes.api.model.NamedContext;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
+import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import lombok.extern.slf4j.Slf4j;
@@ -792,7 +793,11 @@ public class K8sTaskOrchestratorService {
                         accessToken);
 
                 client = jobResult.getClient();
-                Job job = jobResult.getJob();
+                Job job = new JobBuilder(jobResult.getJob())
+                        .editOrNewMetadata().addToLabels(InterruptedTaskRecovery.TASK_LABEL, taskId.toString()).endMetadata()
+                        .editOrNewSpec().editOrNewTemplate().editOrNewMetadata()
+                        .addToLabels(InterruptedTaskRecovery.TASK_LABEL, taskId.toString())
+                        .endMetadata().endTemplate().endSpec().build();
                 String selectedTargetNodeName = jobResult.getSelectedNodeName();
 
                 NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(selectedTargetNodeName);

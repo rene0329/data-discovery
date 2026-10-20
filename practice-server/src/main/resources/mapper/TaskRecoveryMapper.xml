@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.example.mapper.TaskRecoveryMapper">
+    <!-- Runs before HTTP service startup, with a single backend replica and Recreate deployment. -->
+    <select id="listInterruptedTasks" resultType="org.example.entity.TaskManagement">
+        SELECT * FROM task_management
+        WHERE status IS NULL OR status NOT IN
+            ('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED')
+        ORDER BY task_id
+    </select>
+    <update id="failTask">
+        UPDATE task_management SET status = '执行失败', finished_at = UTC_TIMESTAMP(3),
+            execution_evidence_complete = 0
+        WHERE task_id = #{taskId} AND (status IS NULL OR status NOT IN
+            ('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED'))
+    </update>
+    <update id="failMigrations">
+        UPDATE migration_task SET status = 'FAILED', error_message = #{reason},
+            finished_at = UTC_TIMESTAMP(3), updated_at = UTC_TIMESTAMP()
+        WHERE task_id = #{taskId} AND (status IS NULL OR status NOT IN ('COMPLETED', 'FAILED'))
+    </update>
+    <update id="failAssignments">
+        UPDATE scheduling_assignment a JOIN scheduling_plan p ON p.plan_id = a.plan_id
+        SET a.status = 'FAILED', a.error_message = #{reason}, a.updated_at = UTC_TIMESTAMP()
+        WHERE p.internal_task_id = #{taskId} AND p.status IN ('ACCEPTED', 'RUNNING')
+            AND a.status IN ('PENDING', 'ACCEPTED', 'RUNNING')
+    </update>
+    <update id="failPlans">
+        UPDATE scheduling_plan SET status = 'FAILED', error_message = #{reason}, updated_at = UTC_TIMESTAMP()
+        WHERE internal_task_id = #{taskId} AND status IN ('ACCEPTED', 'RUNNING')
+    </update>
+</mapper>
