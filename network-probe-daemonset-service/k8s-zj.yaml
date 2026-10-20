@@ -66,9 +66,8 @@ spec:
             - name: PROBE_TRANSFER_SECONDS
               value: "2"
             - name: PROBE_INTERVAL_MS
-              # Five-minute measurements keep adaptive throttling responsive
-              # without running iperf continuously.
-              value: "300000"
+              # Measure once per day; topology measurements remain valid for 26 hours.
+              value: "86400000"
             - name: PROBE_INITIAL_DELAY_MS
               value: "30000"
             - name: PROBE_NODE_LAN_IP_OVERRIDES
