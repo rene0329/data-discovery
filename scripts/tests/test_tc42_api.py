@@ -12,9 +12,18 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'tc42-api.sh'
 
 class Handler(BaseHTTPRequestHandler):
     requests = []
+    logins = []
+    login_failure = False
 
     def log_message(self, *args):
         pass
+
+    def do_POST(self):
+        self.logins.append(self.path)
+        status = 403 if self.login_failure else 200
+        self.send_response(status)
+        self.end_headers()
+        self.wfile.write(b'{"code":0,"data":{"token":"automatic-session-token"}}')
 
     def do_GET(self):
         self.requests.append((self.path, self.headers.get('Authorization')))
@@ -34,6 +43,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Contract(unittest.TestCase):
+    def setUp(self):
+        Handler.login_failure = False
+
     @classmethod
     def setUpClass(cls):
         cls.server = HTTPServer(('127.0.0.1', 0), Handler)
@@ -76,11 +88,34 @@ class Contract(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertTrue(result.stdout)
 
-    def test_invalid_id_and_missing_token_never_request(self):
+    def test_invalid_id_and_disabled_login_never_request(self):
         before = len(Handler.requests)
-        for args, token in [(('task', '1;DROP'), 'test'), (('task', '1'), '')]:
+        for args, token in [(('task', '1;DROP'), 'test'), (('--no-auto-login', 'task', '1'), '')]:
             self.assertEqual(self.run_cli(*args, token=token).returncode, 2)
         self.assertEqual(len(Handler.requests), before)
+
+    def test_automatic_login_without_environment_token(self):
+        before = len(Handler.logins)
+        result = self.run_cli('task', '233', '234', token='')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(Handler.logins), before + 1)
+        self.assertEqual(Handler.logins[-1], '/api/v1/auth/direct-login')
+        self.assertEqual(Handler.requests[-1][1], 'Bearer automatic-session-token')
+        self.assertNotIn(b'automatic-session-token', result.stdout + result.stderr)
+
+    def test_supplied_token_does_not_login_or_elevate_on_error(self):
+        before = len(Handler.logins)
+        self.assertEqual(self.run_cli('task', '401').returncode, 1)
+        self.assertEqual(len(Handler.logins), before)
+
+    def test_login_failure_has_no_query_or_token_output(self):
+        Handler.login_failure = True
+        before = len(Handler.requests)
+        result = self.run_cli('task', '233', token='')
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(len(Handler.requests), before)
+        self.assertEqual(result.stdout, b'')
+        self.assertNotIn(b'automatic-session-token', result.stderr)
 
     def test_continue_after_error(self):
         result = self.run_cli('task', '401', '233')

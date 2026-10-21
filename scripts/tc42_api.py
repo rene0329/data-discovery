@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only TC-4.2 frontend API viewer; Python standard library only."""
+"""TC-4.2 read-only queries with automatic session login; standard library only."""
 import argparse
 import json
 import os
@@ -27,6 +27,7 @@ def parser():
     p.add_argument('--base-url', default=os.environ.get('TOPIC4_API_URL', 'http://10.15.16.40:30482'))
     p.add_argument('--raw', action='store_true', help='原样输出响应字节；默认仅对 JSON 缩进，不修改字段')
     p.add_argument('--timeout', type=positive, default=60)
+    p.add_argument('--no-auto-login', action='store_true', help='禁用自动登录，要求提供 TOPIC4_TOKEN')
     s = p.add_subparsers(dest='command')
     s.required = True  # Python 3.6 on the ZJ build host.
     for name in ('datasets', 'nodes', 'tasks', 'plans'):
@@ -93,6 +94,29 @@ def routes(a):
     raise ValueError('未知命令')
 
 
+def login(opener, base, timeout):
+    """Obtain a fresh session from the deployment's configured login endpoint.
+
+    Keep the token in this process only; authentication responses must never be
+    mixed into the business data or request logs.
+    """
+    req = Request(base + '/api/v1/auth/direct-login', data=b'',
+                  headers={'Accept': 'application/json'}, method='POST')
+    try:
+        with opener.open(req, timeout=timeout) as response:
+            payload = json.loads(response.read())
+    except HTTPError as exc:
+        raise RuntimeError('自动登录失败：HTTP {}；请确认直接登录接口已启用，或提供 TOPIC4_TOKEN'.format(exc.code))
+    except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
+        raise RuntimeError('自动登录失败：网络异常或响应不是有效 JSON')
+    data = payload.get('data') if isinstance(payload, dict) else None
+    token = data.get('token') if isinstance(data, dict) else None
+    if (not isinstance(payload, dict) or payload.get('code') != 0 or not isinstance(token, str)
+            or not token.strip() or '\n' in token or '\r' in token):
+        raise RuntimeError('自动登录失败：接口未返回有效令牌')
+    return token.strip()
+
+
 def main(argv=None):
     p = parser()
     a = p.parse_args(argv)
@@ -101,9 +125,17 @@ def main(argv=None):
     if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
         p.error('--base-url 必须为无账号密码、查询参数或片段的 HTTP(S) 地址')
     token = os.environ.get('TOPIC4_TOKEN', '').strip()
-    if not token or '\n' in token or '\r' in token:
-        p.error('请通过环境变量 TOPIC4_TOKEN 提供当前用户的 Bearer 令牌')
+    if '\n' in token or '\r' in token:
+        p.error('TOPIC4_TOKEN 不能包含换行符')
     opener = build_opener(NoRedirect())
+    if not token:
+        if a.no_auto_login:
+            p.error('已禁用自动登录，请通过 TOPIC4_TOKEN 提供当前用户的 Bearer 令牌')
+        try:
+            token = login(opener, base, a.timeout)
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
     failed = False
     for path, params in routes(a):
         target = base + path + ('?' + urlencode(params) if params else '')
