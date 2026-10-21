@@ -76,7 +76,9 @@ def preview(width):
     Path(os.environ['PREVIEW_OUTPUT']).write_text(raw, encoding='utf-8')
     rows = data.get('placements') or []
     columns = ['datasetId', 'datasetName', 'dataHeat', 'sourceNode', 'targetNode', 'action', 'consumerNodeId', 'reason']
-    print('\n'.join(format_data(columns, rows, width)))
+    print('\n'.join(format_data(columns[:-1], rows, width)))
+    print('【各数据集的节点选择理由】')
+    print('\n'.join(format_data(['datasetId','reason'], rows, width)))
     for notice in data.get('notices') or []:
         print('\n'.join(wrap('说明：' + str(notice), width)))
     if not rows:
@@ -85,7 +87,7 @@ def preview(width):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('action', choices=('delta', 'validate-task', 'compare-check', 'preview', 'logs', 'latency'))
+    p.add_argument('action', choices=('delta', 'validate-task', 'compare-check', 'preview', 'logs', 'latency', 'state'))
     p.add_argument('--width', type=int, default=120)
     p.add_argument('--before')
     p.add_argument('--ids', nargs='+', default=[])
@@ -94,6 +96,15 @@ def main():
     args = p.parse_args()
     if args.action == 'preview':
         preview(args.width)
+    elif args.action == 'state':
+        _, records = parse(sys.stdin.read())
+        unique = {}
+        for row in records:
+            unique[row['dataset_id']] = row
+        print('热度状态：')
+        print('\n'.join(format_data(['dataset_id','name','data_heat','heat_updated_at'],list(unique.values()),args.width)))
+        print('当前副本位置（以 dataset_id 关联上表）：')
+        print('\n'.join(format_data(['dataset_id','replica_id','node_name','node_type','availability','size_bytes'],records,args.width)))
     elif args.action == 'latency':
         _, records = parse(sys.stdin.read())
         pairs = {}
@@ -106,7 +117,7 @@ def main():
                 try:
                     value = float(value)
                     import math
-                    return value if math.isfinite(value) else None
+                    return value if math.isfinite(value) and value >= 0 else None
                 except (TypeError, ValueError):
                     return None
             before, after = number(a.get('latency_ms')), number(b.get('latency_ms'))

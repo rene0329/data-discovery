@@ -68,7 +68,11 @@ view() { python3 -B "$SCRIPT_DIR/tc42_case3_view.py" "$@" --width "$WIDTH"; }
 state_sql() {
   printf '%s' "SELECT d.dataset_id,d.name,d.data_heat,d.heat_updated_at,r.replica_id,n.node_name,n.type AS node_type,r.availability,r.size_bytes FROM registered_dataset d LEFT JOIN dataset_replica r ON r.dataset_id=d.dataset_id LEFT JOIN node_management n ON n.node_id=r.node_id WHERE d.dataset_id IN ($HOT,$CONTROL) AND d.deleted_at IS NULL ORDER BY d.dataset_id,r.replica_id;"
 }
-current_state() { echo '【当前两数据集的热度与存储位置】'; mysql_table "$(state_sql)"; }
+current_state() {
+  echo '【当前两数据集的热度与存储位置】'
+  if [[ "$RAW" == 0 ]]; then mysql_xml "$(state_sql)" | view state
+  else mysql_table "$(state_sql)"; fi
+}
 if [[ "$stage" == before ]]; then
   [[ -z "$SESSION" ]] || fail "before 会创建新目录，不接受 --session"
   [[ "$(mysql_raw "SELECT COUNT(*) FROM registered_dataset WHERE dataset_id IN ($HOT,$CONTROL) AND deleted_at IS NULL;")" == 2 ]] || fail "两个数据集必须存在"
@@ -108,7 +112,7 @@ logs() {
 case "$stage" in
   before)
     echo '【执行前对照】以下是刚采集的真实记录；后续差值以这次采集为基准。'
-    python3 -B "$SCRIPT_DIR/tc42_table.py" --width "$WIDTH" < "$SESSION/before.xml"
+    view state < "$SESSION/before.xml"
     echo '下一步：在前端仅运行热数据集，取得任务ID后执行 after-access。' ;;
   after-access)
     mysql_xml "$(task_sql)" | view validate-task --ids "${TASKS[@]}" --hot "$HOT" --control "$CONTROL"
