@@ -35,6 +35,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
+@lombok.extern.slf4j.Slf4j
 public class TaskV1Service {
     private final DatasetRegistrationMapper datasetMapper;
     private final RuntimeImageMapper imageMapper;
@@ -131,8 +132,16 @@ public class TaskV1Service {
         taskMapper.submitData(task);
         auditMapper.insert("TASK", String.valueOf(task.getTaskId()), "CREATE", "system", requestId,
                 writeJson(request));
-        DatasetOperationGuard.afterCommit(() -> orchestrator.executeRegisteredTask(task.getTaskId(), request.getDatasetIds(),
-                request.getRuntimeImageId(), request.getResourceOverrides(), executionMode));
+        DatasetOperationGuard.afterCommit(() -> {
+            log.info("异步任务已提交 taskId={} mode={} requestId={}", task.getTaskId(), executionMode, requestId);
+            try {
+                orchestrator.executeRegisteredTask(task.getTaskId(), request.getDatasetIds(),
+                        request.getRuntimeImageId(), request.getResourceOverrides(), executionMode);
+            } catch (RuntimeException ex) {
+                log.error("异步任务提交失败 taskId={} requestId={}", task.getTaskId(), requestId, ex);
+                throw ex;
+            }
+        });
         return taskCreated(task);
     }
 

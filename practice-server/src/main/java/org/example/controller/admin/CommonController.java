@@ -190,7 +190,7 @@ public class CommonController {
     public ResponseEntity<ApiResponse<NodeManagementVO>> getNodeData(@RequestBody NodeManagement nodeManagement) {
         NodeManagement data = nodeManagementMapper.getNodeDataByNodeName(nodeManagement);
 
-        log.info("仪表盘数据 - 节点: {}, CPU: {}/{}, 内存: {}/{}",
+        log.debug("仪表盘数据 - 节点: {}, CPU: {}/{}, 内存: {}/{}",
                 data.getNodeName(),
                 data.getCurrentCpu(), data.getMaxCpu(),
                 data.getCurrentMemory(), data.getMaxMemory());

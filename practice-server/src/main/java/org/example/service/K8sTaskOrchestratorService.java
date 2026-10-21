@@ -161,7 +161,7 @@ public class K8sTaskOrchestratorService {
                                       ResourceRequirements overrides,
                                       String executionMode) {
         final String normalizedMode = normalizeExecutionMode(executionMode);
-        log.info("注册资源任务 {} 开始执行，mode={}, datasetIds={}", taskId, normalizedMode, datasetIds);
+        log.info("异步任务开始 taskId={} mode={} datasetIds={}", taskId, normalizedMode, datasetIds);
         TaskManagement running = new TaskManagement();
         running.setTaskId(taskId);
         running.setStatus("执行中");
@@ -195,7 +195,7 @@ public class K8sTaskOrchestratorService {
             updateRegisteredTaskStatus(taskId, normalizedMode, schedules, successful, datasetIds.size());
             recordDatasetReads(taskId, readDatasets);
         } catch (Exception e) {
-            log.error("注册资源任务 {} 执行失败", taskId, e);
+            log.error("异步任务失败 taskId={}", taskId, e);
             updateTaskStatusToFailed(taskId, e.getMessage());
         }
     }
@@ -352,7 +352,7 @@ public class K8sTaskOrchestratorService {
         for (Long datasetId : datasetIds) {
             try {
                 heat.recordAccess(datasetId);
-                log.info("任务 {} 读取数据集 {} 已计入温度", taskId, datasetId);
+                log.debug("任务 {} 读取数据集 {} 已计入温度", taskId, datasetId);
             } catch (Exception e) {
                 // 温度只影响后续存储决策，记录失败不改变已回写的任务结果。
                 log.warn("任务 {} 读取数据集 {} 计入温度失败: {}", taskId, datasetId, e.getMessage());
@@ -1330,7 +1330,7 @@ public class K8sTaskOrchestratorService {
         else if (successful.size() < expectedCount || !completeEvidence) summary.setStatus("部分完成");
         else summary.setStatus("已完成");
         taskManagementMapper.updateExecutionSummary(summary);
-        log.info("任务 {} 单模式执行结束: mode={}, status={}, dataPreparationMs={}, computeDurationMs={}",
+        log.info("异步任务结束 taskId={} mode={} status={} dataPreparationMs={} computeDurationMs={}",
                 taskId, executionMode, summary.getStatus(), preparationMs, computeMs);
     }
 

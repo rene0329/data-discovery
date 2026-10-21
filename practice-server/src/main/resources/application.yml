@@ -50,11 +50,13 @@ mybatis:
 logging:
   level:
     root: INFO
-    org.example: DEBUG # 为你的项目包设置更详细的日志级别，方便调试
+    org.example: INFO # 默认只输出操作、任务状态和异常
+    org.example.mapper: WARN
+    org.example.aspect.AutoFillAspect: WARN
     org.example.service.NodeSyncService: ERROR  # NodeSync 仅保留错误日志
     org.example.mapper.K8sNodeMapperImpl: ERROR # 节点指标映射日志仅保留错误
     io.fabric8: WARN # 减少fabric8的日志输出，避免刷屏
-    com.sky.mapper: debug # 调整为适合K8s的日志级别
+    com.sky.mapper: WARN # 调整为适合K8s的日志级别
     com.sky.service: info
     com.sky.controller: info
 
