@@ -30,12 +30,12 @@ public class ActiveDataTransferRegistry {
         if (transferId == null || sourceNode == null || targetNode == null) return;
         Set<String> occupiedLinks = resolveOccupiedLinks(sourceNode, targetNode);
         active.put(transferId, new ActiveTransfer(occupiedLinks));
-        log.info("登记业务传输 {}: {} → {}，占用逻辑链路 {}", transferId, sourceNode, targetNode, occupiedLinks);
+        log.debug("登记业务传输 {}: {} → {}，占用逻辑链路 {}", transferId, sourceNode, targetNode, occupiedLinks);
     }
 
     public void complete(String transferId) {
         if (transferId != null && active.remove(transferId) != null) {
-            log.info("业务传输 {} 已结束，释放探测避让标记", transferId);
+            log.debug("业务传输 {} 已结束，释放探测避让标记", transferId);
         }
     }
 

@@ -773,7 +773,7 @@ public class K8sTaskOrchestratorService {
             boolean transferRegistered = false;
             String accessToken = null;
             try {
-                log.info("TASK_JOB_PREPARING taskId={} datasetId={} jobName={} sourceNode={} targetNode={} attempt={}/{}",
+                log.info("异步任务进入数据准备阶段 taskId={} datasetId={} jobName={} sourceNode={} targetNode={} attempt={}/{}",
                         taskId, registeredDatasetId, jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
 
                 accessToken = issueReadToken(taskId, jobName, registeredDatasetId,
@@ -799,6 +799,9 @@ public class K8sTaskOrchestratorService {
                         .addToLabels(InterruptedTaskRecovery.TASK_LABEL, taskId.toString())
                         .endMetadata().endTemplate().endSpec().build();
                 String selectedTargetNodeName = jobResult.getSelectedNodeName();
+                log.info("异步任务调度方案 taskId={} datasetId={} 任务类型={} 源节点={} 目标节点={} jobName={}",
+                        taskId, registeredDatasetId, taskModeLabel(type), sourceNodeInfo.getNodeName(),
+                        selectedTargetNodeName, jobName);
 
                 NodeManagement targetNodeInfo = nodeManagementMapper.getNodeByName(selectedTargetNodeName);
 
@@ -831,13 +834,14 @@ public class K8sTaskOrchestratorService {
                 jobSubmitted = true;
 
                 InitContainerEvidence initEvidence = waitForInitContainerEvidence(
-                        client, jobName, "data-transfer-container", waitTimeoutMinutes);
+                        client, jobName, "data-transfer-container", waitTimeoutMinutes,
+                        taskId, type, sourceNodeInfo.getNodeName(), selectedTargetNodeName);
                 if (activeDataTransfers != null) {
                     activeDataTransfers.complete(jobName);
                     transferRegistered = false;
                 }
                 validateInputEvidence(dataInfo, initEvidence);
-                log.info("异步任务数据准备完成 taskId={} datasetId={} mode={} sourceNode={} targetNode={} bytes={} 数据传输阶段耗时={}秒 durationMs={}",
+                log.info("异步任务数据移动结束 [==========] taskId={} datasetId={} mode={} sourceNode={} targetNode={} bytes={} 总耗时={}秒 durationMs={}（传输阶段，校验通过）",
                         taskId, registeredDatasetId, type, sourceNodeInfo.getNodeName(), initEvidence.nodeName,
                         initEvidence.inputBytes, initEvidence.durationMs / 1000.0, initEvidence.durationMs);
                 if (registeredDatasetId != null) {
@@ -981,6 +985,17 @@ public class K8sTaskOrchestratorService {
                                                                String jobName,
                                                                String initContainerName,
                                                                long timeoutMinutes) throws InterruptedException {
+        return waitForInitContainerEvidence(client, jobName, initContainerName, timeoutMinutes,
+                null, null, null, null);
+    }
+
+    private InitContainerEvidence waitForInitContainerEvidence(KubernetesClient client, String jobName,
+            String initContainerName, long timeoutMinutes, Integer taskId, String type,
+            String sourceNode, String targetNode) throws InterruptedException {
+        boolean announced = false;
+        long lastProgress = System.nanoTime();
+        long movementObservedAt = lastProgress;
+        int progressFrame = 0;
         long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
         long pollMs = Math.max(200L, statusPollIntervalMs);
 
@@ -990,6 +1005,25 @@ public class K8sTaskOrchestratorService {
 
             for (Pod pod : pods) {
                 ContainerStateTerminated terminated = findTerminatedInitContainer(pod, initContainerName);
+                boolean running = pod != null && pod.getStatus() != null
+                        && pod.getStatus().getInitContainerStatuses() != null
+                        && pod.getStatus().getInitContainerStatuses().stream().anyMatch(status ->
+                            initContainerName.equals(status.getName()) && status.getState() != null
+                                    && status.getState().getRunning() != null);
+                if (taskId != null && (running || terminated != null) && !announced) {
+                    announced = true;
+                    movementObservedAt = System.nanoTime();
+                    lastProgress = movementObservedAt;
+                    log.info("异步任务 {}计算任务准备完成，数据开始移动，源节点：{}，目标节点：{} taskId={} jobName={}",
+                            taskModeLabel(type), sourceNode, targetNode, taskId, jobName);
+                }
+                long now = System.nanoTime();
+                if (taskId != null && running && now - lastProgress >= TimeUnit.SECONDS.toNanos(5)) {
+                    log.info("异步任务数据移动中 {} taskId={} jobName={} 已等待={}秒（动态指示，非百分比）",
+                            movementIndicator(progressFrame++), taskId, jobName,
+                            TimeUnit.NANOSECONDS.toSeconds(now - movementObservedAt));
+                    lastProgress = now;
+                }
                 if (terminated == null) continue;
                 if (terminated.getExitCode() == null || terminated.getExitCode() != 0) {
                     throw new IllegalStateException("Job " + jobName + " 的数据准备容器失败，exitCode="
@@ -1074,6 +1108,16 @@ public class K8sTaskOrchestratorService {
             }
         }
         return false;
+    }
+
+    static String taskModeLabel(String type) {
+        return "centralized".equalsIgnoreCase(type) ? "集中式" : "分布式";
+    }
+
+    static String movementIndicator(int frame) {
+        StringBuilder bar = new StringBuilder("[");
+        for (int i = 0; i < 10; i++) bar.append(i == Math.floorMod(frame, 10) ? '=' : '.');
+        return bar.append(']').toString();
     }
 
     private ContainerStateTerminated findTerminatedInitContainer(Pod pod, String initContainerName) {
@@ -1397,7 +1441,14 @@ public class K8sTaskOrchestratorService {
         else if (successCount == 0) summary.setStatus("执行失败");
         else summary.setStatus("部分完成");
         taskManagementMapper.updateTask(summary);
-        log.info("对比任务 {} 执行结束: status={}, 成功 {}/{}, 分布式总搬运时间={}s, 集中式总搬运时间={}s, 加速比={}",
+        log.info("异步任务对比结束 taskId={} status={} 成功={}/{} 分布式数据移动总耗时={}秒 集中式数据移动总耗时={}秒",
+                taskId, summary.getStatus(), successCount, expectedCount,
+                t1 == null ? "无完整结果" : String.format("%.3f", t1),
+                t2 == null ? "无完整结果" : String.format("%.3f", t2));
+        if (rating != null && Double.isFinite(rating)) {
+            log.info("异步任务数据移动加速比 taskId={} 集中式耗时/分布式耗时={}倍", taskId, String.format("%.3f", rating));
+        }
+        log.debug("对比任务 {} 执行结束: status={}, 成功 {}/{}, 分布式总搬运时间={}s, 集中式总搬运时间={}s, 加速比={}",
                 taskId, summary.getStatus(), successCount, expectedCount,
                 t1 == null ? "不可比较" : String.format("%.3f", t1),
                 t2 == null ? "不可比较" : String.format("%.3f", t2),
