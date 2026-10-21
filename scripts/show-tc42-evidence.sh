@@ -15,11 +15,14 @@ MYSQL_USER="${TOPIC4_MYSQL_USER:-root}"
 MYSQL_DATABASE="${TOPIC4_MYSQL_DATABASE:-Project4}"
 LOG_SINCE="${LOG_SINCE:-30m}"
 DB_PASSWORD=""
-SCHEDULING_LOG_PATTERN='TASK_PLACEMENT_|TASK_JOB_|TASK_TRANSFER_|JOB_TARGET_ASSIGNED|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行'
+SNAPSHOT_DIR="${TC42_SNAPSHOT_DIR:-/data/topic4-build/evidence/tc42-baselines}"
+SCHEDULING_LOG_PATTERN='异步任务|【热度】|TASK_PLACEMENT_|TASK_JOB_|TASK_TRANSFER_|JOB_TARGET_ASSIGNED|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行'
 
 usage() {
   cat <<'EOF'
 用法：
+  show-tc42-evidence.sh snapshot <dataset_id ...>   # 前端创建任务前保存副本快照
+  show-tc42-evidence.sh report <task_id>            # 用例1/2/5统一入口
   show-tc42-evidence.sh baseline [dataset_id ...]
   show-tc42-evidence.sh task <task_id> [--log-since <时长>] [--no-logs]
   show-tc42-evidence.sh decision <task_id> [--selected]
@@ -30,6 +33,8 @@ usage() {
   show-tc42-evidence.sh logs [--since <时长>] [--follow]
 
 示例：
+  ./scripts/show-tc42-evidence.sh snapshot 1 4 6
+  ./scripts/show-tc42-evidence.sh report 228
   ./scripts/show-tc42-evidence.sh baseline 1 4 6
   ./scripts/show-tc42-evidence.sh task 224 --log-since 1h
   ./scripts/show-tc42-evidence.sh decision 226
@@ -43,7 +48,7 @@ usage() {
 可选环境变量：
   TOPIC4_NAMESPACE、TOPIC4_MYSQL_WORKLOAD、TOPIC4_MYSQL_SECRET、
   TOPIC4_MYSQL_SECRET_KEY、TOPIC4_MYSQL_USER、TOPIC4_MYSQL_DATABASE、
-  LOG_SINCE
+  LOG_SINCE、TC42_SNAPSHOT_DIR（测试前快照保存目录）
 
 退出码：
   0  查询执行完成
@@ -169,8 +174,9 @@ JOIN dataset_replica r ON r.dataset_id = d.dataset_id
 JOIN node_management n ON n.node_id = r.node_id
 WHERE d.deleted_at IS NULL
   ${filter}
-ORDER BY d.dataset_id, r.replica_id;"
+ORDER BY d.dataset_id, r.replica_id;" || return $?
 
+  [[ "${BASELINE_REPLICAS_ONLY:-0}" == "1" ]] && return 0
   echo
   echo "[backend.nodes]"
   mysql_table "
@@ -238,6 +244,7 @@ WHERE task_id = ${task_id};")"
           -v jobs="${job_names}" -v pattern="${SCHEDULING_LOG_PATTERN}" '
       BEGIN { count = split(jobs, names, "\n") }
       {
+        gsub(/\033\[[0-9;]*[mK]/, "")
         timestamp = $2 "T" substr($3, 1, 8)
         if (timestamp < start || timestamp > end) next
         belongs = $0 ~ ("taskId=" id "([^0-9]|$)") || $0 ~ ("任务 " id "([^0-9]|$)")
@@ -343,6 +350,9 @@ show_task() {
   echo "task_id=${task_id}"
 
   echo
+  echo "========== 二、任务后端执行结果 =========="
+  echo "说明：核对任务编号、模式、数据集、完成状态及执行证据；时间沿用数据库 UTC 记录。"
+  echo "data_preparation_ms 为数据准备阶段跨度，不等同于逐数据集传输耗时之和；NULL 表示未记录。"
   echo "[backend.task]"
   mysql_vertical "
 SELECT
@@ -370,6 +380,9 @@ SELECT
 FROM task_management
 WHERE task_id = ${task_id};"
 
+  echo
+  echo "========== 三、任务调度方案与执行证据 =========="
+  echo "说明：PLACEMENT_SELECTED 是最终选定的数据源和计算节点；下方事件核对实际执行节点及传输耗时。"
   show_placement_events "${task_id}"
 
   echo
@@ -395,6 +408,8 @@ WHERE task_id = ${task_id}
 ORDER BY event_id;"
 
   echo
+  echo "========== 四、数据迁移状态与访问审计 =========="
+  echo "4.1 数据迁移：核对源节点、目标节点、完成状态、重试及错误。NULL 不表示已完成校验。"
   echo "[backend.migration_tasks]"
   mysql_table "
 SELECT
@@ -418,6 +433,7 @@ WHERE migration.task_id = ${task_id}
 ORDER BY migration.id;"
 
   echo
+  echo "4.2 访问审计：TASK_REQUEST 为本任务请求；RUN_CONTEXT 为同轮次辅助记录，不作为本任务的独立执行证明。"
   echo "[backend.task_access_audit]"
   mysql_table "
 SELECT
@@ -431,12 +447,14 @@ SELECT
   policy_rule,
   decision,
   reason,
+  CASE WHEN request_id LIKE CONCAT('task-', ${task_id}, '-%')
+       THEN 'TASK_REQUEST' ELSE 'RUN_CONTEXT' END AS evidence_scope,
   created_at
 FROM dataset_access_audit_event
-WHERE BINARY run_id = BINARY (
-        SELECT acceptance_run_id FROM task_management WHERE task_id = ${task_id}
-      )
-   OR request_id LIKE CONCAT('task-', ${task_id}, '-%')
+WHERE request_id LIKE CONCAT('task-', ${task_id}, '-%')
+   OR (BINARY run_id = BINARY (
+         SELECT acceptance_run_id FROM task_management WHERE task_id = ${task_id}
+       ) AND (request_id IS NULL OR request_id NOT LIKE 'task-%'))
 ORDER BY event_id;"
 
   if [[ "${include_logs}" == "1" ]]; then
@@ -719,6 +737,50 @@ show_live_logs() {
   fi
 }
 
+show_snapshot() {
+  local dataset_ids captured content
+  dataset_ids="$(join_integer_ids "$@")"
+  command -v python3 >/dev/null || fail "缺少 python3"
+  content="$(BASELINE_REPLICAS_ONLY=1 show_baseline "$@")"
+  captured="$(mysql_raw "SELECT UNIX_TIMESTAMP(UTC_TIMESTAMP(3));")"
+  echo "========== 测试前数据副本快照 =========="
+  printf '%s\n' "$content"
+  echo "快照已保存："
+  printf '%s\n' "$content" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_snapshot.py" \
+    save "$SNAPSHOT_DIR" "$dataset_ids" "$captured"
+  echo "下一步：在前端创建任务，获得任务ID后执行 ./scripts/show-tc42-evidence.sh report <任务ID>"
+}
+
+show_report() {
+  (($# == 1)) || fail "report 只需一个任务ID"
+  require_positive_integer "task_id" "$1"
+  command -v python3 >/dev/null || fail "缺少 python3"
+  local task_id="$1" metadata mode dataset_ids created
+  metadata="$(mysql_raw "SELECT execution_mode, dataset_ids_json, UNIX_TIMESTAMP(create_time)
+    FROM task_management WHERE task_id=${task_id};")"
+  [[ -n "$metadata" ]] || { echo "任务 ${task_id} 不存在" >&2; return 2; }
+  IFS=$'\t' read -r mode dataset_ids created <<< "$metadata"
+  case "$mode" in
+    CENTRALIZED) echo "测试用例一 · 集中式计算 · 任务 ${task_id}" ;;
+    IN_PLACE) echo "测试用例二 · 分布式计算 · 任务 ${task_id}" ;;
+    COMPARISON) echo "测试用例五 · 集中式／分布式对比 · 任务 ${task_id}" ;;
+    *) fail "任务模式不支持：${mode}" ;;
+  esac
+  echo "只查询指定任务；本命令不会创建任务、移动数据或更新业务记录。"
+  echo
+  echo "========== 一、测试前数据副本记录 =========="
+  PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_snapshot.py" \
+    select "$SNAPSHOT_DIR" "$dataset_ids" "$created"
+  show_task "$task_id" --no-logs
+  if [[ "$mode" == COMPARISON ]]; then
+    echo
+    echo "========== 五、集中式／分布式计时与数据移动加速比 =========="
+    echo "T1=集中式数据移动时间，T2=分布式数据移动时间，加速比=T1/T2；以下保留原始值，不代替人工验收结论。"
+    show_speedup "$task_id"
+  fi
+}
+
+main() {
 COMMAND="${1:-}"
 case "${COMMAND}" in
   -h|--help|help|"")
@@ -730,10 +792,12 @@ case "${COMMAND}" in
     (($# > 0)) || fail "plan 缺少 plan_id"
     exec "${SCRIPT_DIR}/show-scheduling-evidence.sh" "$@"
     ;;
-  baseline|task|decision|heat|access|speedup|logs)
+  snapshot|report|baseline|task|decision|heat|access|speedup|logs)
     shift
     backend_init
     case "${COMMAND}" in
+      snapshot) show_snapshot "$@" ;;
+      report) show_report "$@" ;;
       baseline) show_baseline "$@" ;;
       task) show_task "$@" ;;
       decision) show_decision "$@" ;;
@@ -747,3 +811,9 @@ case "${COMMAND}" in
     fail "未知子命令：${COMMAND}"
     ;;
 esac
+
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
