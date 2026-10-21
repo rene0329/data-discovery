@@ -35,6 +35,15 @@ class Handler(BaseHTTPRequestHandler):
             status, body = 200, b'<html>wrong endpoint</html>'
         elif self.path.endswith('/404'):
             status, body = 200, '{"code":0,"data":{"status":"已完成"}}'.encode('utf-8')
+        elif self.path.endswith('/405'):
+            status, body = 200, json.dumps({'code': 0, 'data': {
+                'task': {'taskId': 405, 'executionMode': 'COMPARISON',
+                         't1': 20.663, 't2': 32.941, 'rating': 1.594,
+                         'executionEvidenceComplete': True},
+                'events': [{'bytesProcessed': 1106641002, 'durationMs': 767094,
+                            'detailsJson': '{"sourceNode":"cluster-hz-1"}',
+                            'futureField': 'retain me'}],
+                'zero': 0, 'missing': None, 'empty': []}}).encode('utf-8')
         else:
             status, body = 200, b'{ "code": 0, "data": {"t1": 20.663, "t2": 32.941, "events": []} }'
         self.send_response(status)
@@ -81,6 +90,38 @@ class Contract(unittest.TestCase):
         result = self.run_cli('tc5', '233')
         self.assertEqual(json.loads(result.stdout)['data']['t1'], 20.663)
         self.assertEqual(json.loads(result.stdout)['data']['t2'], 32.941)
+
+    def test_human_flag_before_or_after_command(self):
+        for args in (('-h', 'tc5', '405'), ('tc5', '405', '-h'),
+                     ('tc5', '--human-readable', '405')):
+            result = self.run_cli(*args)
+            self.assertEqual(result.returncode, 0)
+            view = result.stdout.decode('utf-8')
+            for value in ('集中式数据移动时间（t2）：32.941 秒',
+                          '分布式数据移动时间（t1）：20.663 秒',
+                          '处理数据量：1.03 GiB', '耗时：12 分 47.094 秒',
+                          '源节点：cluster-hz-1', 'futureField：retain me',
+                          'zero：0', 'missing：未提供', 'empty：无记录',
+                          '执行证据完整：是', '两种模式对比（COMPARISON）'):
+                self.assertIn(value, view)
+
+    def test_human_and_raw_conflict_before_login(self):
+        before = len(Handler.logins)
+        self.assertEqual(self.run_cli('--raw', 'task', '233', '-h', token='').returncode, 2)
+        self.assertEqual(len(Handler.logins), before)
+
+    def test_help_uses_long_option_without_network(self):
+        before = len(Handler.logins)
+        for args in (('--help',), ('tc5', '--help')):
+            result = self.run_cli(*args, token='')
+            self.assertEqual(result.returncode, 0)
+            self.assertIn(b'--human-readable', result.stdout)
+        self.assertEqual(len(Handler.logins), before)
+
+    def test_human_error_still_fails_and_keeps_reason(self):
+        result = self.run_cli('task', '401', '-h')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('响应说明：denied', result.stdout.decode('utf-8'))
 
     def test_errors_are_visible_and_nonzero(self):
         for task in ('401', '402', '403'):

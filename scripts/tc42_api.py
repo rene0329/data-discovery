@@ -8,6 +8,17 @@ import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
+from tc42_display import human_response
+
+
+class QueryParser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('add_help', False)
+        super().__init__(*args, **kwargs)
+        self.add_argument('--help', action='help', help='显示命令用法')
+        self.add_argument('-h', '--human-readable', action='store_true',
+                          default=argparse.SUPPRESS,
+                          help='以中文标签和易读的容量、时间单位展示查询结果')
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -23,7 +34,8 @@ def positive(value):
 
 
 def parser():
-    p = argparse.ArgumentParser(description='TC-4.2 前五项测试的前端同源原始接口查询（只读）')
+    p = QueryParser(description='TC-4.2 前五项测试的前端同源原始接口查询（只读）')
+    p.set_defaults(human_readable=False)
     p.add_argument('--base-url', default=os.environ.get('TOPIC4_API_URL', 'http://10.15.16.40:30482'))
     p.add_argument('--raw', action='store_true', help='原样输出响应字节；默认仅对 JSON 缩进，不修改字段')
     p.add_argument('--timeout', type=positive, default=60)
@@ -120,6 +132,8 @@ def login(opener, base, timeout):
 def main(argv=None):
     p = parser()
     a = p.parse_args(argv)
+    if a.raw and a.human_readable:
+        p.error('--raw 与 -h/--human-readable 不能同时使用')
     base = a.base_url.rstrip('/')
     url = urlsplit(base)
     if url.scheme not in ('http', 'https') or not url.netloc or url.username or url.password or url.query or url.fragment:
@@ -159,6 +173,8 @@ def main(argv=None):
         if a.raw:
             sys.stdout.buffer.write(body)
             sys.stdout.buffer.flush()
+        elif a.human_readable and payload is not None:
+            print(human_response(payload, path, status), flush=True)
         else:
             print(json.dumps(payload, ensure_ascii=False, indent=2) if payload is not None else body.decode('utf-8', errors='replace'), flush=True)
         if not 200 <= status < 300 or not valid:
