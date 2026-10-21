@@ -102,7 +102,7 @@ while (($#)); do
 done
 case "$CASE:$STAGE" in
   5:multi|5:single|5:repeat)
-    [[ "$TASK_ID" =~ ^[1-9][0-9]*$ ]] || fail "请填写本次前端返回的实际任务ID，例如 tc42-case5.sh $STAGE 233" ;;
+    [[ "$TASK_ID" =~ ^[1-9][0-9]*$ ]] || fail "请填写本次前端返回的实际任务ID；运行 tc42-case5.sh --help 查看分步用法" ;;
   5:records)
     fail "用例5请分步选择 multi、single、repeat 或 repeat-summary，并填写实际任务ID；查看用法请用 --help" ;;
   5:repeat-summary)
