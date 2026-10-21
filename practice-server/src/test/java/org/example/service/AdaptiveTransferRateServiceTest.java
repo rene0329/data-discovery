@@ -159,6 +159,24 @@ class AdaptiveTransferRateServiceTest {
         assertRatio();
     }
 
+    @Test
+    void centralRateUsesTheActualFallbackTargetSelectedForThisDataset() {
+        when(nodes.getNodeByName("resource-fallback")).thenReturn(node(9, "resource-fallback"));
+        paths.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 9), 35, 10));
+        long central = Long.parseLong(service.recommend(configuration, "cluster-sz-3", "master-40",
+                "resource-fallback").getRate().replace("k", ""));
+        long distributed = Long.parseLong(service.recommend(configuration, "cluster-sz-3", "resource-fallback")
+                .getRate().replace("k", ""));
+        double ratio = (double) distributed / central;
+        assertTrue(ratio >= 1.4 && ratio <= 1.5);
+        assertTrue(central < rate("master-40"));
+    }
+
+    @Test
+    void doesNotSilentlyReplaceAnUnavailableExplicitComparisonTarget() {
+        assertFalse(service.recommend(configuration, "cluster-sz-3", "master-40", "missing-node").isAvailable());
+    }
+
     private long rate(String target) {
         return Long.parseLong(service.recommend(configuration, "cluster-sz-3", target).getRate().replace("k", ""));
     }

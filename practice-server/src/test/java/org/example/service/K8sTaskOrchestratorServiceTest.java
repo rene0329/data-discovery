@@ -289,6 +289,9 @@ class K8sTaskOrchestratorServiceTest {
         when(jobs.createDataProcessingJob(anyString(), anyString(), anyString(), anyString(), anyString(),
                 isNull(), any(), any(), any(), same(image), eq("scoped-read-token")))
                 .thenThrow(new IllegalStateException("unit test stop"));
+        when(jobs.createDataProcessingJob(anyString(), anyString(), anyString(), anyString(), anyString(),
+                isNull(), any(), any(), any(), same(image), eq("scoped-read-token"), anyString()))
+                .thenThrow(new IllegalStateException("unit test stop"));
         DatasetHeatService heat = mock(DatasetHeatService.class);
         K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
@@ -304,14 +307,14 @@ class K8sTaskOrchestratorServiceTest {
                 eq("scoped-read-token"));
         verify(jobs).createDataProcessingJob(startsWith("centralized-"), eq("node-b"), eq("mnist.npz"),
                 eq("/dataset/mnist.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
-                eq("scoped-read-token"));
+                eq("scoped-read-token"), eq("node-b"));
         verify(jobs).createDataProcessingJob(startsWith("in-place-"), eq("node-c"), eq("cifar.npz"),
                 eq("/dataset/cifar.npz"), eq("node-c"), isNull(), any(), any(), any(), same(image),
                 eq("scoped-read-token"));
         verify(jobs).createDataProcessingJob(startsWith("centralized-"), eq("node-c"), eq("cifar.npz"),
                 eq("/dataset/cifar.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
-                eq("scoped-read-token"));
-        verify(jobs, times(4)).createDataProcessingJob(anyString(), anyString(), anyString(), anyString(),
+                eq("scoped-read-token"), eq("node-c"));
+        verify(jobs, times(2)).createDataProcessingJob(anyString(), anyString(), anyString(), anyString(),
                 anyString(), isNull(), any(), any(), any(), any(), anyString());
 
         ArgumentCaptor<TaskExecutionEvent> events = ArgumentCaptor.forClass(TaskExecutionEvent.class);

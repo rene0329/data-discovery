@@ -215,7 +215,7 @@ public class K8sTaskOrchestratorService {
             inPlaceFutures.add(submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
                     overrides, TaskV1Service.MODE_IN_PLACE, inPlacePlan.get(datasetId)));
             centralizedFutures.add(submitRegisteredDataItem(taskId, datasetId, explicitRuntimeImageId,
-                    overrides, TaskV1Service.MODE_CENTRALIZED, null));
+                    overrides, TaskV1Service.MODE_CENTRALIZED, inPlacePlan.get(datasetId)));
         }
         List<CompletableFuture<DataItemResult>> all = new ArrayList<>(inPlaceFutures);
         all.addAll(centralizedFutures);
@@ -630,7 +630,10 @@ public class K8sTaskOrchestratorService {
                 ? overrides.getGpu() : dataset.getRequiredGpu();
         String jobType = TaskV1Service.MODE_IN_PLACE.equals(executionMode) ? "in-place" : "centralized";
         long preparationMs = executeJobAndMeasureInitContainer(taskId, jobType, sourceNode,
-                targetNodeName, null, dataInfo, datasetId, image, gpu, selectedNodeOut, evidenceOut);
+                targetNodeName, null, dataInfo, datasetId, image, gpu, selectedNodeOut, evidenceOut,
+                TaskV1Service.MODE_CENTRALIZED.equals(executionMode) && planned != null && planned.isFound()
+                        && !targetNodeName.equals(planned.getComputeNode().getNodeName())
+                        ? planned.getComputeNode().getNodeName() : null);
         if (preparationMs < 0 || evidenceOut.get() == null) return null;
         JobExecutionEvidence evidence = evidenceOut.get();
         if (!targetNodeName.equals(evidence.nodeName)) {
@@ -756,6 +759,18 @@ public class K8sTaskOrchestratorService {
                                                    Double gpuRequest,
                                                    AtomicReference<String> selectedNodeOut,
                                                    AtomicReference<JobExecutionEvidence> evidenceOut) {
+        return executeJobAndMeasureInitContainer(taskId, type, sourceNodeInfo, targetNode,
+                excludedTargetNode, dataInfo, registeredDatasetId, runtimeImage, gpuRequest,
+                selectedNodeOut, evidenceOut, null);
+    }
+
+    private long executeJobAndMeasureInitContainer(Integer taskId, String type,
+                                                   NodeManagement sourceNodeInfo, String targetNode,
+                                                   String excludedTargetNode, DataManagement dataInfo,
+                                                   Long registeredDatasetId, RuntimeImage runtimeImage,
+                                                   Double gpuRequest, AtomicReference<String> selectedNodeOut,
+                                                   AtomicReference<JobExecutionEvidence> evidenceOut,
+                                                   String comparisonNode) {
         String dataNameForJob = dataInfo.getDataName() == null
                 ? "dataset"
                 : dataInfo.getDataName().toLowerCase().replace("_", "-");
@@ -779,18 +794,15 @@ public class K8sTaskOrchestratorService {
                 accessToken = issueReadToken(taskId, jobName, registeredDatasetId,
                         dataInfo, sourceNodeInfo);
 
-                JobCreationResult jobResult = k8sJobFactory.createDataProcessingJob(
-                        jobName,
-                        sourceNodeInfo.getNodeName(),
-                        dataInfo.getDataName(),
-                        dataInfo.getFilePath(),
-                        targetNode,
-                        excludedTargetNode,
-                        dataInfo.getRequiredCpu(),
-                        dataInfo.getRequiredMemory(),
-                        gpuRequest,
-                        runtimeImage,
-                        accessToken);
+                JobCreationResult jobResult = comparisonNode == null
+                        ? k8sJobFactory.createDataProcessingJob(jobName, sourceNodeInfo.getNodeName(),
+                                dataInfo.getDataName(), dataInfo.getFilePath(), targetNode, excludedTargetNode,
+                                dataInfo.getRequiredCpu(), dataInfo.getRequiredMemory(), gpuRequest,
+                                runtimeImage, accessToken)
+                        : k8sJobFactory.createDataProcessingJob(jobName, sourceNodeInfo.getNodeName(),
+                                dataInfo.getDataName(), dataInfo.getFilePath(), targetNode, excludedTargetNode,
+                                dataInfo.getRequiredCpu(), dataInfo.getRequiredMemory(), gpuRequest,
+                                runtimeImage, accessToken, comparisonNode);
 
                 client = jobResult.getClient();
                 Job job = new JobBuilder(jobResult.getJob())

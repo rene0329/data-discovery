@@ -102,6 +102,22 @@ class DataTransferRateLimitServiceTest {
                 eq(new BigDecimal("0.800")), eq(900), eq("master-40"), eq("admin"));
     }
 
+    @Test
+    void passesThePlannedComparisonTargetToAdaptiveResolution() {
+        AdaptiveTransferRateService adaptive = mock(AdaptiveTransferRateService.class);
+        DataTransferRateLimitConfiguration current = configuration(23L, true, "*->master-40=960k");
+        current.setAdaptiveEnabled(true);
+        when(mapper.findCurrent()).thenReturn(current);
+        when(adaptive.recommend(current, "source", "master-40", "actual-fallback"))
+                .thenReturn(AdaptiveTransferRateService.Recommendation.available(
+                        "800k", 100, new BigDecimal("1.480"), true, 30, "actual-fallback"));
+        service = new DataTransferRateLimitService(mapper, currentUsers, null, "", adaptive);
+        DataTransferRateLimitService.Resolution result = service.resolve("source", "master-40", "actual-fallback");
+        assertEquals("800k", result.getRate());
+        assertEquals("database-adaptive", result.getSource());
+        verify(adaptive).recommend(current, "source", "master-40", "actual-fallback");
+    }
+
     private DataTransferRateLimitConfiguration configuration(Long version, boolean enabled, String rules) {
         DataTransferRateLimitConfiguration value = new DataTransferRateLimitConfiguration();
         value.setConfigId(1);

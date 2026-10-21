@@ -72,9 +72,13 @@ public class DataTransferRateLimitService {
      * environment as a safe fallback rather than creating an unlimited job.
      */
     public Resolution resolve(String sourceNode, String targetNode) {
+        return resolve(sourceNode, targetNode, null);
+    }
+
+    public Resolution resolve(String sourceNode, String targetNode, String comparisonNode) {
         try {
             DataTransferRateLimitConfiguration current = mapper.findCurrent();
-            if (current != null) return resolve(current, sourceNode, targetNode, "database");
+            if (current != null) return resolve(current, sourceNode, targetNode, "database", comparisonNode);
         } catch (RuntimeException ex) {
             log.warn("读取动态传输限速配置失败，使用部署配置回退: {}", ex.getMessage());
         }
@@ -84,7 +88,7 @@ public class DataTransferRateLimitService {
         fallback.setAdaptiveEnabled(false);
         fallback.setDefaultRate(fallbackDefaultRate);
         fallback.setPathRules(fallbackPathRules);
-        return resolve(fallback, sourceNode, targetNode, "deployment-fallback");
+        return resolve(fallback, sourceNode, targetNode, "deployment-fallback", comparisonNode);
     }
 
     @Transactional
@@ -162,13 +166,13 @@ public class DataTransferRateLimitService {
     }
 
     private Resolution resolve(DataTransferRateLimitConfiguration configuration,
-                               String sourceNode, String targetNode, String source) {
+                               String sourceNode, String targetNode, String source, String comparisonNode) {
         if (!Boolean.TRUE.equals(configuration.getEnabled())) {
             return new Resolution(null, configuration.getVersion(), source);
         }
         if (Boolean.TRUE.equals(configuration.getAdaptiveEnabled()) && adaptiveRates != null) {
             AdaptiveTransferRateService.Recommendation recommendation =
-                    adaptiveRates.recommend(configuration, sourceNode, targetNode);
+                    adaptiveRates.recommend(configuration, sourceNode, targetNode, comparisonNode);
             if (recommendation.isAvailable()) {
                 log.info("路径限速 v{}: {} → {}, rate={}, bandwidth={}Mbps, latency={}ms, comparisonNode={}, targetRatio={}",
                         configuration.getVersion(), sourceNode, targetNode, recommendation.getRate(),

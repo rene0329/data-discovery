@@ -311,6 +311,17 @@ public class K8sJobFactory {
                                                      Double gpuRequest,
                                                      RuntimeImage runtimeImage,
                                                      String datasetAccessToken) {
+        return createDataProcessingJob(jobName, sourceNodeName, dataFileName, dataFilePath,
+                overrideTargetNode, excludedTargetNode, cpuRequest, memoryRequest,
+                gpuRequest, runtimeImage, datasetAccessToken, null);
+    }
+
+    public JobCreationResult createDataProcessingJob(String jobName, String sourceNodeName,
+                                                     String dataFileName, String dataFilePath,
+                                                     String overrideTargetNode, String excludedTargetNode,
+                                                     Double cpuRequest, Double memoryRequest, Double gpuRequest,
+                                                     RuntimeImage runtimeImage, String datasetAccessToken,
+                                                     String comparisonNode) {
 
         // 未显式传入 runtimeImage 时，不再按数据集文件名猜测训练配置（旧的 training_profile
         // 关键字匹配已随注册中心的 RuntimeImage 体系下线），一律用固定的通用默认值。
@@ -450,7 +461,7 @@ public class K8sJobFactory {
                 .withImage(initContainerImage)
                 .withImagePullPolicy("IfNotPresent")
                 .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl,
-                        resolveAndLogLimitRate(sourceNodeName, bestNode.getName(), jobName),
+                        resolveAndLogLimitRate(sourceNodeName, bestNode.getName(), jobName, comparisonNode),
                         datasetAccessToken != null && !datasetAccessToken.trim().isEmpty()))
                 .addNewVolumeMount()
                 .withName("shared-data")
@@ -537,10 +548,11 @@ public class K8sJobFactory {
     }
 
     /** 解析限速；详细配置仅写入 DEBUG 日志。 */
-    private String resolveAndLogLimitRate(String srcNode, String destNode, String jobName) {
+    private String resolveAndLogLimitRate(String srcNode, String destNode, String jobName, String comparisonNode) {
         String rate;
         if (rateLimitConfigurations != null) {
-            DataTransferRateLimitService.Resolution resolution = rateLimitConfigurations.resolve(srcNode, destNode);
+            DataTransferRateLimitService.Resolution resolution = comparisonNode == null ? rateLimitConfigurations.resolve(srcNode, destNode)
+                    : rateLimitConfigurations.resolve(srcNode, destNode, comparisonNode);
             rate = resolution.getRate();
             log.debug("Job '{}' curl 限速: {} → {} = '{}' ({} v{}, bandwidth={}Mbps, target={})",
                     jobName, srcNode, destNode, rate != null ? rate : "(无限速)",

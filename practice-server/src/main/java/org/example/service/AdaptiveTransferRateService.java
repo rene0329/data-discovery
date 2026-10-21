@@ -29,6 +29,11 @@ public class AdaptiveTransferRateService {
 
     public Recommendation recommend(DataTransferRateLimitConfiguration configuration,
                                     String sourceNodeName, String targetNodeName) {
+        return recommend(configuration, sourceNodeName, targetNodeName, null);
+    }
+
+    public Recommendation recommend(DataTransferRateLimitConfiguration configuration,
+                                    String sourceNodeName, String targetNodeName, String comparisonNodeName) {
         if (configuration == null || !Boolean.TRUE.equals(configuration.getAdaptiveEnabled())) {
             return Recommendation.unavailable("adaptive mode is disabled");
         }
@@ -57,7 +62,9 @@ public class AdaptiveTransferRateService {
         // placement does. A different actual target uses its own measured path.
         NodeManagement comparison = target;
         boolean centralized = target.getNodeId().equals(central.getNodeId());
-        if (centralized) {
+        if (centralized && comparisonNodeName != null) {
+            comparison = nodes.getNodeByName(comparisonNodeName);
+        } else if (centralized) {
             List<NodeManagement> computeNodes = nodes.getComputeCapableNodes();
             comparison = computeNodes == null ? null : computeNodes.stream()
                     .filter(node -> node != null && node.getNodeId() != null
