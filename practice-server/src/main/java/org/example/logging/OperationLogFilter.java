@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit;
 public class OperationLogFilter extends OncePerRequestFilter {
     static final String OUTCOME = OperationLogFilter.class.getName() + ".outcome";
     static final String REASON = OperationLogFilter.class.getName() + ".reason";
+    static final String SERVER_ERROR = OperationLogFilter.class.getName() + ".serverError";
     private static final Logger log = LoggerFactory.getLogger(OperationLogFilter.class);
 
     @Override
@@ -42,7 +43,8 @@ public class OperationLogFilter extends OncePerRequestFilter {
                 int status = failed ? 500 : response.getStatus();
                 Object businessOutcome = request.getAttribute(OUTCOME);
                 String outcome = failed || status >= 400 || "FAILED".equals(businessOutcome)
-                        ? "FAILED" : status == 202 ? "ACCEPTED" : "SUCCESS";
+                        ? "FAILED" : businessOutcome != null ? businessOutcome.toString()
+                        : status == 202 ? "ACCEPTED" : "SUCCESS";
                 String path = request.getRequestURI().replaceAll("[\\r\\n\\t]", "_");
                 boolean background = path.startsWith("/actuator/") || ("/api/network/metrics/batch".equals(path)
                         || "/api/network/nodes/public-ip".equals(path)
@@ -55,8 +57,9 @@ public class OperationLogFilter extends OncePerRequestFilter {
                 if (reason != null) message += " reason=" + reason;
                 Object[] args = {request.getMethod(), path, status, outcome,
                         durationMs, traceId};
-                if (status >= 500) log.error(message, args);
-                else if ("FAILED".equals(outcome)) log.warn(message, args);
+                if (status >= 500 || Boolean.TRUE.equals(request.getAttribute(SERVER_ERROR))) log.error(message, args);
+                else if ("FAILED".equals(outcome) || "PARTIAL_SUCCESS".equals(outcome)
+                        || "NO_ELIGIBLE_RESOURCE".equals(outcome) || "NO_OPERATION".equals(outcome)) log.warn(message, args);
                 else if (durationMs >= 1000) log.warn(message, args);
                 else if (background || "GET".equals(request.getMethod())
                         || "HEAD".equals(request.getMethod())) log.debug(message, args);
