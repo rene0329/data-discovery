@@ -1019,7 +1019,7 @@ public class K8sTaskOrchestratorService {
                 }
                 long now = System.nanoTime();
                 if (taskId != null && running && now - lastProgress >= TimeUnit.SECONDS.toNanos(5)) {
-                    log.info("异步任务数据移动中 {} taskId={} jobName={} 已等待={}秒（动态指示，非百分比）",
+                    log.info("异步任务数据移动中 {} taskId={} jobName={} 已等待={}秒",
                             movementIndicator(progressFrame++), taskId, jobName,
                             TimeUnit.NANOSECONDS.toSeconds(now - movementObservedAt));
                     lastProgress = now;
