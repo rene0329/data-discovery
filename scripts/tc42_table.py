@@ -21,8 +21,13 @@ def wrap(value, limit):
         line = ''
         for char in paragraph:
             if width(line + char) > limit:
-                out.append(line)
-                line = ''
+                boundary = max(line.rfind(separator) for separator in (' ', '_', '-', '/', '.')) + 1
+                if boundary >= len(line) // 3 and boundary > 0:
+                    out.append(line[:boundary])
+                    line = line[boundary:]
+                else:
+                    out.append(line)
+                    line = ''
             line += char
         out.append(line)
     return out
@@ -102,6 +107,11 @@ def format_data(headers, rows, total=120, vertical=False):
     hidden = [h for h in headers if h not in IMPORTANT and all(r.get(h) is None for r in rows)]
     headers = [h for h in headers if h not in hidden]
     result = []
+    if not vertical and 'event_type' in headers and 'execution_mode' in headers:
+        modes = set(row.get('execution_mode') for row in rows)
+        if len(modes) == 1 and None not in modes:
+            result.append('execution_mode = {} (all rows)'.format(display(next(iter(modes)))))
+            headers.remove('execution_mode')
     if vertical:
         key_width = min(36, max(width(h) for h in headers), total // 2)
         for row in rows:
