@@ -1,11 +1,14 @@
 package org.example.service;
 
 import org.example.mapper.DatasetRegistrationMapper;
+import org.example.entity.RegisteredDataset;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Slf4j
 public class DatasetHeatService {
     private final DatasetRegistrationMapper datasets;
     private final double halfLifeHours, threshold, accessAlpha, maxHeat;
@@ -30,7 +33,43 @@ public class DatasetHeatService {
     @Transactional
     public int refresh() { return datasets.refreshHeat(halfLifeHours, threshold); }
 
-    public void recordAccess(Long datasetId) {
+    @Transactional
+    public HeatUpdate recordAccess(Long datasetId) {
+        if (datasets.lockDataset(datasetId) == null) {
+            return new HeatUpdate(false, null, null);
+        }
+        RegisteredDataset before = datasets.findDatasetById(datasetId);
+        if (before == null || !"ACTIVE".equals(before.getStatus())) {
+            return new HeatUpdate(false, null, null);
+        }
         datasets.recordHeatAccess(datasetId, halfLifeHours, threshold, accessAlpha, maxHeat);
+        RegisteredDataset after = datasets.findDatasetById(datasetId);
+        if (after == null) throw new IllegalStateException("dataset disappeared during heat update");
+        return new HeatUpdate(true, before.getDataHeat(), after.getDataHeat());
+    }
+
+    public static void logAccessUpdate(Long datasetId, Integer taskId, String requestId, HeatUpdate update) {
+        if (update == null) return;
+        if (!update.updated) {
+            log.warn("【热度】未更新 datasetId={} taskId={} requestId={} 原因=数据集不存在或未启用",
+                    datasetId, taskId, requestId);
+            return;
+        }
+        log.info("【热度】数据使用后更新成功 datasetId={} taskId={} requestId={} 更新前={} → 更新后={}",
+                datasetId, taskId, requestId, update.before, update.after);
+    }
+
+    public static class HeatUpdate {
+        private final boolean updated;
+        private final Double before;
+        private final Double after;
+        HeatUpdate(boolean updated, Double before, Double after) {
+            this.updated = updated;
+            this.before = before;
+            this.after = after;
+        }
+        public boolean isUpdated() { return updated; }
+        public Double getBefore() { return before; }
+        public Double getAfter() { return after; }
     }
 }

@@ -120,7 +120,8 @@ public class DatasetAccessService {
             event.setDurationMs(outcome.getDurationMs());
             event.setSuccess(true);
             events.complete(event);
-            heat.recordAccess(datasetId);
+            DatasetHeatService.HeatUpdate heatUpdate = heat.recordAccess(datasetId);
+            DatasetHeatService.logAccessUpdate(datasetId, request.getTaskId(), requestId, heatUpdate);
             return events.findByRequestId(requestId);
         } catch (RuntimeException error) {
             event.setCompletedAt(LocalDateTime.now(ZoneOffset.UTC));

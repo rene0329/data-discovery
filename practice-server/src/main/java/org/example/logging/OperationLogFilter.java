@@ -51,7 +51,7 @@ public class OperationLogFilter extends OncePerRequestFilter {
                         || "/api/network/nodes/heartbeat".equals(path)
                         || "/api/network/probe-decision".equals(path));
                 if ("OPTIONS".equals(request.getMethod())) background = true;
-                String message = "请求结束 method={} path={} httpStatus={} result={} durationMs={} requestId={}";
+                String message = "【请求】请求结束 method={} path={} httpStatus={} result={} durationMs={} requestId={}";
                 long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
                 Object reason = request.getAttribute(REASON);
                 if (reason != null) message += " reason=" + reason;

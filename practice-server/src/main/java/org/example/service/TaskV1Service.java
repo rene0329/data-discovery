@@ -133,12 +133,12 @@ public class TaskV1Service {
         auditMapper.insert("TASK", String.valueOf(task.getTaskId()), "CREATE", "system", requestId,
                 writeJson(request));
         DatasetOperationGuard.afterCommit(() -> {
-            log.info("异步任务已提交 taskId={} mode={} requestId={}", task.getTaskId(), executionMode, requestId);
+            log.info("【任务】异步任务已提交 taskId={} mode={} requestId={}", task.getTaskId(), executionMode, requestId);
             try {
                 orchestrator.executeRegisteredTask(task.getTaskId(), request.getDatasetIds(),
                         request.getRuntimeImageId(), request.getResourceOverrides(), executionMode);
             } catch (RuntimeException ex) {
-                log.error("异步任务提交失败 taskId={} requestId={}", task.getTaskId(), requestId, ex);
+                log.error("【任务】异步任务提交失败 taskId={} requestId={}", task.getTaskId(), requestId, ex);
                 throw ex;
             }
         });

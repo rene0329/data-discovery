@@ -2,6 +2,9 @@ server:
   port: 8080
 
 spring:
+  output:
+    ansi:
+      enabled: ${APP_LOG_ANSI:always}
   profiles:
     active: prod # 在K8s中通常激活生产环境profile
   main:
@@ -49,7 +52,7 @@ mybatis:
 
 logging:
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%level] [%thread] : %msg%n%ex"
+    console: "%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr([%level]) [%thread] : %msg%n%ex"
   level:
     root: INFO
     org.example: INFO # 默认只输出操作、任务状态和异常

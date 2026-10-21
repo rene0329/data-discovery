@@ -161,7 +161,7 @@ public class K8sTaskOrchestratorService {
                                       ResourceRequirements overrides,
                                       String executionMode) {
         final String normalizedMode = normalizeExecutionMode(executionMode);
-        log.info("异步任务开始 taskId={} mode={} datasetIds={}", taskId, normalizedMode, datasetIds);
+        log.info("【任务】异步任务开始 taskId={} mode={} datasetIds={}", taskId, normalizedMode, datasetIds);
         TaskManagement running = new TaskManagement();
         running.setTaskId(taskId);
         running.setStatus("执行中");
@@ -195,7 +195,7 @@ public class K8sTaskOrchestratorService {
             updateRegisteredTaskStatus(taskId, normalizedMode, schedules, successful, datasetIds.size());
             recordDatasetReads(taskId, readDatasets);
         } catch (Exception e) {
-            log.error("异步任务失败 taskId={}", taskId, e);
+            log.error("【任务】异步任务失败 taskId={}", taskId, e);
             updateTaskStatusToFailed(taskId, e.getMessage());
         }
     }
@@ -346,16 +346,16 @@ public class K8sTaskOrchestratorService {
 
     /**
      * 任务真实读取数据才算一次访问：Job 完整读到输入且字节数、SHA-256 与副本一致后，
-     * 每个任务对每个数据集只加一次温度。提交、数据搬运和失败的 Job 都不加温度。
+     * 每个任务对每个数据集只更新一次热度。提交、数据搬运和失败的 Job 都不增加热度。
      */
     private void recordDatasetReads(Integer taskId, Set<Long> datasetIds) {
         for (Long datasetId : datasetIds) {
             try {
-                heat.recordAccess(datasetId);
-                log.debug("任务 {} 读取数据集 {} 已计入温度", taskId, datasetId);
+                DatasetHeatService.HeatUpdate update = heat.recordAccess(datasetId);
+                DatasetHeatService.logAccessUpdate(datasetId, taskId, null, update);
             } catch (Exception e) {
-                // 温度只影响后续存储决策，记录失败不改变已回写的任务结果。
-                log.warn("任务 {} 读取数据集 {} 计入温度失败: {}", taskId, datasetId, e.getMessage());
+                // 热度只影响后续存储决策，记录失败不改变已回写的任务结果。
+                log.warn("【热度】任务 {} 读取数据集 {} 更新热度失败: {}", taskId, datasetId, e.getMessage());
             }
         }
     }
@@ -773,7 +773,7 @@ public class K8sTaskOrchestratorService {
             boolean transferRegistered = false;
             String accessToken = null;
             try {
-                log.info("异步任务进入数据准备阶段 taskId={} datasetId={} jobName={} sourceNode={} targetNode={} attempt={}/{}",
+                log.info("【数据准备】异步任务进入数据准备阶段 taskId={} datasetId={} jobName={} sourceNode={} targetNode={} attempt={}/{}",
                         taskId, registeredDatasetId, jobName, sourceNodeInfo.getNodeName(), targetNode, attempt + 1, totalAttempts);
 
                 accessToken = issueReadToken(taskId, jobName, registeredDatasetId,
@@ -799,7 +799,7 @@ public class K8sTaskOrchestratorService {
                         .addToLabels(InterruptedTaskRecovery.TASK_LABEL, taskId.toString())
                         .endMetadata().endTemplate().endSpec().build();
                 String selectedTargetNodeName = jobResult.getSelectedNodeName();
-                log.info("异步任务调度方案 taskId={} datasetId={} 任务类型={} 源节点={} 目标节点={} jobName={}",
+                log.info("【调度】异步任务调度方案 taskId={} datasetId={} 任务类型={} 源节点={} 目标节点={} jobName={}",
                         taskId, registeredDatasetId, taskModeLabel(type), sourceNodeInfo.getNodeName(),
                         selectedTargetNodeName, jobName);
 
@@ -841,7 +841,7 @@ public class K8sTaskOrchestratorService {
                     transferRegistered = false;
                 }
                 validateInputEvidence(dataInfo, initEvidence);
-                log.info("异步任务数据移动结束 [==========] taskId={} datasetId={} mode={} sourceNode={} targetNode={} bytes={} 总耗时={}秒 durationMs={}（传输阶段，校验通过）",
+                log.info("【数据移动】异步任务数据移动结束 [==========] taskId={} datasetId={} mode={} sourceNode={} targetNode={} bytes={} 总耗时={}秒 durationMs={}（传输阶段，校验通过）",
                         taskId, registeredDatasetId, type, sourceNodeInfo.getNodeName(), initEvidence.nodeName,
                         initEvidence.inputBytes, initEvidence.durationMs / 1000.0, initEvidence.durationMs);
                 if (registeredDatasetId != null) {
@@ -1014,12 +1014,12 @@ public class K8sTaskOrchestratorService {
                     announced = true;
                     movementObservedAt = System.nanoTime();
                     lastProgress = movementObservedAt;
-                    log.info("异步任务 {}计算任务准备完成，数据开始移动，源节点：{}，目标节点：{} taskId={} jobName={}",
+                    log.info("【数据移动】异步任务 {}计算任务准备完成，数据开始移动，源节点：{}，目标节点：{} taskId={} jobName={}",
                             taskModeLabel(type), sourceNode, targetNode, taskId, jobName);
                 }
                 long now = System.nanoTime();
                 if (taskId != null && running && now - lastProgress >= TimeUnit.SECONDS.toNanos(5)) {
-                    log.info("异步任务数据移动中 {} taskId={} jobName={} 已等待={}秒",
+                    log.info("【数据移动】异步任务数据移动中 {} taskId={} jobName={} 已等待={}秒",
                             movementIndicator(progressFrame++), taskId, jobName,
                             TimeUnit.NANOSECONDS.toSeconds(now - movementObservedAt));
                     lastProgress = now;
@@ -1374,7 +1374,7 @@ public class K8sTaskOrchestratorService {
         else if (successful.size() < expectedCount || !completeEvidence) summary.setStatus("部分完成");
         else summary.setStatus("已完成");
         taskManagementMapper.updateExecutionSummary(summary);
-        log.info("异步任务结束 taskId={} mode={} status={} 数据准备阶段耗时={}ms 计算阶段耗时={}ms",
+        log.info("【任务】异步任务结束 taskId={} mode={} status={} 数据准备阶段耗时={}ms 计算阶段耗时={}ms",
                 taskId, executionMode, summary.getStatus(), preparationMs, computeMs);
     }
 
@@ -1441,12 +1441,12 @@ public class K8sTaskOrchestratorService {
         else if (successCount == 0) summary.setStatus("执行失败");
         else summary.setStatus("部分完成");
         taskManagementMapper.updateTask(summary);
-        log.info("异步任务对比结束 taskId={} status={} 成功={}/{} 分布式数据移动总耗时={}秒 集中式数据移动总耗时={}秒",
+        log.info("【任务】异步任务对比结束 taskId={} status={} 成功={}/{} 分布式数据移动总耗时={}秒 集中式数据移动总耗时={}秒",
                 taskId, summary.getStatus(), successCount, expectedCount,
                 t1 == null ? "无完整结果" : String.format("%.3f", t1),
                 t2 == null ? "无完整结果" : String.format("%.3f", t2));
         if (rating != null && Double.isFinite(rating)) {
-            log.info("异步任务数据移动加速比 taskId={} 集中式耗时/分布式耗时={}倍", taskId, String.format("%.3f", rating));
+            log.info("【数据移动】异步任务数据移动加速比 taskId={} 集中式耗时/分布式耗时={}倍", taskId, String.format("%.3f", rating));
         }
         log.debug("对比任务 {} 执行结束: status={}, 成功 {}/{}, 分布式总搬运时间={}s, 集中式总搬运时间={}s, 加速比={}",
                 taskId, summary.getStatus(), successCount, expectedCount,
