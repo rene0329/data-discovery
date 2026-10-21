@@ -115,7 +115,7 @@ class Capture(unittest.TestCase):
 
     def test_repeats_must_be_distinct_and_have_five_tasks(self):
         for ids in ['236 237','236 237 238 239 239']:
-            self.assertEqual(self.run_capture(5,'--repeat-tasks',ids).returncode,2)
+            self.assertEqual(self.run_capture(5,'--stage','repeat-summary','--repeat-tasks',ids).returncode,2)
         self.assertFalse((self.root/'results').exists())
 
     def test_runs_do_not_overwrite_each_other(self):
@@ -123,9 +123,62 @@ class Capture(unittest.TestCase):
             self.assertEqual(self.run_capture(3,'--stage','decay').returncode,0)
         self.assertEqual(len(list((self.root/'results').iterdir())),2)
 
+
+    def api_calls(self):
+        file=self.root/'api-calls'
+        return [json.loads(line) for line in file.read_text().splitlines()] if file.exists() else []
+
+    def test_case5_each_type_queries_only_the_supplied_task(self):
+        for stage, task in [('multi','233'),('single','234'),('single','235'),('repeat','236')]:
+            for name in ['calls','api-calls']:
+                file=self.root/name
+                if file.exists(): file.unlink()
+            result=self.run_capture(5,'--stage',stage,'--task-id',task)
+            self.assertEqual(result.returncode,0,result.stderr.decode())
+            self.assertEqual(self.api_calls(),[['--raw','task',task]])
+            self.assertEqual(self.calls(),[['task',task,'--log-since','1h'],
+                                           ['decision',task,'--selected'],['speedup',task]])
+
+    def test_case5_wrong_type_is_rejected_before_evidence(self):
+        for stage, task in [('multi','234'),('single','233'),('repeat','235')]:
+            self.assertEqual(self.run_capture(5,'--stage',stage,'--task-id',task).returncode,2)
+            self.assertEqual(self.calls(),[])
+
+    def test_case5_requires_explicit_actual_ids(self):
+        for args in [(),('--stage','multi'),('--stage','single'),('--stage','repeat'),('--stage','repeat-summary')]:
+            self.assertEqual(self.run_capture(5,*args).returncode,2)
+        self.assertFalse((self.root/'results').exists())
+        self.assertEqual(self.api_calls(),[])
+
+    def test_case5_repeat_round_does_not_require_five_completed_tasks(self):
+        self.env['REPEAT_TASK_IDS_TEXT']='236'
+        result=self.run_capture(5,'--stage','repeat','--task-id','236')
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        self.assertEqual(self.api_calls(),[['--raw','task','236']])
+
+    def test_case5_repeat_summary_has_no_multi_or_single_queries(self):
+        result=self.run_capture(5,'--stage','repeat-summary','--repeat-tasks','236 237 238 239 240')
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        self.assertEqual(len(self.api_calls()),5)
+        self.assertEqual(self.calls(),[['decision',str(i),'--selected'] for i in range(236,241)]+
+                                     [['speedup','236','237','238','239','240']])
+
+    def test_case5_positional_entry_and_no_argument_guidance(self):
+        result=subprocess.run([str(SCRIPTS/'tc42-case5.sh')],env=self.env,
+                              stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode,0)
+        self.assertFalse((self.root/'api-calls').exists())
+        result=subprocess.run([str(SCRIPTS/'tc42-case5.sh'),'single','235',
+                               '--output-dir',str(self.root/'results')],env=self.env,
+                              stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        self.assertEqual(self.api_calls(),[['--raw','task','235']])
+
     def test_all_wrappers_target_their_case(self):
         for case in range(1,6):
-            result=subprocess.run([str(SCRIPTS/('tc42-case%s.sh'%case)),'--dry-run'],env=self.env,
+            args=[str(SCRIPTS/('tc42-case%s.sh'%case))]
+            if case==5: args += ['multi','233']
+            result=subprocess.run(args+['--dry-run'],env=self.env,
                                   stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             self.assertEqual(result.returncode,0)
             self.assertIn(('TC-4.2.%s'%case).encode(),result.stdout)

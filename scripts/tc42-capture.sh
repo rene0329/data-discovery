@@ -21,6 +21,8 @@ LOG_SINCE="${LOG_SINCE:-1h}"
 WAIT_SECONDS="${WAIT_SECONDS:-1800}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/data/topic4-build/evidence/tc42-captures}"
 STAGE=records
+TASK_ID=""
+REPEAT_IDS_GIVEN=0
 DRY_RUN=0
 CASE="${1:-}"
 
@@ -38,6 +40,8 @@ usage() {
 选项：
   --stage <阶段>       records（默认）或以下现场采集阶段：
                        用例1/2/5：before
+                       用例5：multi、single、repeat（只查看 --task-id 指定的一个任务）
+                              repeat-summary（五轮结束后再汇总）
                        用例3：before、after-access、after-storage、decay
                        用例4：before-grant、after-grant
   --output-dir <目录>  保存位置；每次建立独立目录，不覆盖既有输出
@@ -46,6 +50,7 @@ usage() {
   --central-task <ID> --distributed-task <ID>
   --heat-task <ID> --before-task <ID> --after-task <ID> --plan <ID>
   --auth-task <ID> --principal <用户名>
+  --task-id <ID>       用例5当前这一步在前端返回的任务ID；必须明确填写
   --multi-task <ID> --catdog-task <ID> --nlp-task <ID>
   --repeat-tasks "ID ID ID ID ID"   本轮至少五个不同任务
   --dry-run            仅展示将执行的命令；不联网、不写文件
@@ -58,6 +63,10 @@ usage() {
   ./scripts/tc42-case3.sh --stage after-access --heat-task 230
   ./scripts/tc42-case3.sh --stage after-storage --plan 65
   ./scripts/tc42-case3.sh --stage decay
+  ./scripts/tc42-case5.sh multi 233
+  ./scripts/tc42-case5.sh single 234
+  ./scripts/tc42-case5.sh repeat 236
+  ./scripts/tc42-case5.sh repeat-summary 236 237 238 239 240
 
 records 不校验当前文件是否仍属于历史计划；after-storage 按原命令执行目标文件校验。
 返回0：查询均成功；1：有查询或文件核查失败；2：参数或任务对应关系不正确。
@@ -74,29 +83,42 @@ while (($#)); do
   case "$1" in
     --help) usage; exit 0 ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --stage|--output-dir|--log-since|--wait-seconds|--central-task|--distributed-task|--heat-task|--before-task|--after-task|--plan|--auth-task|--multi-task|--catdog-task|--nlp-task|--repeat-tasks|--principal)
+    --stage|--task-id|--output-dir|--log-since|--wait-seconds|--central-task|--distributed-task|--heat-task|--before-task|--after-task|--plan|--auth-task|--multi-task|--catdog-task|--nlp-task|--repeat-tasks|--principal)
       (($# >= 2)) || fail "$1 缺少参数"
       case "$1" in
         --stage) STAGE="$2" ;; --output-dir) OUTPUT_ROOT="$2" ;;
+        --task-id) TASK_ID="$2" ;;
         --log-since) LOG_SINCE="$2" ;; --wait-seconds) WAIT_SECONDS="$2" ;;
         --central-task) CENTRAL_TASK_ID="$2" ;; --distributed-task) DISTRIBUTED_TASK_ID="$2" ;;
         --heat-task) HEAT_TASK_ID="$2" ;; --before-task) BEFORE_TASK_ID="$2" ;;
         --after-task) AFTER_TASK_ID="$2" ;; --plan) PLAN_ID="$2" ;;
         --auth-task) AUTH_TASK_ID="$2" ;; --multi-task) MULTI_TASK_ID="$2" ;;
         --catdog-task) CATDOG_TASK_ID="$2" ;; --nlp-task) NLP_TASK_ID="$2" ;;
-        --repeat-tasks) REPEAT_TASK_IDS_TEXT="$2" ;; --principal) PRINCIPAL="$2" ;;
+        --repeat-tasks) REPEAT_TASK_IDS_TEXT="$2"; REPEAT_IDS_GIVEN=1 ;; --principal) PRINCIPAL="$2" ;;
       esac
       shift 2 ;;
     *) fail "未知选项：$1；查看用法请用 --help" ;;
   esac
 done
+case "$CASE:$STAGE" in
+  5:multi|5:single|5:repeat)
+    [[ "$TASK_ID" =~ ^[1-9][0-9]*$ ]] || fail "请填写本次前端返回的实际任务ID，例如 tc42-case5.sh $STAGE 233" ;;
+  5:records)
+    fail "用例5请分步选择 multi、single、repeat 或 repeat-summary，并填写实际任务ID；查看用法请用 --help" ;;
+  5:repeat-summary)
+    [[ "$REPEAT_IDS_GIVEN" == 1 ]] || fail "五轮汇总请通过 --repeat-tasks 明确填写本轮实际任务ID"
+    [[ -z "$TASK_ID" ]] || fail "五轮汇总请使用 --repeat-tasks" ;;
+  *) [[ -z "$TASK_ID" ]] || fail "--task-id 仅用于用例5的 multi、single、repeat 阶段" ;;
+esac
 for value in "$CENTRAL_TASK_ID" "$DISTRIBUTED_TASK_ID" "$HEAT_TASK_ID" "$BEFORE_TASK_ID" "$AFTER_TASK_ID" "$PLAN_ID" "$AUTH_TASK_ID" "$MULTI_TASK_ID" "$CATDOG_TASK_ID" "$NLP_TASK_ID"; do
   [[ "$value" =~ ^[1-9][0-9]*$ ]] || fail "任务和计划编号须为正整数：$value"
 done
 [[ "$PRINCIPAL" =~ ^[A-Za-z0-9._@-]+$ ]] || fail "用户名包含不支持的字符"
 [[ "$LOG_SINCE" =~ ^[1-9][0-9]*[smhd]$ ]] || fail "日志范围应为1h、30m等"
 [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]] || fail "等待秒数必须是非负整数"
-read -r -a REPEAT_TASK_IDS <<<"$REPEAT_TASK_IDS_TEXT"
+REPEAT_TASK_IDS=()
+read -r -a REPEAT_TASK_IDS <<<"$REPEAT_TASK_IDS_TEXT" || true
+if [[ "$STAGE" == repeat-summary || "$STAGE" == records ]]; then
 ((${#REPEAT_TASK_IDS[@]} >= 5)) || fail "重复测试至少需要五个任务编号"
 SEEN_IDS=' '
 for value in "${REPEAT_TASK_IDS[@]}"; do
@@ -104,8 +126,9 @@ for value in "${REPEAT_TASK_IDS[@]}"; do
   [[ "$SEEN_IDS" != *" $value "* ]] || fail "重复任务编号不能重复：$value"
   SEEN_IDS+="$value "
 done
+fi
 case "$CASE:$STAGE" in
-  *:records|1:before|2:before|5:before|3:before|3:after-access|3:after-storage|3:decay|4:before-grant|4:after-grant) ;;
+  *:records|1:before|2:before|5:before|5:multi|5:single|5:repeat|5:repeat-summary|3:before|3:after-access|3:after-storage|3:decay|4:before-grant|4:after-grant) ;;
   *) fail "用例 $CASE 不支持阶段 $STAGE" ;;
 esac
 if [[ "$DRY_RUN" == 0 ]]; then
@@ -115,8 +138,13 @@ if [[ "$DRY_RUN" == 0 ]]; then
   RUN_DIR="$(mktemp -d "${OUTPUT_ROOT%/}/$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
   printf '用例\t阶段\t步骤\t退出码\t输出文件\n' >"$RUN_DIR/index.tsv"
   printf '查询时间（UTC）：%s\n执行主机：%s\n' "$(date -u +%FT%TZ)" "$(hostname)" >"$RUN_DIR/run.txt"
+  if [[ "$CASE" == 5 && "$STAGE" != records && "$STAGE" != before ]]; then
+    printf 'STAGE=%s\nTASK_ID=%s\nREPEAT_TASK_IDS=%s\nLOG_SINCE=%s\n' "$STAGE" "$TASK_ID" \
+      "$([[ "$STAGE" == repeat-summary ]] && echo "$REPEAT_TASK_IDS_TEXT" || true)" "$LOG_SINCE" >>"$RUN_DIR/run.txt"
+  else
   printf 'CENTRAL_TASK_ID=%s\nDISTRIBUTED_TASK_ID=%s\nHEAT_TASK_ID=%s\nBEFORE_TASK_ID=%s\nAFTER_TASK_ID=%s\nPLAN_ID=%s\nAUTH_TASK_ID=%s\nMULTI_TASK_ID=%s\nCATDOG_TASK_ID=%s\nNLP_TASK_ID=%s\nREPEAT_TASK_IDS=%s\nPRINCIPAL=%s\nSTAGE=%s\nLOG_SINCE=%s\n' \
     "$CENTRAL_TASK_ID" "$DISTRIBUTED_TASK_ID" "$HEAT_TASK_ID" "$BEFORE_TASK_ID" "$AFTER_TASK_ID" "$PLAN_ID" "$AUTH_TASK_ID" "$MULTI_TASK_ID" "$CATDOG_TASK_ID" "$NLP_TASK_ID" "$REPEAT_TASK_IDS_TEXT" "$PRINCIPAL" "$STAGE" "$LOG_SINCE" >>"$RUN_DIR/run.txt"
+  fi
   echo "本次输出目录：$RUN_DIR"
 else
   echo "预览：不联网、不写文件。"
@@ -153,13 +181,16 @@ run_step() {
   fi
 }
 verify_task() {
-  local id="$1" mode="$2" datasets="$3" target="$CASE_DIR/validation/task-$1.json"
+  local id="$1" mode="$2" datasets="$3" target="$CASE_DIR/validation/task-$1.json" rule="${4:-exact}"
   if [[ "$DRY_RUN" == 1 ]]; then echo "核对任务：ID=$id 模式=$mode 数据集=$datasets"; return 0; fi
   if ! "$API" --raw task "$id" >"$target" 2>"$target.stderr"; then
     echo "无法读取任务 $id，见 $target.stderr" >&2; return 1
   fi
-  if ! jq -e --argjson id "$id" --arg mode "$mode" --argjson ids "$datasets" \
-    '.code == 0 and (.data.task | .taskId == $id and .executionMode == $mode and ((.datasetIdsJson | fromjson | sort) == ($ids | sort)))' "$target" >/dev/null; then
+  if ! jq -e --argjson id "$id" --arg mode "$mode" --argjson ids "$datasets" --arg rule "$rule" \
+    '.code == 0 and (.data.task | .taskId == $id and .executionMode == $mode and
+      ((.datasetIdsJson | fromjson | sort) as $selected |
+        if $rule == "one-of" then ($selected | length) == 1 and (($ids | index($selected[0])) != null)
+        else $selected == ($ids | sort) end))' "$target" >/dev/null; then
     echo "任务 $id 的实际模式或数据集不匹配，本用例停止，防止展示错任务。" >&2; return 1
   fi
   jq -r '.data.task | "已核对实际任务：\(.taskId)  \(.executionMode)  \(.selectedData)  \(.status)"' "$target"
@@ -182,6 +213,11 @@ preflight() {
     3:after-access) verify_task "$HEAT_TASK_ID" COMPARISON '[7]' ;;
     3:after-storage) verify_plan ;;
     4:records) verify_task "$AUTH_TASK_ID" COMPARISON '[3]' ;;
+    5:multi) verify_task "$TASK_ID" COMPARISON '[1,4,6]' ;;
+    5:single) verify_task "$TASK_ID" COMPARISON '[3,5]' one-of ;;
+    5:repeat) verify_task "$TASK_ID" COMPARISON '[5]' ;;
+    5:repeat-summary)
+      for id in "${REPEAT_TASK_IDS[@]}"; do verify_task "$id" COMPARISON '[5]' || return 1; done ;;
     5:records)
       verify_task "$MULTI_TASK_ID" COMPARISON '[1,4,6]' || return 1
       verify_task "$CATDOG_TASK_ID" COMPARISON '[5]' || return 1
@@ -245,6 +281,19 @@ case_steps() {
           task_step "$AUTH_TASK_ID" '授权后两种模式执行记录' ;;
       esac ;;
     5)
+      case "$STAGE" in
+        multi|single|repeat)
+          local label
+          case "$STAGE" in multi) label=多数据集 ;; single) label=单数据集 ;; repeat) label=本轮重复测试 ;; esac
+          task_step "$TASK_ID" "$label：当前任务执行日志"
+          run_step "selected-$TASK_ID" "$label：当前任务最终调度节点" "$EVIDENCE" decision "$TASK_ID" --selected
+          run_step "speedup-$TASK_ID" "$label：当前任务计时和加速比" "$EVIDENCE" speedup "$TASK_ID"
+          return ;;
+        repeat-summary)
+          run_step repeat-decisions '已指定各轮任务的最终节点选择' selected_batch "${REPEAT_TASK_IDS[@]}"
+          run_step repeat-speedup '已指定各轮任务的计时和加速比汇总' "$EVIDENCE" speedup "${REPEAT_TASK_IDS[@]}"
+          return ;;
+      esac
       if [[ "$STAGE" == before ]]; then
         run_step baseline-before '操作前五个数据集状态' "$EVIDENCE" baseline 1 4 6 5 3
         return
