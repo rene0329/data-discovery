@@ -14,6 +14,15 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OperationLogFilterTest {
     @Test
+    void successfulReadsAreLimitedPerRouteAndResumeAfterThirtySeconds() {
+        OperationLogFilter filter = new OperationLogFilter();
+        assertTrue(filter.shouldLogRead("/api/v1/datasets", 0));
+        assertFalse(filter.shouldLogRead("/api/v1/datasets", 1000000000L));
+        assertTrue(filter.shouldLogRead("/api/v1/nodes", 1000000000L));
+        assertTrue(filter.shouldLogRead("/api/v1/datasets", 30000000000L));
+    }
+
+    @Test
     void logsBusinessFailureWithoutCredentialsAndRestoresContext() throws Exception {
         Logger logger = (Logger) LoggerFactory.getLogger(OperationLogFilter.class);
         ListAppender<ILoggingEvent> events = new ListAppender<>();
