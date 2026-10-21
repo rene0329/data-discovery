@@ -159,8 +159,6 @@ case "$stage" in
     mysql_table "SELECT task_id,dataset_id,execution_mode,JSON_UNQUOTE(JSON_EXTRACT(details_json,'$.sourceNode')) AS source_node,JSON_UNQUOTE(JSON_EXTRACT(details_json,'$.targetNode')) AS target_node,JSON_EXTRACT(details_json,'$.latencyMs') AS latency_ms,JSON_EXTRACT(details_json,'$.bandwidthMbps') AS bandwidth_mbps,JSON_EXTRACT(details_json,'$.pathNodeIds') AS path_node_ids,occurred_at FROM task_execution_event WHERE task_id IN ($ids) AND dataset_id=$HOT AND event_type='PLACEMENT_SELECTED' ORDER BY task_id,event_id;"
     echo '【访问路径时延变化】只对同一数据集、同一执行模式配对。'
     mysql_xml "SELECT task_id,dataset_id,execution_mode,JSON_UNQUOTE(JSON_EXTRACT(details_json,'$.latencyMs')) AS latency_ms FROM task_execution_event WHERE task_id IN ($ids) AND dataset_id=$HOT AND event_type='PLACEMENT_SELECTED' ORDER BY task_id,event_id;" | view latency --ids "${TASKS[@]}"
-    echo '【实际数据准备耗时】duration_ms 来自完成事件，不等同于 latency_ms。'
-    mysql_table "SELECT task_id,dataset_id,execution_mode,node_name,bytes_processed,duration_ms,attempt,occurred_at FROM task_execution_event WHERE task_id IN ($ids) AND dataset_id=$HOT AND event_type='DATA_PREPARATION_READY' ORDER BY task_id,event_id;"
     echo '【实际读取记录】如无记录，说明该路径没有单独记录读取事件，不能用网络时延填充。'
     mysql_table "SELECT task_id,dataset_id,consumer_node_id,source_node_id,bytes_read,cache_hit_bytes,duration_ms,success,completed_at FROM dataset_access_event WHERE task_id IN ($ids) AND dataset_id=$HOT ORDER BY event_id;"
     current_state ;;
