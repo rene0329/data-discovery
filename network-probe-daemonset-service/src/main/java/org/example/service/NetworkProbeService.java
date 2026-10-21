@@ -59,6 +59,10 @@ public class NetworkProbeService {
     @Value("${local.node.name}")
     private String localNodeName;
 
+    // 探测间隔（毫秒）
+    @Value("${probe.interval.ms:600000}")
+    private long probeIntervalMs;
+
     // 目标节点角色标签（逗号分隔：storage,compute）
     @Value("${probe.target.roles:storage,compute}")
     private String targetRoles;
@@ -99,7 +103,7 @@ public class NetworkProbeService {
     private int probeTransferSeconds;
 
     @Scheduled(initialDelayString = "${probe.initial-delay.ms:30000}",
-            fixedDelayString = "${probe.interval.ms:300000}")
+            fixedDelayString = "${probe.interval.ms:86400000}")
     public void probeAndPushNetworkMetrics() {
         log.info("开始网络探测，本地节点: {}", localNodeName);
 
