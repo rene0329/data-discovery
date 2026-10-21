@@ -5,7 +5,7 @@ import sys
 import unicodedata
 import xml.etree.ElementTree as ET
 
-KEYS = ('event_id', 'migration_id', 'replica_id', 'task_id', 'dataset_id')
+KEYS = ('event_id', 'migration_id', 'replica_id', 'grant_id', 'task_id', 'dataset_id')
 IMPORTANT = set(KEYS + ('status', 'event_type', 'execution_mode', 'duration_ms',
                         'data_preparation_ms', 'compute_duration_ms', 'execution_evidence_complete',
                         'decision', 'error_message'))
@@ -74,7 +74,33 @@ def render_table(headers, rows, total):
 
 def groups(headers, total):
     key = next((key for key in KEYS if key in headers), headers[0])
-    if 'event_type' in headers and 'event_id' in headers:
+    if 'grant_id' in headers:
+        requests = [('申请记录', ['grant_id','username','dataset_id','dataset_code','name','reason']),
+                    ('有效时间', ['grant_id','created_at','expires_at','ttl_seconds']),
+                    ('当前有效性', ['grant_id','grant_status_now','remaining_seconds'])]
+        used = set()
+        for title, candidates in requests:
+            selected = [name for name in candidates if name in headers]
+            used.update(selected)
+            if len(selected) > 1:
+                yield title, selected
+        rest = [name for name in headers if name not in used]
+        if rest:
+            yield '其他字段', ['grant_id'] + rest
+    elif 'event_id' in headers and 'decision' in headers:
+        requests = [('访问结果', ['event_id','principal','dataset_id','action','decision','reason','created_at']),
+                    ('请求关联', ['event_id','request_id','run_id','target_node','policy_rule',
+                                  'token_expires_at','client_ip','evidence_scope','file_path'])]
+        used = set()
+        for title, candidates in requests:
+            selected = [name for name in candidates if name in headers]
+            used.update(selected)
+            if len(selected) > 1:
+                yield title, selected
+        rest = [name for name in headers if name not in used]
+        if rest:
+            yield '其他字段', ['event_id'] + rest
+    elif 'event_type' in headers and 'event_id' in headers:
         requested = [
             ('执行状态', ['event_id', 'dataset_id', 'execution_mode', 'event_type', 'node_name', 'attempt', 'occurred_at']),
             ('执行计时', ['event_id', 'bytes_processed', 'duration_ms']),
@@ -126,7 +152,7 @@ def format_data(headers, rows, total=120, vertical=False):
     else:
         for title, selected in groups(headers, total):
             if title:
-                result.append(title + '  (event_id 对应同一条原始记录)')
+                result.append(title + '  ({} 对应同一条原始记录)'.format('grant_id' if 'grant_id' in selected else 'event_id'))
             shown = rows
             if title in ('执行计时', '文件校验'):
                 shown = [row for row in rows if any(row.get(name) is not None for name in selected if name != 'event_id')]
@@ -135,8 +161,11 @@ def format_data(headers, rows, total=120, vertical=False):
                 continue
             # Narrow terminals may need one more split of a predefined group.
             if 7 * len(selected) + 1 > total:
-                for _, smaller in groups(selected, total):
-                    result.extend(render_table(smaller, shown, total))
+                join_key = selected[0]
+                capacity = max(2, (total - 1) // 7)
+                rest = selected[1:]
+                for start in range(0, len(rest), capacity - 1):
+                    result.extend(render_table([join_key] + rest[start:start + capacity - 1], shown, total))
             else:
                 result.extend(render_table(selected, shown, total))
     if hidden:

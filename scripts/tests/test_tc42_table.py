@@ -53,6 +53,19 @@ class TableTests(unittest.TestCase):
         self.assertTrue(all(tables.width(line) <= 60 for line in output))
         self.assertIn('中文 & <value>', '\n'.join(output))
 
+    def test_grant_parts_keep_grant_id_instead_of_ambiguous_dataset_id(self):
+        source=xml([dict(grant_id=6,dataset_id=3,username='owner-a',name='nlpcc2013',reason='申请计算',
+                         created_at='2026-10-18 11:24:21.120',expires_at='2026-10-18 12:24:21.120',
+                         ttl_seconds=3600,grant_status_now='EXPIRED',remaining_seconds=0)])
+        for size in (60,80,100):
+            lines=tables.format_xml(source,size)
+            self.assertTrue(all(tables.width(line)<=size for line in lines))
+            output='\n'.join(lines)
+            self.assertIn('申请记录',output)
+            self.assertIn('有效时间',output)
+            self.assertIn('当前有效性',output)
+            self.assertGreaterEqual(output.count('grant_id'),3)
+
     def test_empty_results_are_explicit(self):
         self.assertEqual(tables.format_xml('<resultset/>'), ['  (no records)'])
 
