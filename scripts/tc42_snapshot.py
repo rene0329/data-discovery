@@ -55,7 +55,11 @@ def main(argv):
         if result:
             print('快照文件：{}'.format(result[1]))
             print('说明：该快照在任务创建之前采集完成，数据集编号与任务一致。')
-            print(result[2], end='' if result[2].endswith('\n') else '\n')
+            content = result[2]
+            if os.environ.get('TC42_TABLE_LAYOUT') == 'compact':
+                from tc42_table import format_saved_snapshot
+                content = format_saved_snapshot(content, int(os.environ.get('TC42_TABLE_WIDTH', '120')))
+            print(content, end='' if content.endswith('\n') else '\n')
         else:
             print('未找到匹配的测试前快照；不能用当前副本状态代替测试前状态。')
             print('下次请在前端创建任务前执行 snapshot 命令。其余已保存的任务证据仍会继续展示。')

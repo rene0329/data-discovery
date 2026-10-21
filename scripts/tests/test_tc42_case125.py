@@ -25,6 +25,11 @@ class Case125Tests(unittest.TestCase):
     def test_one_task(self):
         self.assertEqual(self.run_command(['--task_id', '228']), (0, ['report 228']))
 
+    def test_layout_options_do_not_change_task_selection(self):
+        self.assertEqual(self.run_command(['--task_id', '228', '--width', '80']), (0, ['report 228']))
+        self.assertEqual(self.run_command(['--raw', '--task_id', '228']), (0, ['report 228']))
+        self.assertNotEqual(self.run_command(['--width', '10', '--task_id', '228'])[0], 0)
+
     def test_multiple_formats_and_repeated_option(self):
         for args in [['--task_id', '228', '231', '274'], ['--task_id', '228,231,274'],
                      ['--task_id', '228，231，274'], ['--task_id', '228', '--task_id', '231', '274']]:
