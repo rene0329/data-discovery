@@ -8,7 +8,7 @@ import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
-from tc42_display import human_response
+from tc42_display import human_responses, items
 
 
 class QueryParser(argparse.ArgumentParser):
@@ -18,7 +18,7 @@ class QueryParser(argparse.ArgumentParser):
         self.add_argument('--help', action='help', help='显示命令用法')
         self.add_argument('-h', '--human-readable', action='store_true',
                           default=argparse.SUPPRESS,
-                          help='以中文标签和易读的容量、时间单位展示查询结果')
+                          help='按测试用例展示关键证据、执行结果及计时汇总')
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -129,6 +129,41 @@ def login(opener, base, timeout):
     return token.strip()
 
 
+def display_context(opener, base, token, args):
+    """Read catalog information for names and checksum authority, only in -h mode."""
+    context = {'datasets': {}, 'nodes': {}, 'warnings': []}
+    cmd = args.command
+    requests = []
+    if cmd in ('task', 'tc1', 'tc2', 'tc5', 'speedup', 'dataset', 'datasets', 'heat', 'tc3',
+               'replicas', 'plan', 'audit', 'reads'):
+        requests.append(('datasets', '/api/v1/datasets?page=1&pageSize=100'))
+    if cmd in ('dataset', 'datasets', 'heat', 'tc3', 'replicas'):
+        requests.append(('nodes', '/api/v1/nodes?page=1&pageSize=100'))
+    if cmd in ('heat', 'tc3'):
+        requests.append(('policy', '/api/v1/datasets/storage-policy'))
+    if cmd in ('access', 'tc4'):
+        requests.append(('me', '/api/v1/auth/me'))
+    for name, path in requests:
+        try:
+            req = Request(base + path, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'})
+            with opener.open(req, timeout=args.timeout) as response:
+                payload = json.loads(response.read())
+            if not isinstance(payload, dict) or payload.get('code') != 0:
+                raise ValueError('catalog unavailable')
+            data = payload.get('data')
+            if name in ('datasets', 'nodes'):
+                key = 'datasetId' if name == 'datasets' else 'nodeId'
+                context[name] = {str(row[key]): row for row in items(data) if key in row}
+                if isinstance(data, dict) and data.get('total', 0) > len(context[name]):
+                    context['warnings'].append(name + ' 仅取得前 100 条')
+            elif isinstance(data, dict):
+                context[name] = data
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError, UnicodeError):
+            context['warnings'].append({'datasets': '数据集目录', 'nodes': '节点目录',
+                                        'policy': '温度阈值', 'me': '当前身份'}[name])
+    return context
+
+
 def main(argv=None):
     p = parser()
     a = p.parse_args(argv)
@@ -151,9 +186,11 @@ def main(argv=None):
             print(str(exc), file=sys.stderr)
             return 1
     failed = False
+    human_records = []
     for path, params in routes(a):
         target = base + path + ('?' + urlencode(params) if params else '')
-        print('GET ' + target, file=sys.stderr, flush=True)
+        if not a.human_readable:
+            print('GET ' + target, file=sys.stderr, flush=True)
         req = Request(target, headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/json'})
         status = 0
         try:
@@ -163,6 +200,8 @@ def main(argv=None):
             status, body = exc.code, exc.read()
         except (URLError, TimeoutError, OSError) as exc:
             print('请求失败：' + str(exc), file=sys.stderr)
+            if a.human_readable:
+                human_records.append((path, 0, {'code': -1, 'msg': '网络请求失败'}))
             failed = True
             continue
         try:
@@ -173,13 +212,19 @@ def main(argv=None):
         if a.raw:
             sys.stdout.buffer.write(body)
             sys.stdout.buffer.flush()
-        elif a.human_readable and payload is not None:
-            print(human_response(payload, path, status), flush=True)
+        elif a.human_readable:
+            human_records.append((path, status, payload))
         else:
             print(json.dumps(payload, ensure_ascii=False, indent=2) if payload is not None else body.decode('utf-8', errors='replace'), flush=True)
         if not 200 <= status < 300 or not valid:
-            print('查询未成功：HTTP {}；原始响应已输出'.format(status), file=sys.stderr)
+            if not a.human_readable:
+                print('查询未成功：HTTP {}；原始响应已输出'.format(status), file=sys.stderr)
             failed = True
+    if a.human_readable:
+        context = display_context(opener, base, token, a) if any(
+            isinstance(p, dict) and p.get('code') == 0 and 200 <= s < 300
+            for _, s, p in human_records) else {}
+        print(human_responses(human_records, a.command, context), flush=True)
     return 1 if failed else 0
 
 

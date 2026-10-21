@@ -10,6 +10,39 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 SCRIPT = Path(__file__).resolve().parents[1] / 'tc42-api.sh'
 
 
+def task_fixture(task_id):
+    data = {'task': {'taskId': task_id, 'executionMode': 'COMPARISON',
+                     'datasetIdsJson': '[7]', 'status': '已完成',
+                     'startedAt': '2026-10-18 11:38', 'finishedAt': '2026-10-18 11:39',
+                     't1': 20.663, 't2': 32.941, 'rating': 1.594,
+                     'executionEvidenceComplete': True, 'futureField': 'hide me'}, 'events': []}
+    for mode, node, ms in [('CENTRALIZED', 'master-40', 32941), ('IN_PLACE', 'master-215', 20663)]:
+        base = {'datasetId': 7, 'executionMode': mode, 'nodeName': node,
+                'jobName': mode + '-job', 'podName': mode + '-pod', 'attempt': 1,
+                'occurredAt': '2026-10-18 11:39'}
+        for kind in ['PLACEMENT_SELECTED', 'DATA_PREPARATION_STARTED', 'DATA_PREPARATION_READY',
+                     'COMPUTE_STARTED', 'COMPUTE_COMPLETED']:
+            event = dict(base, eventId=len(data['events'])+1, eventType=kind)
+            if kind == 'PLACEMENT_SELECTED':
+                event['detailsJson'] = json.dumps({'sourceNode': 'cluster-hz-1', 'targetNode': node})
+            if kind == 'DATA_PREPARATION_READY':
+                event.update(bytesProcessed=1106641002, durationMs=ms, checksumSha256='a'*64)
+            data['events'].append(event)
+    if task_id == 406:
+        data['task']['t1'] = 0
+    elif task_id == 407:
+        data['events'] = [e for e in data['events'] if e['executionMode'] != 'IN_PLACE']
+    elif task_id == 408:
+        data['events'][7]['checksumSha256'] = 'b'*64
+    elif task_id == 409:
+        data['events'].append({'eventId': 99, 'datasetId': 7, 'executionMode': 'IN_PLACE',
+                               'eventType': 'DATA_PREPARATION_STARTED', 'jobName': 'new-job',
+                               'podName': 'new-pod', 'attempt': 2, 'nodeName': 'master-215'})
+    elif task_id == 410:
+        data['task']['t2'] += 1
+    return data
+
+
 class Handler(BaseHTTPRequestHandler):
     requests = []
     logins = []
@@ -35,15 +68,13 @@ class Handler(BaseHTTPRequestHandler):
             status, body = 200, b'<html>wrong endpoint</html>'
         elif self.path.endswith('/404'):
             status, body = 200, '{"code":0,"data":{"status":"已完成"}}'.encode('utf-8')
-        elif self.path.endswith('/405'):
-            status, body = 200, json.dumps({'code': 0, 'data': {
-                'task': {'taskId': 405, 'executionMode': 'COMPARISON',
-                         't1': 20.663, 't2': 32.941, 'rating': 1.594,
-                         'executionEvidenceComplete': True},
-                'events': [{'bytesProcessed': 1106641002, 'durationMs': 767094,
-                            'detailsJson': '{"sourceNode":"cluster-hz-1"}',
-                            'futureField': 'retain me'}],
-                'zero': 0, 'missing': None, 'empty': []}}).encode('utf-8')
+        elif self.path.split('?')[0] == '/api/v1/datasets':
+            status, body = 200, json.dumps({'code': 0, 'data': {'list': [
+                {'datasetId': 7, 'name': 'Tiny ImageNet', 'authoritativeSha256': 'a'*64,
+                 'authoritativeSizeBytes': 1106641002}], 'total': 1}}).encode('utf-8')
+        elif self.path.startswith('/api/v1/tasks/') and self.path.rsplit('/', 1)[-1] in [str(i) for i in range(405, 411)]:
+            status, body = 200, json.dumps({'code': 0, 'data': task_fixture(int(self.path.rsplit('/', 1)[-1])),
+                                         'traceId': 'hidden-trace'}).encode('utf-8')
         else:
             status, body = 200, b'{ "code": 0, "data": {"t1": 20.663, "t2": 32.941, "events": []} }'
         self.send_response(status)
@@ -97,13 +128,35 @@ class Contract(unittest.TestCase):
             result = self.run_cli(*args)
             self.assertEqual(result.returncode, 0)
             view = result.stdout.decode('utf-8')
-            for value in ('集中式数据移动时间（t2）：32.941 秒',
-                          '分布式数据移动时间（t1）：20.663 秒',
-                          '处理数据量：1.03 GiB', '耗时：12 分 47.094 秒',
-                          '源节点：cluster-hz-1', 'futureField：retain me',
-                          'zero：0', 'missing：未提供', 'empty：无记录',
-                          '执行证据完整：是', '两种模式对比（COMPARISON）'):
+            for value in ('TC-4.2.5 数据移动加速比', '32.941', '20.663', '1.594',
+                          '达到要求', 'Tiny ImageNet', 'cluster-hz-1', 'master-40', 'master-215'):
                 self.assertIn(value, view)
+            for hidden in ('futureField', 'hidden-trace', 'eventId', 'podName', '未提供', 'HTTP 200'):
+                self.assertNotIn(hidden, view)
+
+    def test_human_task_preserves_key_evidence_only(self):
+        view = self.run_cli('task', '405', '-h').stdout.decode('utf-8')
+        for value in ('计划节点', '实际节点', '输入校验', '与登记值一致', '1.03 GiB', '传输起止', '计算起止'):
+            self.assertIn(value, view)
+        self.assertNotIn('futureField', view)
+
+    def test_incomplete_or_invalid_evidence_cannot_pass(self):
+        reasons = {406: '分布式计时不大于零', 407: '逐数据集执行或计时缺失',
+                   408: '两种模式输入不一致', 409: '逐数据集执行或计时缺失',
+                   410: '累计计时与任务记录不一致'}
+        for task, reason in reasons.items():
+            result = self.run_cli('tc5', str(task), '-h')
+            self.assertEqual(result.returncode, 0)  # A successful query is distinct from test acceptance.
+            view = result.stdout.decode('utf-8')
+            self.assertIn('不纳入判定', view)
+            self.assertIn(reason, view)
+            self.assertNotIn('达到要求', view)
+
+    def test_batch_speedup_has_one_header_and_merges_routes(self):
+        view = self.run_cli('tc5', '405', '405', '-h').stdout.decode('utf-8')
+        self.assertEqual(view.count('TC-4.2.5 数据移动加速比'), 1)
+        self.assertEqual(view.count('cluster-hz-1'), 1)
+        self.assertNotIn('GET http', view)
 
     def test_human_and_raw_conflict_before_login(self):
         before = len(Handler.logins)
@@ -121,7 +174,8 @@ class Contract(unittest.TestCase):
     def test_human_error_still_fails_and_keeps_reason(self):
         result = self.run_cli('task', '401', '-h')
         self.assertEqual(result.returncode, 1)
-        self.assertIn('响应说明：denied', result.stdout.decode('utf-8'))
+        self.assertIn('查询失败：', result.stdout.decode('utf-8'))
+        self.assertIn('denied', result.stdout.decode('utf-8'))
 
     def test_errors_are_visible_and_nonzero(self):
         for task in ('401', '402', '403'):
