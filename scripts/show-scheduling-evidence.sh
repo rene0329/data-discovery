@@ -17,6 +17,7 @@ WAIT_SECONDS="${WAIT_SECONDS:-600}"
 POLL_SECONDS="${POLL_SECONDS:-2}"
 LOG_SINCE="${LOG_SINCE:-30m}"
 LIVE_FILE_CHECK="${LIVE_FILE_CHECK:-1}"
+RECORDS_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -29,6 +30,7 @@ usage() {
   --log-since <时长>   节点容器日志查询范围，默认 30m
   --no-live-check      不进入目标节点计算文件大小和 SHA-256
   --no-wait            不等待，立即展示当前状态
+  --records-only       仅查询已有记录，不等待、不核查当前文件，不作迁移通过判定
   -h, --help           显示帮助
 
 示例：
@@ -79,6 +81,10 @@ while (($# > 0)); do
       WAIT_SECONDS=0
       shift
       ;;
+    --records-only)
+      RECORDS_ONLY=1
+      shift
+      ;;
     --no-live-check)
       LIVE_FILE_CHECK=0
       shift
@@ -97,6 +103,11 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+if [[ "${RECORDS_ONLY}" == "1" ]]; then
+  WAIT_SECONDS=0
+  LIVE_FILE_CHECK=0
+fi
 
 [[ -n "${PLAN_ID}" ]] || {
   usage >&2
@@ -186,6 +197,10 @@ WHERE p.plan_id = ${PLAN_ID};"
 
 echo "Topic4 后端调度信息"
 echo "plan_id=${PLAN_ID} namespace=${NAMESPACE} query_time=$(date '+%Y-%m-%d %H:%M:%S %Z')"
+if [[ "${RECORDS_ONLY}" == "1" ]]; then
+  echo "record_view=HISTORICAL_PLAN_WITH_CURRENT_REPLICA_STATE"
+  echo "仅查询已有计划和审计；副本为当前状态，本次不验证历史目标文件、不判定迁移通过。"
+fi
 echo
 
 STATUS="$(plan_status)"
@@ -463,6 +478,10 @@ echo "delete_assignment_total=${DELETE_ASSIGNMENTS}"
 echo "live_file_check_enabled=${LIVE_FILE_CHECK}"
 echo "live_file_total=${LIVE_TOTAL}"
 echo "live_file_match=${LIVE_CONFIRMED}"
+if [[ "${RECORDS_ONLY}" == "1" ]]; then
+  echo "migration_acceptance=NOT_EVALUATED"
+  exit 0
+fi
 if ((TIMED_OUT == 1)); then
   exit 3
 fi
