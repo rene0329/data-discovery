@@ -14,6 +14,35 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OperationLogFilterTest {
     @Test
+    void deniedPreflightIsWarnEvenWhenEnvelopeAndHttpAreSuccessful() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(OperationLogFilter.class);
+        ListAppender<ILoggingEvent> events = new ListAppender<>();
+        events.start();
+        logger.addAppender(events);
+        try {
+            for (boolean allowed : new boolean[]{false, true}) {
+                MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/tasks/preflight");
+                new OperationLogFilter().doFilter(request, new MockHttpServletResponse(), (req, res) -> {
+                    org.example.dto.registration.TaskPreflightCheck check = new org.example.dto.registration.TaskPreflightCheck(
+                            "DATASET", "1", null, allowed, allowed ? "AVAILABLE" : "ACCESS_DENIED",
+                            allowed ? null : "DATASET_ACCESS_DENIED", null);
+                    Object body = org.example.vo.ApiV1Response.ok(new org.example.dto.registration.TaskPreflightResult(
+                            java.util.Collections.singletonList(check)));
+                    new OperationResultAdvice().beforeBodyWrite(body, null, null, null,
+                            new ServletServerHttpRequest(request), null);
+                });
+            }
+            assertEquals(ch.qos.logback.classic.Level.WARN, events.list.get(0).getLevel());
+            assertTrue(events.list.get(0).getFormattedMessage().contains("result=FAILED"));
+            assertTrue(events.list.get(0).getFormattedMessage().contains("reason=DATASET_ACCESS_DENIED"));
+            assertEquals(ch.qos.logback.classic.Level.INFO, events.list.get(1).getLevel());
+            assertTrue(events.list.get(1).getFormattedMessage().contains("result=SUCCESS"));
+        } finally {
+            logger.detachAppender(events);
+        }
+    }
+
+    @Test
     void queryIsDebugMutationIsInfoAndServerFailureIsError() throws Exception {
         Logger logger = (Logger) LoggerFactory.getLogger(OperationLogFilter.class);
         ch.qos.logback.classic.Level previous = logger.getLevel();

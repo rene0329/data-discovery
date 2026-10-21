@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit;
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class OperationLogFilter extends OncePerRequestFilter {
     static final String OUTCOME = OperationLogFilter.class.getName() + ".outcome";
+    static final String REASON = OperationLogFilter.class.getName() + ".reason";
     private static final Logger log = LoggerFactory.getLogger(OperationLogFilter.class);
 
     @Override
@@ -50,6 +51,8 @@ public class OperationLogFilter extends OncePerRequestFilter {
                 if ("OPTIONS".equals(request.getMethod())) background = true;
                 String message = "请求结束 method={} path={} httpStatus={} result={} durationMs={} requestId={}";
                 long durationMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+                Object reason = request.getAttribute(REASON);
+                if (reason != null) message += " reason=" + reason;
                 Object[] args = {request.getMethod(), path, status, outcome,
                         durationMs, traceId};
                 if (status >= 500) log.error(message, args);
