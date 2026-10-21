@@ -174,12 +174,15 @@ public class DataTransferRateLimitService {
             AdaptiveTransferRateService.Recommendation recommendation =
                     adaptiveRates.recommend(configuration, sourceNode, targetNode, comparisonNode);
             if (recommendation.isAvailable()) {
-                log.info("路径限速 v{}: {} → {}, rate={}, bandwidth={}Mbps, latency={}ms, comparisonNode={}, targetRatio={}",
+                log.info("路径限速 v{}: {} → {}, rate={}, bandwidth={}Mbps, latency={}ms, comparisonNode={}, targetRatio={}, measurementSource={}, measurementAgeSeconds={}",
                         configuration.getVersion(), sourceNode, targetNode, recommendation.getRate(),
                         recommendation.getBasisBandwidthMbps(), recommendation.getLatencyMs(),
-                        recommendation.getComparisonNode(), recommendation.getTargetRatio());
+                        recommendation.getComparisonNode(), recommendation.getTargetRatio(),
+                        recommendation.isLastMeasurement() ? "LAST_SUCCESSFUL_MEASUREMENT" : "FRESH",
+                        recommendation.getMeasurementAgeSeconds());
                 return new Resolution(recommendation.getRate(), configuration.getVersion(),
-                        source + "-adaptive", recommendation.getBasisBandwidthMbps(),
+                        source + (recommendation.isLastMeasurement() ? "-last-measurement-fallback" : "-adaptive"),
+                        recommendation.getBasisBandwidthMbps(),
                         recommendation.getTargetRatio());
             }
             log.warn("自适应限速无法用于 {} → {}，使用人工规则回退: {}", sourceNode, targetNode,

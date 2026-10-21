@@ -167,6 +167,33 @@ class NetworkTopologyServiceTest {
         assertThrows(RegistrationException.class, () -> topology.requirePath(4, 6));
     }
 
+    @Test
+    void rateFallbackCanUseExpiredSuccessWithoutChangingNormalRoutingOrTimestamps() {
+        Instant measured = Instant.now().minusSeconds(48 * 3600);
+        metrics.forEach(edge -> edge.setMeasurementTime(Timestamp.from(measured)));
+        assertTrue(topology.pathsFrom(4, 900).get(6) == null);
+        NetworkTopologyService.NetworkPath fallback = topology.pathsFromLastMeasurements(4).get(6);
+        assertEquals(Arrays.asList(4, 3, 12, 6), fallback.getNodeIds());
+        assertEquals(measured.toEpochMilli(), fallback.getOldestMeasurement().toEpochMilli());
+        assertEquals("STALE", topology.links().get(3).getStatus());
+        assertThrows(RegistrationException.class, () -> topology.requirePath(4, 6));
+        assertEquals(measured.toEpochMilli(), metrics.get(3).getMeasurementTime().getTime());
+    }
+
+    @Test
+    void rateFallbackNeverRevivesFailedOrUnmeasuredEdgesOrDisabledTransitNodes() {
+        metrics.get(3).setStatus("inactive");
+        assertNull(topology.pathsFromLastMeasurements(4).get(6));
+        metrics.get(3).setStatus("UNKNOWN");
+        assertNull(topology.pathsFromLastMeasurements(4).get(6));
+        metrics.get(3).setStatus("active");
+        metrics.get(3).setMeasurementTime(null);
+        assertNull(topology.pathsFromLastMeasurements(4).get(6));
+        metrics.get(3).setMeasurementTime(Timestamp.from(Instant.now().minusSeconds(7200)));
+        nodes.get(2).setEnabled(false);
+        assertNull(topology.pathsFromLastMeasurements(4).get(6));
+    }
+
     private List<String> pairs(List<EdgeManagement> links) {
         return links.stream().map(edge -> edge.getSourceId() + "-" + edge.getTargetId()).collect(Collectors.toList());
     }

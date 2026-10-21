@@ -79,7 +79,7 @@ class AdaptiveTransferRateServiceTest {
                 service.recommend(configuration, "cluster-sz-3", "cluster-sz-1");
 
         assertFalse(result.isAvailable());
-        assertEquals("no fresh measured path to the target or central node", result.getUnavailableReason());
+        assertEquals("no complete successful measured path to the target or central node", result.getUnavailableReason());
     }
 
     @Test
@@ -175,6 +175,42 @@ class AdaptiveTransferRateServiceTest {
     @Test
     void doesNotSilentlyReplaceAnUnavailableExplicitComparisonTarget() {
         assertFalse(service.recommend(configuration, "cluster-sz-3", "master-40", "missing-node").isAvailable());
+    }
+
+    @Test
+    void expiredMeasurementsRetainPathDifferencesAndThePairedRatio() {
+        when(topology.pathsFrom(1, 900)).thenReturn(Collections.emptyMap());
+        when(topology.pathsFromLastMeasurements(1)).thenReturn(paths);
+        AdaptiveTransferRateService.Recommendation central = service.recommend(configuration, "cluster-sz-3", "master-40");
+        AdaptiveTransferRateService.Recommendation distributed = service.recommend(configuration, "cluster-sz-3", "cluster-sz-1");
+        assertTrue(central.isLastMeasurement());
+        assertTrue(distributed.isLastMeasurement());
+        assertEquals("121k", central.getRate());
+        assertEquals("180k", distributed.getRate());
+        assertRatio();
+        long before = rate("master-40");
+        paths.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 2), 3, 10));
+        assertTrue(rate("master-40") > before);
+        assertRatio();
+    }
+
+    @Test
+    void expiredFallbackUsesTheActualResourceFallbackTarget() {
+        when(topology.pathsFrom(1, 900)).thenReturn(Collections.emptyMap());
+        when(topology.pathsFromLastMeasurements(1)).thenReturn(paths);
+        when(nodes.getNodeByName("fallback-compute")).thenReturn(node(9, "fallback-compute"));
+        paths.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 9), 35, 10));
+        long central = Long.parseLong(service.recommend(configuration, "cluster-sz-3", "master-40", "fallback-compute")
+                .getRate().replace("k", ""));
+        long distributed = Long.parseLong(service.recommend(configuration, "cluster-sz-3", "fallback-compute")
+                .getRate().replace("k", ""));
+        assertTrue((double) distributed / central >= 1.4 && (double) distributed / central <= 1.5);
+    }
+
+    @Test
+    void recentMeasurementsTakePriorityOverTheFallback() {
+        assertFalse(service.recommend(configuration, "cluster-sz-3", "master-40").isLastMeasurement());
+        org.mockito.Mockito.verify(topology, org.mockito.Mockito.never()).pathsFromLastMeasurements(1);
     }
 
     private long rate(String target) {

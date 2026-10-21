@@ -10,6 +10,8 @@ import java.math.RoundingMode;
 import java.util.List;
 import java.util.Comparator;
 import java.util.Map;
+import java.time.Instant;
+import java.time.Duration;
 
 /** Calculates a conservative per-transfer curl rate from recent topology measurements. */
 @Service
@@ -34,6 +36,13 @@ public class AdaptiveTransferRateService {
 
     public Recommendation recommend(DataTransferRateLimitConfiguration configuration,
                                     String sourceNodeName, String targetNodeName, String comparisonNodeName) {
+        Recommendation fresh = recommend(configuration, sourceNodeName, targetNodeName, comparisonNodeName, false);
+        if (fresh.isAvailable()) return fresh;
+        return recommend(configuration, sourceNodeName, targetNodeName, comparisonNodeName, true);
+    }
+
+    private Recommendation recommend(DataTransferRateLimitConfiguration configuration, String sourceNodeName,
+                                     String targetNodeName, String comparisonNodeName, boolean lastMeasurement) {
         if (configuration == null || !Boolean.TRUE.equals(configuration.getAdaptiveEnabled())) {
             return Recommendation.unavailable("adaptive mode is disabled");
         }
@@ -50,11 +59,13 @@ public class AdaptiveTransferRateService {
         int maxAge = configuration.getMeasurementMaxAgeSeconds() == null
                 ? 900 : configuration.getMeasurementMaxAgeSeconds();
         Map<Integer, NetworkTopologyService.NetworkPath> paths =
-                topology.pathsFrom(source.getNodeId(), maxAge);
+                lastMeasurement ? topology.pathsFromLastMeasurements(source.getNodeId())
+                        : topology.pathsFrom(source.getNodeId(), maxAge);
         NetworkTopologyService.NetworkPath targetPath = paths.get(target.getNodeId());
         NetworkTopologyService.NetworkPath centralPath = paths.get(central.getNodeId());
         if (!usable(targetPath) || !usable(centralPath)) {
-            return Recommendation.unavailable("no fresh measured path to the target or central node");
+            return Recommendation.unavailable(lastMeasurement ? "no complete successful measured path to the target or central node"
+                    : "no fresh measured path to the target or central node");
         }
 
         // The central transfer needs a deterministic comparison path. Use the nearest
@@ -100,11 +111,22 @@ public class AdaptiveTransferRateService {
         BigDecimal comparisonBudget = pathBudget(comparisonPath);
         BigDecimal centralRate = centralBudget.multiply(comparisonBudget)
                 .divide(comparisonBudget.add(centralBudget.multiply(targetRatio)), 6, RoundingMode.DOWN)
-                .multiply(configuration.getAdaptiveSafetyFactor());
+                .multiply(configuration.getAdaptiveSafetyFactor())
+                // Keep the same pair ratio while reserving additional headroom for old measurements.
+                .multiply(lastMeasurement ? new BigDecimal("0.500") : BigDecimal.ONE);
         BigDecimal bytesPerSecond = centralized ? centralRate : centralRate.multiply(targetRatio);
         long kibPerSecond = Math.max(1L, bytesPerSecond.divide(BYTES_PER_KIB, 0, RoundingMode.DOWN).longValue());
         return Recommendation.available(kibPerSecond + "k", targetPath.getBandwidthMbps(),
-                targetRatio, centralized, targetPath.getLatencyMs(), comparison.getNodeName());
+                targetRatio, centralized, targetPath.getLatencyMs(), comparison.getNodeName(), lastMeasurement,
+                measurementAgeSeconds(centralPath, comparisonPath));
+    }
+
+    private static Long measurementAgeSeconds(NetworkTopologyService.NetworkPath first,
+                                               NetworkTopologyService.NetworkPath second) {
+        Instant a = first.getOldestMeasurement();
+        Instant b = second.getOldestMeasurement();
+        if (a == null || b == null) return null;
+        return Math.max(0L, Duration.between(a.isBefore(b) ? a : b, Instant.now()).getSeconds());
     }
 
     private static boolean usable(NetworkTopologyService.NetworkPath path) {
@@ -128,9 +150,12 @@ public class AdaptiveTransferRateService {
         private final String unavailableReason;
         private final Double latencyMs;
         private final String comparisonNode;
+        private final boolean lastMeasurement;
+        private final Long measurementAgeSeconds;
 
         private Recommendation(String rate, Long basisBandwidthMbps, BigDecimal targetRatio,
-                               boolean centralized, String unavailableReason, Double latencyMs, String comparisonNode) {
+                               boolean centralized, String unavailableReason, Double latencyMs, String comparisonNode,
+                               boolean lastMeasurement, Long measurementAgeSeconds) {
             this.rate = rate;
             this.basisBandwidthMbps = basisBandwidthMbps;
             this.targetRatio = targetRatio;
@@ -138,17 +163,28 @@ public class AdaptiveTransferRateService {
             this.unavailableReason = unavailableReason;
             this.latencyMs = latencyMs;
             this.comparisonNode = comparisonNode;
+            this.lastMeasurement = lastMeasurement;
+            this.measurementAgeSeconds = measurementAgeSeconds;
         }
 
         static Recommendation available(String rate, long bandwidthMbps,
                                         BigDecimal targetRatio, boolean centralized, double latencyMs, String comparisonNode) {
-            return new Recommendation(rate, bandwidthMbps, targetRatio, centralized, null, latencyMs, comparisonNode);
+            return available(rate, bandwidthMbps, targetRatio, centralized, latencyMs, comparisonNode, false, null);
+        }
+
+        static Recommendation available(String rate, long bandwidthMbps, BigDecimal targetRatio,
+                                        boolean centralized, double latencyMs, String comparisonNode,
+                                        boolean lastMeasurement, Long measurementAgeSeconds) {
+            return new Recommendation(rate, bandwidthMbps, targetRatio, centralized, null, latencyMs,
+                    comparisonNode, lastMeasurement, measurementAgeSeconds);
         }
 
         static Recommendation unavailable(String reason) {
-            return new Recommendation(null, null, null, false, reason, null, null);
+            return new Recommendation(null, null, null, false, reason, null, null, false, null);
         }
 
+        public boolean isLastMeasurement() { return lastMeasurement; }
+        public Long getMeasurementAgeSeconds() { return measurementAgeSeconds; }
         public Double getLatencyMs() { return latencyMs; }
         public String getComparisonNode() { return comparisonNode; }
         public boolean isAvailable() { return rate != null; }

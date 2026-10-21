@@ -118,6 +118,22 @@ class DataTransferRateLimitServiceTest {
         verify(adaptive).recommend(current, "source", "master-40", "actual-fallback");
     }
 
+    @Test
+    void identifiesExpiredMeasurementFallbackSeparatelyFromFreshAndManualRules() {
+        AdaptiveTransferRateService adaptive = mock(AdaptiveTransferRateService.class);
+        DataTransferRateLimitConfiguration current = configuration(23L, true, "*->master-40=960k");
+        current.setAdaptiveEnabled(true);
+        when(mapper.findCurrent()).thenReturn(current);
+        when(adaptive.recommend(current, "source", "master-40", "actual-fallback"))
+                .thenReturn(AdaptiveTransferRateService.Recommendation.available(
+                        "400k", 100, new BigDecimal("1.480"), true, 30, "actual-fallback", true, 1800L));
+        service = new DataTransferRateLimitService(mapper, currentUsers, null, "", adaptive);
+        DataTransferRateLimitService.Resolution result = service.resolve("source", "master-40", "actual-fallback");
+        assertEquals("400k", result.getRate());
+        assertEquals("database-last-measurement-fallback", result.getSource());
+        assertEquals(new BigDecimal("1.480"), result.getTargetRatio());
+    }
+
     private DataTransferRateLimitConfiguration configuration(Long version, boolean enabled, String rules) {
         DataTransferRateLimitConfiguration value = new DataTransferRateLimitConfiguration();
         value.setConfigId(1);

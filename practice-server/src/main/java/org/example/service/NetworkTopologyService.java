@@ -176,6 +176,16 @@ public class NetworkTopologyService {
      * topology display so an old high-bandwidth sample cannot overdrive a link.
      */
     public Map<Integer, NetworkPath> pathsFrom(Integer sourceId, long maxMeasurementAgeSeconds) {
+        return measuredPathsFrom(sourceId, maxMeasurementAgeSeconds, false);
+    }
+
+    /** Last complete successful measurements, for rate fallback only; never revives failed links. */
+    public Map<Integer, NetworkPath> pathsFromLastMeasurements(Integer sourceId) {
+        return measuredPathsFrom(sourceId, 0L, true);
+    }
+
+    private Map<Integer, NetworkPath> measuredPathsFrom(Integer sourceId, long maxMeasurementAgeSeconds,
+                                                       boolean allowExpired) {
         Set<Integer> available = new HashSet<>();
         for (NodeManagement node : nodes.selectAllNodes()) {
             if (availability.isSchedulable(node)) available.add(node.getNodeId());
@@ -185,9 +195,10 @@ public class NetworkTopologyService {
         Instant measurementCutoff = Instant.now().minusSeconds(Math.max(1L, maxMeasurementAgeSeconds));
         for (EdgeManagement edge : links()) {
             if (!available.contains(edge.getSourceId()) || !available.contains(edge.getTargetId())
-                    || !usable(edge)
+                    || !(usable(edge) || (allowExpired && "STALE".equals(edge.getStatus())
+                            && validMeasurements(edge)))
                     || edge.getMeasurementTime() == null
-                    || edge.getMeasurementTime().toInstant().isBefore(measurementCutoff)) continue;
+                    || (!allowExpired && edge.getMeasurementTime().toInstant().isBefore(measurementCutoff))) continue;
             adjacency.computeIfAbsent(edge.getSourceId(), key -> new ArrayList<>()).add(edge);
             adjacency.computeIfAbsent(edge.getTargetId(), key -> new ArrayList<>()).add(edge);
         }
@@ -209,7 +220,9 @@ public class NetworkTopologyService {
                 route.add(peer);
                 NetworkPath next = new NetworkPath(Collections.unmodifiableList(route),
                         path.getLatencyMs() + edge.getLatency(),
-                        Math.min(path.getBandwidthMbps(), edge.getBandwidth()));
+                        Math.min(path.getBandwidthMbps(), edge.getBandwidth()),
+                        path.getOldestMeasurement() == null || edge.getMeasurementTime().toInstant().isBefore(path.getOldestMeasurement())
+                                ? edge.getMeasurementTime().toInstant() : path.getOldestMeasurement());
                 if (!best.containsKey(peer) || order.compare(next, best.get(peer)) < 0) {
                     best.put(peer, next);
                     pending.add(next);
@@ -229,7 +242,11 @@ public class NetworkTopologyService {
 
     private boolean usable(EdgeManagement edge) {
         return ("active".equalsIgnoreCase(edge.getStatus()) || "UP".equalsIgnoreCase(edge.getStatus()))
-                && edge.getLatency() != null && Double.isFinite(edge.getLatency()) && edge.getLatency() >= 0
+                && validMeasurements(edge);
+    }
+
+    private boolean validMeasurements(EdgeManagement edge) {
+        return edge.getLatency() != null && Double.isFinite(edge.getLatency()) && edge.getLatency() >= 0
                 && edge.getBandwidth() != null && edge.getBandwidth() > 0;
     }
 
@@ -238,5 +255,17 @@ public class NetworkTopologyService {
         List<Integer> nodeIds;
         double latencyMs;
         long bandwidthMbps;
+        Instant oldestMeasurement;
+
+        public NetworkPath(List<Integer> nodeIds, double latencyMs, long bandwidthMbps) {
+            this(nodeIds, latencyMs, bandwidthMbps, null);
+        }
+
+        public NetworkPath(List<Integer> nodeIds, double latencyMs, long bandwidthMbps, Instant oldestMeasurement) {
+            this.nodeIds = nodeIds;
+            this.latencyMs = latencyMs;
+            this.bandwidthMbps = bandwidthMbps;
+            this.oldestMeasurement = oldestMeasurement;
+        }
     }
 }
