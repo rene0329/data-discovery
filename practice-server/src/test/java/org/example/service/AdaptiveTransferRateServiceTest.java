@@ -213,6 +213,34 @@ class AdaptiveTransferRateServiceTest {
         org.mockito.Mockito.verify(topology, org.mockito.Mockito.never()).pathsFromLastMeasurements(1);
     }
 
+    @Test
+    void preservesFormerRegionalRatiosForFreshAndExpiredMeasurements() {
+        String[] sites = {"core", "hz", "sh", "bj", "sz"};
+        int[] formerCentralRates = {1080, 1080, 992, 928, 840};
+        configuration.setTargetMin(new BigDecimal("1.300"));
+        configuration.setTargetMax(new BigDecimal("1.690"));
+        for (int i = 0; i < sites.length; i++) {
+            NodeManagement source = node(1, "cluster-sz-3");
+            source.setSiteCode(sites[i]);
+            when(nodes.getNodeByName("cluster-sz-3")).thenReturn(source);
+            BigDecimal expected = new BigDecimal("1408").divide(
+                    BigDecimal.valueOf(formerCentralRates[i]), 6, java.math.RoundingMode.HALF_UP);
+            for (boolean expired : new boolean[]{false, true}) {
+                when(topology.pathsFrom(1, 900)).thenReturn(expired ? Collections.emptyMap() : paths);
+                when(topology.pathsFromLastMeasurements(1)).thenReturn(paths);
+                AdaptiveTransferRateService.Recommendation central =
+                        service.recommend(configuration, "cluster-sz-3", "master-40", "cluster-sz-1");
+                AdaptiveTransferRateService.Recommendation distributed =
+                        service.recommend(configuration, "cluster-sz-3", "cluster-sz-1");
+                assertEquals(expected, central.getTargetRatio());
+                assertEquals(expected, distributed.getTargetRatio());
+                assertEquals(expired, central.isLastMeasurement());
+                double actual = (double) rate("cluster-sz-1") / rate("master-40");
+                assertEquals(expected.doubleValue(), actual, 0.015);
+            }
+        }
+    }
+
     private long rate(String target) {
         return Long.parseLong(service.recommend(configuration, "cluster-sz-3", target).getRate().replace("k", ""));
     }

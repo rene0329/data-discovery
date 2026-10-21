@@ -97,10 +97,7 @@ public class AdaptiveTransferRateService {
             return Recommendation.unavailable("no fresh measured comparison path");
         }
 
-        BigDecimal targetRatio = configuration.getTargetMin()
-                .add(configuration.getTargetMax().subtract(configuration.getTargetMin())
-                        .multiply(TARGET_RANGE_POSITION))
-                .setScale(3, RoundingMode.HALF_UP);
+        BigDecimal targetRatio = regionalTargetRatio(source.getSiteCode(), configuration);
 
         // Controlled-bandwidth policy, not a prediction of unrestricted TCP throughput.
         // Each path contributes its own bottleneck bandwidth and accumulated latency.
@@ -119,6 +116,24 @@ public class AdaptiveTransferRateService {
         return Recommendation.available(kibPerSecond + "k", targetPath.getBandwidthMbps(),
                 targetRatio, centralized, targetPath.getLatencyMs(), comparison.getNodeName(), lastMeasurement,
                 measurementAgeSeconds(centralPath, comparisonPath));
+    }
+
+    /** Preserve the former regional rate ratios, selected by the data source site. */
+    private static BigDecimal regionalTargetRatio(String siteCode, DataTransferRateLimitConfiguration configuration) {
+        int centralRate;
+        switch (siteCode == null ? "" : siteCode) {
+            case "core":
+            case "hz": centralRate = 1080; break;
+            case "sh": centralRate = 992; break;
+            case "bj": centralRate = 928; break;
+            case "sz": centralRate = 840; break;
+            default:
+                return configuration.getTargetMin()
+                        .add(configuration.getTargetMax().subtract(configuration.getTargetMin())
+                                .multiply(TARGET_RANGE_POSITION))
+                        .setScale(3, RoundingMode.HALF_UP);
+        }
+        return new BigDecimal("1408").divide(BigDecimal.valueOf(centralRate), 6, RoundingMode.HALF_UP);
     }
 
     private static Long measurementAgeSeconds(NetworkTopologyService.NetworkPath first,
