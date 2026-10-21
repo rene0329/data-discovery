@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, quote
@@ -16,7 +17,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def positive(value):
-    if not value.isascii() or not value.isdigit() or int(value) < 1:
+    if not re.fullmatch(r'[0-9]+', value) or int(value) < 1:
         raise argparse.ArgumentTypeError('编号和分页参数必须是正整数')
     return int(value)
 
@@ -26,7 +27,8 @@ def parser():
     p.add_argument('--base-url', default=os.environ.get('TOPIC4_API_URL', 'http://10.15.16.40:30482'))
     p.add_argument('--raw', action='store_true', help='原样输出响应字节；默认仅对 JSON 缩进，不修改字段')
     p.add_argument('--timeout', type=positive, default=60)
-    s = p.add_subparsers(dest='command', required=True)
+    s = p.add_subparsers(dest='command')
+    s.required = True  # Python 3.6 on the ZJ build host.
     for name in ('datasets', 'nodes', 'tasks', 'plans'):
         c = s.add_parser(name, help='分页查询，单次返回一页')
         c.add_argument('--page', type=positive, default=1)
