@@ -19,10 +19,17 @@ spring:
       max-request-size: 4096MB
 
   datasource:
-    druid: # 或者使用 hikari，你的application-dev.yml中是hikari
+    druid:
       driver-class-name: com.mysql.cj.jdbc.Driver
       url: jdbc:mysql://10.15.16.40:34036/Project4?serverTimezone=UTC&useUnicode=true&characterEncoding=utf-8&sessionVariables=time_zone='%2B00:00'
       username: root
+      # 配合 JVM 参数 druid.mysql.usePingMethod=false，使用实际查询校验空闲连接。
+      validation-query: SELECT 1
+      validation-query-timeout: 3
+      test-while-idle: true
+      test-on-borrow: false
+      test-on-return: false
+      time-between-eviction-runs-millis: 60000
       password: ibdiibdi
     # 你的 application-dev.yml 中有 Hikari 配置，如果项目中使用的是 Hikari，请使用以下配置块并注释掉 Druid
     # hikari:

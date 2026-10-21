@@ -68,7 +68,8 @@ spec:
             - name: TZ
               value: "UTC"
             - name: JAVA_TOOL_OPTIONS
-              value: "-Duser.timezone=UTC"
+              # Druid 1.2.1 的 ping 校验不刷新数据包时间，可能误丢弃有效空闲连接。
+              value: "-Duser.timezone=UTC -Ddruid.mysql.usePingMethod=false"
             - name: APP_AUTH_JWT_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
