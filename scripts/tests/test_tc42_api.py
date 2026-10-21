@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'tc42-api.sh'
 
@@ -24,6 +24,8 @@ class Handler(BaseHTTPRequestHandler):
             status, body = 200, b'{"code":7,"msg":"business error"}'
         elif self.path.endswith('/403'):
             status, body = 200, b'<html>wrong endpoint</html>'
+        elif self.path.endswith('/404'):
+            status, body = 200, '{"code":0,"data":{"status":"已完成"}}'.encode('utf-8')
         else:
             status, body = 200, b'{ "code": 0, "data": {"t1": 20.663, "t2": 32.941, "events": []} }'
         self.send_response(status)
@@ -34,7 +36,7 @@ class Handler(BaseHTTPRequestHandler):
 class Contract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        cls.server = HTTPServer(('127.0.0.1', 0), Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
 
@@ -45,10 +47,16 @@ class Contract(unittest.TestCase):
         cls.thread.join()
 
     def run_cli(self, *args, token='test-token'):
-        env = dict(os.environ, TOPIC4_TOKEN=token)
+        env = dict(os.environ, TOPIC4_TOKEN=token, LC_ALL='C',
+                   PYTHONCOERCECLOCALE='0', PYTHONUTF8='0')
         return subprocess.run([str(SCRIPT), '--base-url',
                                'http://127.0.0.1:' + str(self.server.server_port), *args],
-                              env=env, capture_output=True)
+                              env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_chinese_output_in_ascii_locale(self):
+        result = self.run_cli('task', '404')
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout.decode('utf-8'))['data']['status'], '已完成')
 
     def test_raw_is_unchanged_and_authenticated(self):
         result = self.run_cli('--raw', 'task', '233')
