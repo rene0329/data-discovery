@@ -121,7 +121,8 @@ spec:
               cpu: "200m"
               memory: "256Mi"
             limits:
-              memory: "512Mi"
+              # Reserve room for the JVM and the page cache used by large downloads.
+              memory: "2Gi"
 
           # Allow cold starts on resource-constrained edge nodes to finish
           # before liveness checks can restart the application.
