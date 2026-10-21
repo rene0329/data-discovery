@@ -14,12 +14,29 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OperationLogFilterTest {
     @Test
-    void successfulReadsAreLimitedPerRouteAndResumeAfterThirtySeconds() {
-        OperationLogFilter filter = new OperationLogFilter();
-        assertTrue(filter.shouldLogRead("/api/v1/datasets", 0));
-        assertFalse(filter.shouldLogRead("/api/v1/datasets", 1000000000L));
-        assertTrue(filter.shouldLogRead("/api/v1/nodes", 1000000000L));
-        assertTrue(filter.shouldLogRead("/api/v1/datasets", 30000000000L));
+    void queryIsDebugMutationIsInfoAndServerFailureIsError() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(OperationLogFilter.class);
+        ch.qos.logback.classic.Level previous = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        ListAppender<ILoggingEvent> events = new ListAppender<>();
+        events.start();
+        logger.addAppender(events);
+        try {
+            OperationLogFilter filter = new OperationLogFilter();
+            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"),
+                    new MockHttpServletResponse(), (req, res) -> {});
+            filter.doFilter(new MockHttpServletRequest("POST", "/api/v1/tasks"),
+                    new MockHttpServletResponse(), (req, res) -> {});
+            MockHttpServletResponse error = new MockHttpServletResponse();
+            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"),
+                    error, (req, res) -> error.setStatus(500));
+            assertEquals(ch.qos.logback.classic.Level.DEBUG, events.list.get(0).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.INFO, events.list.get(1).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.ERROR, events.list.get(2).getLevel());
+        } finally {
+            logger.detachAppender(events);
+            logger.setLevel(previous);
+        }
     }
 
     @Test

@@ -49,10 +49,11 @@ mybatis:
 
 logging:
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] : %msg%n%ex"
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%level] [%thread] : %msg%n%ex"
   level:
     root: INFO
     org.example: INFO # 默认只输出操作、任务状态和异常
+    org.example.logging.OperationLogFilter: ${APP_REQUEST_LOG_LEVEL:INFO}
     org.example.mapper: WARN
     org.example.aspect.AutoFillAspect: WARN
     org.example.service.NodeSyncService: ERROR  # NodeSync 仅保留错误日志

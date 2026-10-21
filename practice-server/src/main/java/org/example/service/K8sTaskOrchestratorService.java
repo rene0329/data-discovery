@@ -269,7 +269,7 @@ public class K8sTaskOrchestratorService {
         } catch (Exception e) {
             throw new IllegalStateException("无法序列化节点选择记录", e);
         }
-        log.info("TASK_{} taskId={} datasetId={} mode={} details={}", eventType, taskId, datasetId, mode, json);
+        log.debug("TASK_{} taskId={} datasetId={} mode={} details={}", eventType, taskId, datasetId, mode, json);
         taskManagementMapper.insertExecutionEvent(TaskExecutionEvent.builder()
                 .taskId(taskId).datasetId(datasetId).executionMode(mode).eventType(eventType)
                 .occurredAt(LocalDateTime.now(ZoneOffset.UTC))
