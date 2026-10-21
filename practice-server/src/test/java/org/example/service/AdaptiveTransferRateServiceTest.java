@@ -23,6 +23,7 @@ class AdaptiveTransferRateServiceTest {
     private NetworkTopologyService topology;
     private AdaptiveTransferRateService service;
     private DataTransferRateLimitConfiguration configuration;
+    private Map<Integer, NetworkTopologyService.NetworkPath> paths;
 
     @BeforeEach
     void setUp() {
@@ -45,7 +46,7 @@ class AdaptiveTransferRateServiceTest {
         when(nodes.getNodeByName("cluster-sz-1")).thenReturn(localCompute);
         when(nodes.getComputeCapableNodes()).thenReturn(Arrays.asList(central, localCompute));
 
-        Map<Integer, NetworkTopologyService.NetworkPath> paths = new HashMap<>();
+        paths = new HashMap<>();
         paths.put(1, new NetworkTopologyService.NetworkPath(Collections.singletonList(1), 0, Long.MAX_VALUE));
         paths.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 4, 2), 30, 10));
         paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 3), 1, 3000));
@@ -53,15 +54,17 @@ class AdaptiveTransferRateServiceTest {
     }
 
     @Test
-    void usesOneMeasuredFloorToPreserveTheRequestedRatioAcrossDifferentTargets() {
+    void usesOnlyThePairedPathsAndPreservesTheConfiguredRateRatio() {
         AdaptiveTransferRateService.Recommendation centralized =
                 service.recommend(configuration, "cluster-sz-3", "master-40");
         AdaptiveTransferRateService.Recommendation distributed =
                 service.recommend(configuration, "cluster-sz-3", "cluster-sz-1");
 
-        assertEquals("659k", centralized.getRate());
-        assertEquals("976k", distributed.getRate());
+        assertEquals("243k", centralized.getRate());
+        assertEquals("360k", distributed.getRate());
         assertEquals(10L, centralized.getBasisBandwidthMbps());
+        assertEquals(3000L, distributed.getBasisBandwidthMbps());
+        assertEquals("cluster-sz-1", centralized.getComparisonNode());
         assertEquals(new BigDecimal("1.480"), centralized.getTargetRatio());
         assertTrue(centralized.isCentralized());
         assertFalse(distributed.isCentralized());
@@ -77,6 +80,93 @@ class AdaptiveTransferRateServiceTest {
 
         assertFalse(result.isAvailable());
         assertEquals("no fresh measured path to the target or central node", result.getUnavailableReason());
+    }
+
+    @Test
+    void shorteningTheCentralPathChangesBothRatesAtTheSameBandwidth() {
+        long before = rate("master-40");
+        paths.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 2), 3, 10));
+        assertTrue(rate("master-40") > before * 2);
+        assertRatio();
+    }
+
+    @Test
+    void improvingOnlyTheDistributedPathAlsoChangesTheRate() {
+        paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 3), 20, 10));
+        long before = rate("cluster-sz-1");
+        paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 3), 1, 10));
+        assertTrue(rate("cluster-sz-1") > before);
+        assertRatio();
+    }
+
+    @Test
+    void improvingBandwidthChangesTheRateAtTheSameLatency() {
+        long before = rate("master-40");
+        paths.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 2), 30, 20));
+        assertTrue(rate("master-40") > before);
+        assertRatio();
+    }
+
+    @Test
+    void unrelatedSlowComputeNodeDoesNotThrottleThePair() {
+        long before = rate("master-40");
+        paths.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 9), 100, 1));
+        when(nodes.getComputeCapableNodes()).thenReturn(Arrays.asList(
+                node(9, "unrelated"), node(2, "master-40"), node(3, "cluster-sz-1")));
+        assertEquals(before, rate("master-40"));
+    }
+
+    @Test
+    void differentDistributedTargetsUseTheirOwnPathMeasurements() {
+        when(nodes.getNodeByName("other-compute")).thenReturn(node(9, "other-compute"));
+        paths.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 9), 100, 1));
+        long other = Long.parseLong(service.recommend(configuration, "cluster-sz-3", "other-compute")
+                .getRate().replace("k", ""));
+        assertTrue(other < rate("cluster-sz-1"));
+    }
+
+    @Test
+    void prefersSameSiteComparisonIndependentlyOfDatabaseOrder() {
+        NodeManagement source = node(1, "cluster-sz-3");
+        source.setSiteCode("sz");
+        when(nodes.getNodeByName("cluster-sz-3")).thenReturn(source);
+        NodeManagement sameSite = node(3, "cluster-sz-1");
+        sameSite.setSiteCode("sz");
+        paths.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 9), 0.1, 9000));
+        when(nodes.getComputeCapableNodes()).thenReturn(Arrays.asList(node(9, "other"), sameSite));
+        assertEquals("cluster-sz-1", service.recommend(configuration, "cluster-sz-3", "master-40")
+                .getComparisonNode());
+    }
+
+    @Test
+    void fallsBackForMissingBandwidth() {
+        paths.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(1, 2), 30, 0));
+        assertFalse(service.recommend(configuration, "cluster-sz-3", "master-40").isAvailable());
+    }
+
+    @Test
+    void fallsBackWhenNoMeasuredComparisonNodeExists() {
+        when(nodes.getComputeCapableNodes()).thenReturn(Collections.singletonList(node(2, "master-40")));
+        assertFalse(service.recommend(configuration, "cluster-sz-3", "master-40").isAvailable());
+    }
+
+    @Test
+    void retainsTheProductionTargetRange() {
+        configuration.setTargetMin(new BigDecimal("1.300"));
+        configuration.setTargetMax(new BigDecimal("1.690"));
+        assertEquals(new BigDecimal("1.612"), service.recommend(configuration,
+                "cluster-sz-3", "master-40").getTargetRatio());
+        assertRatio();
+    }
+
+    private long rate(String target) {
+        return Long.parseLong(service.recommend(configuration, "cluster-sz-3", target).getRate().replace("k", ""));
+    }
+
+    private void assertRatio() {
+        double ratio = (double) rate("cluster-sz-1") / rate("master-40");
+        assertTrue(ratio >= configuration.getTargetMin().doubleValue());
+        assertTrue(ratio <= configuration.getTargetMax().doubleValue());
     }
 
     private NodeManagement node(int id, String name) {
