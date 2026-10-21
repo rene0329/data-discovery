@@ -130,7 +130,14 @@ run_step() {
   shift 2
   STEP_NUMBER=$((STEP_NUMBER + 1))
   printf '\n========== TC-4.2.%s / %s / %02d %s ==========\n' "$CURRENT_CASE" "$STAGE" "$STEP_NUMBER" "$title"
-  print_command "$@"
+  if [[ "$1" == selected_batch ]]; then
+    local position
+    for ((position=2; position<=$#; position++)); do
+      print_command "$EVIDENCE" decision "${!position}" --selected
+    done
+  else
+    print_command "$@"
+  fi
   [[ "$DRY_RUN" == 0 ]] || return 0
   local log="$CASE_DIR/$(printf '%02d' "$STEP_NUMBER")-$file.txt"
   set +e
