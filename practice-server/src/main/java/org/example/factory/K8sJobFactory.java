@@ -212,7 +212,7 @@ public class K8sJobFactory {
     @PostConstruct
     public void init() {
         pathRateLimits = PathRateLimits.parse(limitRatePaths);
-        log.info("curl 限速配置: default='{}', paths='{}'", wgetLimitRate, pathRateLimits);
+        log.debug("curl 限速配置: default='{}', paths='{}'", wgetLimitRate, pathRateLimits);
         // --- 优先尝试 In-Cluster 配置（仅当检测到 K8s 环境变量时） ---
         boolean inClusterEnv = System.getenv("KUBERNETES_SERVICE_HOST") != null;
         if (inClusterEnv) {
@@ -536,20 +536,20 @@ public class K8sJobFactory {
         return t.replace("{dataset}", safeName);
     }
 
-    /** 解析限速并打 INFO 日志，便于运行时验证是否注入成功。 */
+    /** 解析限速；详细配置仅写入 DEBUG 日志。 */
     private String resolveAndLogLimitRate(String srcNode, String destNode, String jobName) {
         String rate;
         if (rateLimitConfigurations != null) {
             DataTransferRateLimitService.Resolution resolution = rateLimitConfigurations.resolve(srcNode, destNode);
             rate = resolution.getRate();
-            log.info("Job '{}' curl 限速: {} → {} = '{}' ({} v{}, bandwidth={}Mbps, target={})",
+            log.debug("Job '{}' curl 限速: {} → {} = '{}' ({} v{}, bandwidth={}Mbps, target={})",
                     jobName, srcNode, destNode, rate != null ? rate : "(无限速)",
                     resolution.getSource(), resolution.getVersion(),
                     resolution.getBasisBandwidthMbps() == null ? "-" : resolution.getBasisBandwidthMbps(),
                     resolution.getTargetRatio() == null ? "-" : resolution.getTargetRatio());
         } else {
             rate = resolveLimitRate(srcNode, destNode);
-            log.info("Job '{}' curl 限速: {} → {} = '{}'", jobName, srcNode, destNode,
+            log.debug("Job '{}' curl 限速: {} → {} = '{}'", jobName, srcNode, destNode,
                     rate != null ? rate : "(无限速)");
         }
         return rate;
