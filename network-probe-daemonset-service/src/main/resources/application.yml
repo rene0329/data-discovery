@@ -30,6 +30,6 @@ probe:
   transfer:
     seconds: ${PROBE_TRANSFER_SECONDS:2}
   interval:
-    ms: ${PROBE_INTERVAL_MS:86400000}
+    ms: ${PROBE_INTERVAL_MS:300000}
   initial-delay:
     ms: ${PROBE_INITIAL_DELAY_MS:30000}

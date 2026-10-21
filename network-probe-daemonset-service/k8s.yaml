@@ -78,7 +78,7 @@ spec:
             - name: PROBE_TRANSFER_SECONDS
               value: "2"
             - name: PROBE_INTERVAL_MS
-              value: "86400000"
+              value: "300000"
             - name: PROBE_INITIAL_DELAY_MS
               value: "30000"
           ports:
