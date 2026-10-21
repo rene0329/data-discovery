@@ -115,7 +115,7 @@ public class InPlacePlacementService {
         List<Candidate> usable = new ArrayList<>();
         DecisionTrace trace = new DecisionTrace(demand, ledger);
         trace.add("STARTED", null, null, null, null, null, "STARTED",
-                "副本所在计算节点优先，其次同站点；再按路径时延升序、瓶颈带宽降序、节点编号升序选择；同站点按候选顺序选择；优先避开中心节点");
+                "副本所在计算节点优先，其次同站点；再按路径时延升序、瓶颈带宽降序、节点编号升序选择；同站点按候选顺序选择");
         for (NodeManagement compute : computeNodes) {
             trace.add("NODE", null, null, compute, null, null, "SCHEDULABLE",
                     "当前可用于调度的计算节点；空闲资源为可分配资源减去 Pod 已申请资源");
