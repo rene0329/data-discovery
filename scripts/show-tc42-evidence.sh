@@ -128,26 +128,26 @@ mysql_xml() {
 
 mysql_table() {
   if [[ "${TC42_TABLE_LAYOUT:-raw}" == compact ]]; then
-    mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}"
+    mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}" | python3 -u "${SCRIPT_DIR}/computation_terms.py"
     return
   fi
   kubectl exec -n "${NAMESPACE}" "${MYSQL_WORKLOAD}" -- \
     env MYSQL_PWD="${DB_PASSWORD}" \
     mysql --connect-timeout=5 --default-character-set=utf8mb4 \
       -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --table \
-      --init-command="SET time_zone='+00:00'" -e "$1"
+      --init-command="SET time_zone='+00:00'" -e "$1" | python3 -u "${SCRIPT_DIR}/computation_terms.py"
 }
 
 mysql_vertical() {
   if [[ "${TC42_TABLE_LAYOUT:-raw}" == compact ]]; then
-    mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}" --vertical
+    mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}" --vertical | python3 -u "${SCRIPT_DIR}/computation_terms.py"
     return
   fi
   kubectl exec -n "${NAMESPACE}" "${MYSQL_WORKLOAD}" -- \
     env MYSQL_PWD="${DB_PASSWORD}" \
     mysql --connect-timeout=5 --default-character-set=utf8mb4 \
       -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --vertical \
-      --init-command="SET time_zone='+00:00'" -e "$1"
+      --init-command="SET time_zone='+00:00'" -e "$1" | python3 -u "${SCRIPT_DIR}/computation_terms.py"
 }
 
 print_metadata() {
