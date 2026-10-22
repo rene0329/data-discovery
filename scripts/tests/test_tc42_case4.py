@@ -24,7 +24,7 @@ class Case4Tests(unittest.TestCase):
     def run_command(self,args):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            for file in ('tc42-case4.sh','show-tc42-evidence.sh','tc42_table.py'):
+            for file in ('tc42-case4.sh','show-tc42-evidence.sh','tc42_table.py','computation_terms.py'):
                 shutil.copy2(str(ROOT/file),str(root/file))
             tools=root/'bin'; tools.mkdir()
             command=tools/'kubectl';command.write_text(STUB);command.chmod(0o755)
