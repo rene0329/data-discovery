@@ -78,6 +78,27 @@ class DatasetSchedulingExecutorTest {
     }
 
     @Test
+    void failedMigrationNeverLogsSuccessfulCompletion() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(DatasetSchedulingExecutor.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> events =
+                new ch.qos.logback.core.read.ListAppender<>();
+        events.start();
+        logger.addAppender(events);
+        try {
+            doThrow(new IllegalStateException("copy failed")).when(transfer)
+                    .copyFrom(any(), any(), any(), any(), any(), any(), any(), any());
+            execute("MOVE");
+            org.junit.jupiter.api.Assertions.assertTrue(events.list.stream()
+                    .anyMatch(e -> e.getFormattedMessage().contains("操作失败")));
+            org.junit.jupiter.api.Assertions.assertFalse(events.list.stream()
+                    .anyMatch(e -> e.getFormattedMessage().contains("数据移动结束")
+                            || e.getFormattedMessage().contains("操作完成")
+                            || e.getFormattedMessage().contains("源副本已删除")));
+        } finally { logger.detachAppender(events); }
+    }
+
+    @Test
     void copyRetainsSourceAndRegistersTargetWithoutRuntimeImage() {
         execute("COPY");
         verify(transfer).copyFrom(source, target, "/dataset/test.npz", 123L, SHA256,

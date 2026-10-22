@@ -1,5 +1,6 @@
 package org.example.service;
 
+import lombok.extern.slf4j.Slf4j;
 import org.example.dto.scheduling.DatasetStoragePlan;
 import org.example.dto.scheduling.SchedulingPlanRequest;
 import org.example.dto.scheduling.SchedulingPlanAccepted;
@@ -21,6 +22,7 @@ import java.util.stream.Collectors;
  * 原位汇聚：把所选数据复制到所选计算节点附近。
  */
 @Service
+@Slf4j
 public class DatasetStorageService {
     private final DatasetRegistrationMapper datasets;
     private final NodeManagementMapper nodes;
@@ -204,6 +206,13 @@ public class DatasetStorageService {
         if (current.getAssignments().isEmpty()) throw RegistrationException.conflict("当前布局无需迁移或复制");
         if (!current.getAssignments().equals(request.getAssignments())) {
             throw RegistrationException.conflict("数据、节点或布局已变化，请重新预览后确认");
+        }
+        for (DatasetStoragePlan.Placement placement : current.getPlacements()) {
+            log.info("【调度】存储调度方案 externalPlanId={} mode={} datasetId={} sourceNode={} "
+                            + "targetNode={} action={} consumerNodeId={} reason={}",
+                    request.getExternalPlanId(), current.getMode(), placement.getDatasetId(),
+                    placement.getSourceNode(), placement.getTargetNode(), placement.getAction(),
+                    placement.getConsumerNodeId(), placement.getReason() == null ? null : placement.getReason().replace("温度", "热度"));
         }
         SchedulingPlanRequest plan = new SchedulingPlanRequest();
         plan.setExternalPlanId(request.getExternalPlanId());

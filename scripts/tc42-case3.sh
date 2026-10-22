@@ -106,7 +106,7 @@ logs() {
     awk -v kind="$kind" -v id="$id" -v external="$external" '{
       gsub(/\033\[[0-9;]*[mK]/, "")
       if (kind == "task" && $0 ~ ("taskId=" id "([^0-9]|$)") && $0 ~ /热度|计入温度/) print
-      if (kind == "plan" && ($0 ~ ("planId=" id "([^0-9]|$)") || (external != "" && index($0,"externalPlanId=" external " ") > 0)) && $0 ~ /SCHEDULING_|STORAGE_PLACEMENT_|调度/) print
+      if (kind == "plan" && ($0 ~ ("planId=" id "([^0-9]|$)") || (external != "" && index($0,"externalPlanId=" external " ") > 0)) && $0 ~ /SCHEDULING_|STORAGE_PLACEMENT_|调度|数据迁移/) print
     }' | view logs
 }
 case "$stage" in

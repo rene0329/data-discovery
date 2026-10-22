@@ -3,6 +3,7 @@ package org.example.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.example.dto.scheduling.SchedulableDatasetView;
 import org.example.dto.scheduling.SchedulingPageResult;
 import org.example.dto.scheduling.SchedulingPlanAccepted;
@@ -42,6 +43,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 public class SchedulingService {
     private static final TypeReference<Map<String, Object>> OBJECT_MAP =
             new TypeReference<Map<String, Object>>() { };
@@ -153,6 +155,9 @@ public class SchedulingService {
             if (dataOnly != (existing.getInternalTaskId() == null)) {
                 throw RegistrationException.conflict("externalPlanId is already used by another plan type");
             }
+            log.debug("SCHEDULING_PLAN_EXISTING planId={} externalPlanId={} planType={} status={}",
+                    existing.getPlanId(), existing.getExternalPlanId(),
+                    dataOnly ? "DATA" : "COMPUTE", existing.getStatus());
             return accepted(existing);
         }
         if (!dataOnly && request.getRuntimeImageId() != null) {
@@ -263,7 +268,16 @@ public class SchedulingService {
         for (SchedulingAssignment assignment : assignments) {
             assignment.setPlanId(plan.getPlanId());
             planMapper.insertAssignment(assignment);
+            log.debug("SCHEDULING_ASSIGNMENT_PERSISTED planId={} assignmentId={} datasetId={} replicaId={} "
+                            + "sourceNodeId={} targetNodeId={} action={} status={}",
+                    plan.getPlanId(), assignment.getAssignmentId(), assignment.getDatasetId(),
+                    assignment.getReplicaId(), assignment.getSourceNodeId(), assignment.getTargetNodeId(),
+                    assignment.getAction(), assignment.getStatus());
         }
+        log.info("【调度】方案已提交 planId={} externalPlanId={} planType={} algorithmName={} "
+                        + "algorithmVersion={} assignmentCount={} status={}",
+                plan.getPlanId(), plan.getExternalPlanId(), dataOnly ? "DATA" : "COMPUTE",
+                plan.getAlgorithmName(), plan.getAlgorithmVersion(), assignments.size(), plan.getStatus());
         // Submission and data movement are not business reads. Heat is raised only after a
         // complete, checksum-verified read: an access test (DatasetAccessService) or a task
         // Job that finished reading its input (K8sTaskOrchestratorService).
