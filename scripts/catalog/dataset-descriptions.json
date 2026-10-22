@@ -1,0 +1,57 @@
+[
+  {
+    "datasetCode": "epinions",
+    "description": "Epinions 商品评价数据集，来源于 Epinions 消费者评价网站。主要用于商品推荐、用户偏好建模和评分预测，也可用于结合用户信任关系的社交推荐研究。",
+    "source": "https://www.cse.msu.edu/~tangjili/trust.html"
+  },
+  {
+    "datasetCode": "ciao",
+    "description": "Ciao 商品评价数据集，来源于 Ciao 消费者评价网站。主要用于商品推荐、评分预测，以及结合用户信任关系的社交推荐研究。",
+    "source": "https://www.cse.msu.edu/~tangjili/trust.html"
+  },
+  {
+    "datasetCode": "yelp",
+    "description": "Yelp 商家评价数据集，来源于 Yelp 本地生活服务平台。主要用于商家推荐、用户偏好建模和评分预测，原始评论数据也可用于情感分析。",
+    "source": "https://www.yelp.com/dataset"
+  },
+  {
+    "datasetCode": "catdog",
+    "description": "猫狗图像分类数据集，以猫和狗的图片及其类别标签为主要内容，用于训练和评估图像二分类模型。",
+    "source": ""
+  },
+  {
+    "datasetCode": "nlpcc2013",
+    "description": "NLPCC 2013 中文自然语言处理评测相关的文本数据。本系统将其用于中文文本分类模型的训练和评估。",
+    "source": ""
+  },
+  {
+    "datasetCode": "real-tiny-imagenet-1gb-1.0",
+    "description": "Tiny ImageNet 是 ImageNet 的图像分类子集，原始数据涵盖 200 个类别的 64×64 彩色图像，主要用于训练和评估多类别图像识别模型。",
+    "source": "https://cs231n.stanford.edu/reports/2015/pdfs/pouransari_ghili_final_report.pdf"
+  },
+  {
+    "datasetCode": "real-fashion-mnist-1.0",
+    "description": "Fashion-MNIST 是服饰图像分类数据集，原始数据包含 10 类服饰的 28×28 灰度图像及其标签，主要用于训练和评估图像分类模型。",
+    "source": "https://github.com/zalandoresearch/fashion-mnist"
+  },
+  {
+    "datasetCode": "real-online-retail-ii-1.0",
+    "description": "Online Retail II 是英国在线零售商的交易数据集，原始记录包括商品、购买数量、交易时间、单价和客户等信息，主要用于客户分群、购买行为分析和销售预测。",
+    "source": "https://archive.ics.uci.edu/dataset/502/online+retail+ii"
+  },
+  {
+    "datasetCode": "real-svhn-2gb-1.0",
+    "description": "SVHN（街景门牌号码）是从街景照片中提取数字的图像数据集，主要用于数字识别和图像分类模型的训练与评估。",
+    "source": "http://ufldl.stanford.edu/housenumbers/"
+  },
+  {
+    "datasetCode": "real-cifar-10-1.0",
+    "description": "CIFAR-10 是包含 10 个类别的彩色图像分类数据集，原始图像尺寸为 32×32，类别包括飞机、汽车和常见动物等，主要用于训练和评估图像分类模型。",
+    "source": "https://www.cs.toronto.edu/~kriz/cifar.html"
+  },
+  {
+    "datasetCode": "criteo-click-logs-2days",
+    "description": "Criteo 广告点击日志数据集，包含广告展示的特征和点击反馈，主要用于训练和评估广告点击率预测模型。本系统登记的版本采用 2015 年 2 月 15 日和 16 日两天的源数据。",
+    "source": "https://ailab.criteo.com/download-criteo-1tb-click-logs-dataset/"
+  }
+]
