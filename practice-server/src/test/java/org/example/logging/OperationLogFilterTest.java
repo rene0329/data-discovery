@@ -23,22 +23,24 @@ class OperationLogFilterTest {
         logger.addAppender(events);
         try {
             OperationLogFilter filter = new OperationLogFilter();
-            String[] methods = {"GET", "GET", "POST", "GET", "GET"};
+            String[] methods = {"GET", "GET", "POST", "GET", "GET", "GET", "HEAD"};
             String[] paths = {"/api/v1/datasets", "/common/networkTopology", "/api/v1/tasks",
-                    "/api/v1/datasets", "/api/v1/datasets"};
-            int[] statuses = {401, 401, 401, 403, 500};
+                    "/api/v1/datasets", "/api/v1/datasets", "/api/v1/nodes", "/api/v1/nodes"};
+            int[] statuses = {401, 401, 401, 403, 500, 401, 401};
             for (int i = 0; i < paths.length; i++) {
                 MockHttpServletResponse response = new MockHttpServletResponse();
                 final int status = statuses[i];
                 filter.doFilter(new MockHttpServletRequest(methods[i], paths[i]), response,
                         (req, res) -> response.setStatus(status));
             }
-            assertEquals(5, events.list.size());
+            assertEquals(7, events.list.size());
             assertEquals(ch.qos.logback.classic.Level.DEBUG, events.list.get(0).getLevel());
             assertEquals(ch.qos.logback.classic.Level.DEBUG, events.list.get(1).getLevel());
             assertEquals(ch.qos.logback.classic.Level.WARN, events.list.get(2).getLevel());
             assertEquals(ch.qos.logback.classic.Level.WARN, events.list.get(3).getLevel());
             assertEquals(ch.qos.logback.classic.Level.ERROR, events.list.get(4).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.DEBUG, events.list.get(5).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.DEBUG, events.list.get(6).getLevel());
         } finally {
             logger.detachAppender(events);
             logger.setLevel(previous);

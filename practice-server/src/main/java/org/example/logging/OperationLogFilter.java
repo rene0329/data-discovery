@@ -58,8 +58,8 @@ public class OperationLogFilter extends OncePerRequestFilter {
                 Object[] args = {request.getMethod(), path, status, outcome,
                         durationMs, traceId};
                 if (status >= 500 || Boolean.TRUE.equals(request.getAttribute(SERVER_ERROR))) log.error(message, args);
-                else if (status == 401 && "GET".equals(request.getMethod())
-                        && ("/common/networkTopology".equals(path) || "/api/v1/datasets".equals(path)))
+                else if (status == 401 && ("GET".equals(request.getMethod())
+                        || "HEAD".equals(request.getMethod())))
                     log.debug(message, args);
                 else if ("FAILED".equals(outcome) || "PARTIAL_SUCCESS".equals(outcome)
                         || "NO_ELIGIBLE_RESOURCE".equals(outcome) || "NO_OPERATION".equals(outcome)) log.warn(message, args);
