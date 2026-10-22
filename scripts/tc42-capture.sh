@@ -33,7 +33,7 @@ usage() {
       tc42-case1.sh [选项]  （其他用例依次为 case2 至 case5）
 
 默认 records：一键查询已完成测试的记录，并保存当前状态；不会制造“前后”观测。
-实际任务：集中式228，分布式231，热度访问230，迁移前230/后244，
+实际任务：集中式计算228，原位计算231，热度访问230，迁移前230/后244，
           授权后232，多数据集233，单数据集234/235，重复236–240；热敏计划65。
 每次先核对任务是否存在、计算模式及数据集是否匹配，再执行截图命令。
 
@@ -248,7 +248,7 @@ case_steps() {
       task_step "$id" '任务、传输、校验及计算记录'
       run_step "selected-$id" "最终节点选择（任务$id）" "$EVIDENCE" decision "$id" --selected
       if [[ "$CURRENT_CASE" == 2 ]]; then
-        run_step compare '集中式与分布式最终节点对比' selected_batch "$CENTRAL_TASK_ID" "$DISTRIBUTED_TASK_ID"
+        run_step compare '集中式计算与原位计算最终节点对比' selected_batch "$CENTRAL_TASK_ID" "$DISTRIBUTED_TASK_ID"
       fi ;;
     3)
       case "$STAGE" in

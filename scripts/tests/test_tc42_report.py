@@ -69,7 +69,7 @@ class ReportTests(unittest.TestCase):
                             '二、任务后端执行结果', '三、任务调度方案与执行证据',
                             '四、数据迁移状态与访问审计']:
                 self.assertIn(section, output)
-            self.assertNotIn('五、集中式', output)
+            self.assertNotIn('五、集中式计算', output)
 
     def test_missing_baseline_is_explicit_and_never_reconstructed(self):
         code, output, error = self.report('CENTRALIZED')
@@ -80,7 +80,7 @@ class ReportTests(unittest.TestCase):
     def test_comparison_adds_speedup_only_for_the_requested_task(self):
         code, output, error = self.report('COMPARISON', '901')
         self.assertEqual(code, 0, error)
-        self.assertIn('五、集中式／分布式计时与数据移动加速比', output)
+        self.assertIn('五、集中式计算／原位计算计时与数据移动加速比', output)
         self.assertIn('T1/T2', output)
         self.assertNotIn('task_id=900', output)
 

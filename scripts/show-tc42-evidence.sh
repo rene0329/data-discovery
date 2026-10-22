@@ -16,7 +16,7 @@ MYSQL_DATABASE="${TOPIC4_MYSQL_DATABASE:-Project4}"
 LOG_SINCE="${LOG_SINCE:-30m}"
 DB_PASSWORD=""
 SNAPSHOT_DIR="${TC42_SNAPSHOT_DIR:-/data/topic4-build/evidence/tc42-baselines}"
-SCHEDULING_LOG_PATTERN='异步任务|【热度】|TASK_PLACEMENT_|TASK_JOB_|TASK_TRANSFER_|JOB_TARGET_ASSIGNED|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行'
+SCHEDULING_LOG_PATTERN='异步任务|【热度】|TASK_PLACEMENT_|TASK_JOB_|TASK_TRANSFER_|JOB_TARGET_ASSIGNED|SCHEDULING_|STORAGE_PLACEMENT_|智能调度流程|候选节点|评分:|决策阶段完成|调度决策被覆盖|分布式执行|原位执行|跨站点回退|准备Job:|传输时间|单模式执行结束|对比任务 .*执行结束|任务 [0-9]+ 开始执行'
 
 usage() {
   cat <<'EOF'
@@ -268,7 +268,7 @@ WHERE task_id = ${task_id};")"
           if (names[i] != "" && index($0, names[i]) > 0) belongs = 1
         }
         if (belongs && $0 ~ pattern) print
-      }' | tail -n 200)"
+      }' | tail -n 200 | python3 -u "${SCRIPT_DIR}/computation_terms.py")"
 
   if [[ -n "${logs}" ]]; then
     printf '%s\n' "${logs}"
@@ -744,11 +744,11 @@ show_live_logs() {
   if [[ "${follow}" == "1" ]]; then
     kubectl "${args[@]}" 2>&1 \
       | grep --line-buffered -E \
-        "${SCHEDULING_LOG_PATTERN}"
+        "${SCHEDULING_LOG_PATTERN}" | python3 -u "${SCRIPT_DIR}/computation_terms.py"
   else
     kubectl "${args[@]}" 2>&1 \
       | grep -E \
-        "${SCHEDULING_LOG_PATTERN}" \
+        "${SCHEDULING_LOG_PATTERN}" | python3 -u "${SCRIPT_DIR}/computation_terms.py" \
       || true
   fi
 }
@@ -778,8 +778,8 @@ show_report() {
   IFS=$'\t' read -r mode dataset_ids created <<< "$metadata"
   case "$mode" in
     CENTRALIZED) echo "测试用例一 · 集中式计算 · 任务 ${task_id}" ;;
-    IN_PLACE) echo "测试用例二 · 分布式计算 · 任务 ${task_id}" ;;
-    COMPARISON) echo "测试用例五 · 集中式／分布式对比 · 任务 ${task_id}" ;;
+    IN_PLACE) echo "测试用例二 · 原位计算 · 任务 ${task_id}" ;;
+    COMPARISON) echo "测试用例五 · 集中式计算／原位计算对比 · 任务 ${task_id}" ;;
     *) fail "任务模式不支持：${mode}" ;;
   esac
   echo "只查询指定任务；本命令不会创建任务、移动数据或更新业务记录。"
@@ -790,8 +790,8 @@ show_report() {
   show_task "$task_id" --no-logs
   if [[ "$mode" == COMPARISON ]]; then
     echo
-    echo "========== 五、集中式／分布式计时与数据移动加速比 =========="
-    echo "T1=集中式数据移动时间，T2=分布式数据移动时间，加速比=T1/T2；以下保留原始值，不代替人工验收结论。"
+    echo "========== 五、集中式计算／原位计算计时与数据移动加速比 =========="
+    echo "T1=集中式计算数据移动时间，T2=原位计算数据移动时间，加速比=T1/T2；以下保留原始值，不代替人工验收结论。"
     show_speedup "$task_id"
   fi
 }

@@ -201,7 +201,7 @@ public class K8sTaskOrchestratorService {
     }
 
     /**
-     * 对比任务：同一个 taskId 下，每个数据集分别以分布式（IN_PLACE）和集中式（CENTRALIZED）各执行一个 Job。
+     * 对比任务：同一个 taskId 下，每个数据集分别以原位计算（IN_PLACE）和集中式计算（CENTRALIZED）各执行一个 Job。
      * 2N 个 Job 一次性提交到 dataProcessingExecutor 并发执行，与此前两个单模式任务同时运行的行为一致。
      */
     private void executeComparisonTask(Integer taskId, List<Long> datasetIds,
@@ -239,7 +239,7 @@ public class K8sTaskOrchestratorService {
     }
 
     /**
-     * 一个任务的分布式放置按数据集顺序一次算完，并在同一份节点资源账本上预留：
+     * 一个任务的原位计算放置按数据集顺序一次算完，并在同一份节点资源账本上预留：
      * 前面的数据集占用了某计算节点的资源，后面的数据集就会看到该节点资源不足而改用次优节点。
      */
     private Map<Long, InPlacePlacementService.Placement> planInPlace(Integer taskId, List<Long> datasetIds,
@@ -551,10 +551,10 @@ public class K8sTaskOrchestratorService {
             targetNodeName = placement.getComputeNode().getNodeName();
             if (placement.getResourceNote() != null) {
                 placementNote = placement.getResourceNote() + "，改用次优计算节点";
-                log.info("数据集 {} 分布式执行：{} -> {}", datasetId, placementNote, targetNodeName);
+                log.info("数据集 {} 原位执行：{} -> {}", datasetId, placementNote, targetNodeName);
             }
             if (placement.getTier() == InPlacePlacementService.Tier.NEAREST) {
-                log.info("数据集 {} 分布式执行跨站点回退: {} -> {} ({} ms)", datasetId,
+                log.info("数据集 {} 原位执行跨站点回退: {} -> {} ({} ms)", datasetId,
                         placement.getReplicaNode().getNodeName(), targetNodeName,
                         placement.getPath().getLatencyMs());
             }
@@ -571,7 +571,7 @@ public class K8sTaskOrchestratorService {
             centralDecision.put("targetSite", central.getSiteCode());
             centralDecision.put("tier", "CENTRALIZED");
             centralDecision.put("outcome", "STARTED");
-            centralDecision.put("reason", "集中式执行使用 dispatch.central-node 配置的中心计算节点；优先使用中心节点已有副本，否则按可用副本顺序选择");
+            centralDecision.put("reason", "集中式计算执行使用 dispatch.central-node 配置的中心计算节点；优先使用中心节点已有副本，否则按可用副本顺序选择");
             recordPlacementEvent(taskId, datasetId, executionMode, centralDecision);
             replica = usableReplicas.stream()
                     .sorted((left, right) -> Boolean.compare(
@@ -591,7 +591,7 @@ public class K8sTaskOrchestratorService {
             selected.put("targetNode", targetNodeName);
             selected.put("tier", "CENTRALIZED");
             selected.put("outcome", "SELECTED");
-            selected.put("reason", "按集中式模式配置选择中心计算节点；源副本通过可用性检查");
+            selected.put("reason", "按集中式计算模式配置选择中心计算节点；源副本通过可用性检查");
             recordPlacementEvent(taskId, datasetId, executionMode, selected);
         }
         Long imageId = explicitRuntimeImageId != null
@@ -1124,7 +1124,7 @@ public class K8sTaskOrchestratorService {
     }
 
     static String taskModeLabel(String type) {
-        return "centralized".equalsIgnoreCase(type) ? "集中式" : "分布式";
+        return "centralized".equalsIgnoreCase(type) ? "集中式计算" : "原位计算";
     }
 
     static String movementIndicator(int frame) {
@@ -1399,7 +1399,7 @@ public class K8sTaskOrchestratorService {
 
     /**
      * 对比任务结果回写到同一行（沿用旧字段语义，单位为秒）：
-     * T1 = Σ 各数据集分布式搬运耗时，T2 = Σ 各数据集集中式搬运耗时，rating = T2 / T1。
+     * T1 = Σ 各数据集原位计算搬运耗时，T2 = Σ 各数据集集中式计算搬运耗时，rating = T2 / T1。
      * 只有 2N 个 Job 全部成功且证据完整时，两组求和才可比较；否则 T1/T2/rating 均置空，不做推算。
      *
      * @param inPlaceResults     与 datasetIds 一一对应，失败的 Job 为 null
@@ -1443,7 +1443,7 @@ public class K8sTaskOrchestratorService {
         Double rating = t1 != null && t1 > 0 ? t2 / t1 : null;
 
         List<String> scheduleLines = new ArrayList<>();
-        scheduleLines.add("分布式调度方案:");
+        scheduleLines.add("原位调度方案:");
         scheduleLines.addAll(inPlaceLines);
         scheduleLines.add("中心化调度方案:");
         scheduleLines.addAll(centralizedLines);
@@ -1460,14 +1460,14 @@ public class K8sTaskOrchestratorService {
         else if (successCount == 0) summary.setStatus("执行失败");
         else summary.setStatus("部分完成");
         taskManagementMapper.updateTask(summary);
-        log.info("【任务】异步任务对比结束 taskId={} status={} 成功={}/{} 分布式数据移动总耗时={}秒 集中式数据移动总耗时={}秒",
+        log.info("【任务】异步任务对比结束 taskId={} status={} 成功={}/{} 原位计算数据移动总耗时={}秒 集中式计算数据移动总耗时={}秒",
                 taskId, summary.getStatus(), successCount, expectedCount,
                 t1 == null ? "无完整结果" : String.format("%.3f", t1),
                 t2 == null ? "无完整结果" : String.format("%.3f", t2));
         if (rating != null && Double.isFinite(rating)) {
-            log.info("【数据移动】异步任务数据移动加速比 taskId={} 集中式耗时/分布式耗时={}倍", taskId, String.format("%.3f", rating));
+            log.info("【数据移动】异步任务数据移动加速比 taskId={} 集中式计算耗时/原位计算耗时={}倍", taskId, String.format("%.3f", rating));
         }
-        log.debug("对比任务 {} 执行结束: status={}, 成功 {}/{}, 分布式总搬运时间={}s, 集中式总搬运时间={}s, 加速比={}",
+        log.debug("对比任务 {} 执行结束: status={}, 成功 {}/{}, 原位计算总搬运时间={}s, 集中式计算总搬运时间={}s, 加速比={}",
                 taskId, summary.getStatus(), successCount, expectedCount,
                 t1 == null ? "不可比较" : String.format("%.3f", t1),
                 t2 == null ? "不可比较" : String.format("%.3f", t2),

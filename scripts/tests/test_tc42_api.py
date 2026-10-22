@@ -141,7 +141,7 @@ class Contract(unittest.TestCase):
         self.assertNotIn('futureField', view)
 
     def test_incomplete_or_invalid_evidence_cannot_pass(self):
-        reasons = {406: '分布式计时不大于零', 407: '逐数据集执行或计时缺失',
+        reasons = {406: '原位计算计时不大于零', 407: '逐数据集执行或计时缺失',
                    408: '两种模式输入不一致', 409: '逐数据集执行或计时缺失',
                    410: '累计计时与任务记录不一致'}
         for task, reason in reasons.items():

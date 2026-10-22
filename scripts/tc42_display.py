@@ -3,8 +3,9 @@ import json
 import math
 import re
 import unicodedata
+from computation_terms import computation_text
 
-MODES = {'CENTRALIZED': '集中式', 'IN_PLACE': '分布式', 'COMPARISON': '两种模式对比'}
+MODES = {'CENTRALIZED': '集中式计算', 'IN_PLACE': '原位计算', 'COMPARISON': '两种模式对比'}
 STATES = {'COMPLETED': '已完成', 'RUNNING': '运行中', 'ACCEPTED': '已受理',
           'FAILED': '失败', 'AVAILABLE': '可用', 'USABLE': '可用', 'ACTIVE': '已启用',
           'ONLINE': '在线', 'OFFLINE': '离线', 'HEALTHY': '正常',
@@ -22,7 +23,7 @@ def text(value):
         return '—'
     if isinstance(value, bool):
         return '是' if value else '否'
-    return STATES.get(str(value), str(value))
+    return computation_text(STATES.get(str(value), str(value)))
 
 
 def size_text(value):
@@ -173,7 +174,7 @@ def span(start, end, task_start):
 def task_view(data, context):
     task, groups = task_groups(data)
     mode = task.get('executionMode')
-    title = {'CENTRALIZED': 'TC-4.2.1 集中式计算', 'IN_PLACE': 'TC-4.2.2 分布式计算'}.get(mode, '计算任务')
+    title = {'CENTRALIZED': 'TC-4.2.1 集中式计算', 'IN_PLACE': 'TC-4.2.2 原位计算'}.get(mode, '计算任务')
     lines = ['{}  |  任务 {}  |  {}'.format(title, task.get('taskId', '—'), text(task.get('status'))),
              '时间：{} → {}    执行证据：{}'.format(text(task.get('startedAt')), text(task.get('finishedAt')),
                   '完整' if task.get('executionEvidenceComplete') is True else '不完整')]
@@ -256,7 +257,7 @@ def speedup_record(data, context):
             reasons.append('两种模式输入不一致')
     central, inplace = task.get('t2'), task.get('t1')
     if not numeric(central) or central < 0 or not numeric(inplace) or inplace <= 0:
-        reasons.append('集中式计时无效或分布式计时不大于零')
+        reasons.append('集中式计算计时无效或原位计算计时不大于零')
     for m, recorded in [('CENTRALIZED', central), ('IN_PLACE', inplace)]:
         if numeric(recorded) and abs(totals[m] - recorded) > 0.0011:
             reasons.append('累计计时与任务记录不一致')
@@ -283,7 +284,7 @@ def task_ids(values):
 
 
 def speedup_view(records, context):
-    lines = ['TC-4.2.5 数据移动加速比', 'T1：集中式数据移动时间；T2：分布式数据移动时间；S = T1 / T2；要求 S > 1.2。']
+    lines = ['TC-4.2.5 数据移动加速比', 'T1：集中式计算数据移动时间；T2：原位计算数据移动时间；S = T1 / T2；要求 S > 1.2。']
     rows, routes, timing, notes = [], {}, [], []
     for data in records:
         task, groups, reasons, ratio = speedup_record(data, context)
@@ -314,10 +315,10 @@ def speedup_view(records, context):
     lines.extend(table(['任务', '数据集', 'T1 / 秒', 'T2 / 秒', 'S（复算）', '判定'], rows, [8, 27, 12, 12, 12, 16]))
     lines.append('实际调度路径（相同路径合并列出任务编号）：')
     paths = [[task_ids(ids)] + list(route) for route, ids in routes.items()]
-    lines.extend(table(['任务', '数据集', '数据源', '集中式节点', '分布式节点'], paths, [20, 22, 28, 18, 18]))
+    lines.extend(table(['任务', '数据集', '数据源', '集中式计算节点', '原位计算节点'], paths, [20, 22, 28, 18, 18]))
     if timing:
         lines.append('多数据集任务的累计计时依据：')
-        lines.extend(table(['任务', '数据集', '集中式 / 秒', '分布式 / 秒'], timing))
+        lines.extend(table(['任务', '数据集', '集中式计算 / 秒', '原位计算 / 秒'], timing))
     for note in notes:
         lines.extend(wrap(note, 112))
     return lines
@@ -426,9 +427,9 @@ def other_view(command, data, context):
         return ['存储计划列表'] + table(['计划', '算法', '状态', '开始时间', '结束时间'],
             [[r.get('planId'), r.get('algorithmName'), r.get('status'), r.get('createdAt'), r.get('updatedAt')] for r in rows])
     if command == 'comparison':
-        return ['两种模式对比', '  集中式任务：{}    分布式任务：{}    满足对比条件：{}'.format(
+        return ['两种模式对比', '  集中式计算任务：{}    原位计算任务：{}    满足对比条件：{}'.format(
             text(data.get('centralizedTaskId')), text(data.get('inPlaceTaskId')), text(data.get('comparable'))),
-            '  集中式耗时：{} 秒    分布式耗时：{} 秒    加速比：{}'.format(
+            '  集中式计算耗时：{} 秒    原位计算耗时：{} 秒    加速比：{}'.format(
                 seconds(data['centralizedPreparationMs'] / 1000) if numeric(data.get('centralizedPreparationMs')) else '—',
                 seconds(data['inPlacePreparationMs'] / 1000) if numeric(data.get('inPlacePreparationMs')) else '—',
                 text(data.get('centralizedToInPlaceRatio')))] + (['  原因：' + data['reason']] if data.get('reason') else [])

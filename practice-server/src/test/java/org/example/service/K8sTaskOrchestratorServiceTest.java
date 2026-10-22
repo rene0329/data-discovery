@@ -338,7 +338,7 @@ class K8sTaskOrchestratorServiceTest {
         assertNull(finalRow.getValue().getRating());
         assertEquals(Boolean.FALSE, finalRow.getValue().getExecutionEvidenceComplete());
         assertNotNull(finalRow.getValue().getFinishedAt());
-        assertEquals("分布式调度方案:\nmnist: 执行失败\ncifar: 执行失败\n"
+        assertEquals("原位调度方案:\nmnist: 执行失败\ncifar: 执行失败\n"
                 + "中心化调度方案:\nmnist: 执行失败\ncifar: 执行失败", finalRow.getValue().getSchedule());
         verifyNoInteractions(heat);
     }
@@ -438,7 +438,7 @@ class K8sTaskOrchestratorServiceTest {
         assertEquals(1.0, finalRow.getValue().getT2());
         assertEquals(1.0, finalRow.getValue().getRating());
         assertEquals(Boolean.TRUE, finalRow.getValue().getExecutionEvidenceComplete());
-        assertEquals("分布式调度方案:\ntest: node-a -> node-a\n中心化调度方案:\ntest: node-a -> node-a",
+        assertEquals("原位调度方案:\ntest: node-a -> node-a\n中心化调度方案:\ntest: node-a -> node-a",
                 finalRow.getValue().getSchedule());
         // Both modes read the dataset, but it is one task and so one access.
         verify(heat).recordAccess(10L);
@@ -518,7 +518,7 @@ class K8sTaskOrchestratorServiceTest {
         assertEquals(Boolean.TRUE, row.getValue().getExecutionEvidenceComplete());
         assertNotNull(row.getValue().getFinishedAt());
         assertNull(row.getValue().getDataPreparationMs());
-        assertEquals("分布式调度方案:\n"
+        assertEquals("原位调度方案:\n"
                 + "mnist: node-b -> node-b\n"
                 + "cifar: node-c -> node-c\n"
                 + "中心化调度方案:\n"
@@ -550,7 +550,7 @@ class K8sTaskOrchestratorServiceTest {
         assertNull(row.getValue().getT2());
         assertNull(row.getValue().getRating());
         assertEquals(Boolean.FALSE, row.getValue().getExecutionEvidenceComplete());
-        assertEquals("分布式调度方案:\n"
+        assertEquals("原位调度方案:\n"
                 + "mnist: node-b -> node-b\n"
                 + "cifar: node-c -> node-c\n"
                 + "中心化调度方案:\n"
@@ -590,7 +590,7 @@ class K8sTaskOrchestratorServiceTest {
 
         verify(tasks).updateTask(argThat(row -> "执行失败".equals(row.getStatus())
                 && row.getT1() == null && row.getT2() == null && row.getRating() == null
-                && "分布式调度方案:\nmnist: 执行失败\n中心化调度方案:\nmnist: 执行失败".equals(row.getSchedule())));
+                && "原位调度方案:\nmnist: 执行失败\n中心化调度方案:\nmnist: 执行失败".equals(row.getSchedule())));
     }
 
     @Test
