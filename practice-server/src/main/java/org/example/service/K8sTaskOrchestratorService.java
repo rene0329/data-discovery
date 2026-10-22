@@ -1027,7 +1027,7 @@ public class K8sTaskOrchestratorService {
                     announced = true;
                     movementObservedAt = System.nanoTime();
                     lastProgress = movementObservedAt;
-                    log.info("【数据移动】异步任务 {}计算任务准备完成，数据开始移动，源节点：{}，目标节点：{} taskId={} jobName={}",
+                    log.info("【数据移动】异步任务 {}任务准备完成，数据开始移动，源节点：{}，目标节点：{} taskId={} jobName={}",
                             taskModeLabel(type), sourceNode, targetNode, taskId, jobName);
                 }
                 long now = System.nanoTime();
