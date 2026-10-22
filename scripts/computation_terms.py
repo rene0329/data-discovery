@@ -1,4 +1,5 @@
 """Display legacy computation terminology without changing raw evidence."""
+import io
 import re
 import sys
 
@@ -14,5 +15,7 @@ def computation_text(value):
 
 
 if __name__ == '__main__':
+    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
     for line in sys.stdin:
         print(computation_text(line), end='', flush=True)
