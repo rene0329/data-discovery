@@ -631,8 +631,9 @@ public class K8sTaskOrchestratorService {
         String jobType = TaskV1Service.MODE_IN_PLACE.equals(executionMode) ? "in-place" : "centralized";
         long preparationMs = executeJobAndMeasureInitContainer(taskId, jobType, sourceNode,
                 targetNodeName, null, dataInfo, datasetId, image, gpu, selectedNodeOut, evidenceOut,
-                TaskV1Service.MODE_CENTRALIZED.equals(executionMode) && planned != null && planned.isFound()
-                        && !targetNodeName.equals(planned.getComputeNode().getNodeName())
+                planned != null && planned.isFound()
+                        && (TaskV1Service.MODE_CENTRALIZED.equals(executionMode)
+                            || targetNodeName.equals(resolveCentralNodeName()))
                         ? planned.getComputeNode().getNodeName() : null);
         if (preparationMs < 0 || evidenceOut.get() == null) return null;
         JobExecutionEvidence evidence = evidenceOut.get();

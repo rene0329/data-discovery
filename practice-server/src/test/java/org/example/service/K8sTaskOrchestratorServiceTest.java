@@ -118,7 +118,7 @@ class K8sTaskOrchestratorServiceTest {
                 .withType("Complete").withStatus("True").endCondition().endStatus().build());
         when(jobs.createDataProcessingJob(anyString(), eq("node-a"), eq("test.npz"),
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
-                eq("scoped-read-token")))
+                eq("scoped-read-token"), eq("node-a")))
                 .thenReturn(new JobCreationResult(new JobBuilder().build(), client, "node-a", "/data/test.npz"));
 
         K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
@@ -386,7 +386,7 @@ class K8sTaskOrchestratorServiceTest {
                 .withType("Complete").withStatus("True").endCondition().endStatus().build());
         when(jobs.createDataProcessingJob(anyString(), eq("node-a"), eq("test.npz"),
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
-                eq("scoped-read-token")))
+                eq("scoped-read-token"), eq("node-a")))
                 .thenReturn(new JobCreationResult(new JobBuilder().build(), client, "node-a", "/data/test.npz"));
         DatasetHeatService heat = mock(DatasetHeatService.class);
         K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
@@ -401,7 +401,7 @@ class K8sTaskOrchestratorServiceTest {
         ArgumentCaptor<String> jobNames = ArgumentCaptor.forClass(String.class);
         verify(jobs, times(2)).createDataProcessingJob(jobNames.capture(), eq("node-a"), eq("test.npz"),
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
-                eq("scoped-read-token"));
+                eq("scoped-read-token"), eq("node-a"));
         List<String> names = jobNames.getAllValues();
         assertNotEquals(names.get(0), names.get(1));
         String inPlaceJob = names.stream().filter(name -> name.startsWith("in-place-")).findFirst()
@@ -471,11 +471,11 @@ class K8sTaskOrchestratorServiceTest {
         KubernetesClient client = completedJobClient("node-a");
         when(jobs.createDataProcessingJob(startsWith("in-place-"), eq("node-a"), eq("test.npz"),
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
-                eq("scoped-read-token")))
+                eq("scoped-read-token"), eq("node-a")))
                 .thenReturn(new JobCreationResult(new JobBuilder().build(), client, "node-a", "/data/test.npz"));
         when(jobs.createDataProcessingJob(startsWith("centralized-"), eq("node-a"), eq("test.npz"),
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
-                eq("scoped-read-token"))).thenThrow(new IllegalStateException("unit test stop"));
+                eq("scoped-read-token"), eq("node-a"))).thenThrow(new IllegalStateException("unit test stop"));
         K8sTaskOrchestratorService service = new K8sTaskOrchestratorService(
                 mock(DataManagementMapper.class), nodes, tasks, mock(MigrationTaskMapper.class),
                 jobs, datasets, images, new ObjectMapper(), "node-a", "", Runnable::run,

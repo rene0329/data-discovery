@@ -97,7 +97,8 @@ public class AdaptiveTransferRateService {
             return Recommendation.unavailable("no fresh measured comparison path");
         }
 
-        BigDecimal targetRatio = regionalTargetRatio(source.getSiteCode(), configuration);
+        BigDecimal targetRatio = comparison.getNodeId().equals(central.getNodeId())
+                ? BigDecimal.ONE : regionalTargetRatio(source.getSiteCode(), configuration);
 
         // Controlled-bandwidth policy, not a prediction of unrestricted TCP throughput.
         // Each path contributes its own bottleneck bandwidth and accumulated latency.
@@ -118,12 +119,12 @@ public class AdaptiveTransferRateService {
                 measurementAgeSeconds(centralPath, comparisonPath));
     }
 
-    /** Preserve the former regional rate ratios, selected by the data source site. */
+    /** Apply equal rates for Hangzhou and core replicas; retain other regional ratios. */
     private static BigDecimal regionalTargetRatio(String siteCode, DataTransferRateLimitConfiguration configuration) {
         int centralRate;
         switch (siteCode == null ? "" : siteCode) {
             case "core":
-            case "hz": centralRate = 1080; break;
+            case "hz": return BigDecimal.ONE;
             case "sh": centralRate = 992; break;
             case "bj": centralRate = 928; break;
             case "sz": centralRate = 840; break;

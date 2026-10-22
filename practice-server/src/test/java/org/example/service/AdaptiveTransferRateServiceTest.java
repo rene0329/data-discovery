@@ -216,14 +216,14 @@ class AdaptiveTransferRateServiceTest {
     @Test
     void preservesFormerRegionalRatiosForFreshAndExpiredMeasurements() {
         String[] sites = {"core", "hz", "sh", "bj", "sz"};
-        int[] formerCentralRates = {1080, 1080, 992, 928, 840};
+        int[] formerCentralRates = {1408, 1408, 992, 928, 840};
         configuration.setTargetMin(new BigDecimal("1.300"));
         configuration.setTargetMax(new BigDecimal("1.690"));
         for (int i = 0; i < sites.length; i++) {
             NodeManagement source = node(1, "cluster-sz-3");
             source.setSiteCode(sites[i]);
             when(nodes.getNodeByName("cluster-sz-3")).thenReturn(source);
-            BigDecimal expected = new BigDecimal("1408").divide(
+            BigDecimal expected = i < 2 ? BigDecimal.ONE : new BigDecimal("1408").divide(
                     BigDecimal.valueOf(formerCentralRates[i]), 6, java.math.RoundingMode.HALF_UP);
             for (boolean expired : new boolean[]{false, true}) {
                 when(topology.pathsFrom(1, 900)).thenReturn(expired ? Collections.emptyMap() : paths);
@@ -239,6 +239,18 @@ class AdaptiveTransferRateServiceTest {
                 assertEquals(expected.doubleValue(), actual, 0.015);
             }
         }
+    }
+
+    @Test
+    void identicalCentralTargetDoesNotRequireAnUnrelatedComparisonNode() {
+        when(nodes.getComputeCapableNodes()).thenReturn(Collections.emptyList());
+        AdaptiveTransferRateService.Recommendation first = service.recommend(
+                configuration, "cluster-sz-3", "master-40", "master-40");
+        AdaptiveTransferRateService.Recommendation second = service.recommend(
+                configuration, "cluster-sz-3", "master-40", "master-40");
+        assertTrue(first.isAvailable());
+        assertEquals(BigDecimal.ONE, first.getTargetRatio());
+        assertEquals(first.getRate(), second.getRate());
     }
 
     private long rate(String target) {
