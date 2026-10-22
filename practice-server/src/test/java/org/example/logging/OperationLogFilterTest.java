@@ -14,6 +14,41 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OperationLogFilterTest {
     @Test
+    void mergesOnlyRepeatedPolling401AndReportsCountAndRecovery() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(OperationLogFilter.class);
+        ListAppender<ILoggingEvent> events = new ListAppender<>();
+        events.start();
+        logger.addAppender(events);
+        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong();
+        OperationLogFilter filter = new OperationLogFilter(now::get);
+        try {
+            for (int i = 0; i < 3; i++) {
+                MockHttpServletResponse response = new MockHttpServletResponse();
+                filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"), response,
+                        (req, res) -> response.setStatus(401));
+            }
+            assertEquals(1, events.list.size());
+            now.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(60));
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"), response,
+                    (req, res) -> response.setStatus(401));
+            assertTrue(events.list.get(1).getFormattedMessage().contains("已合并告警=3次"));
+            for (int i = 0; i < 2; i++) {
+                MockHttpServletResponse denied = new MockHttpServletResponse();
+                filter.doFilter(new MockHttpServletRequest("POST", "/api/v1/tasks"), denied,
+                        (req, res) -> denied.setStatus(401));
+            }
+            assertEquals(4, events.list.size());
+            MockHttpServletResponse repeated = new MockHttpServletResponse();
+            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"), repeated,
+                    (req, res) -> repeated.setStatus(401));
+            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"),
+                    new MockHttpServletResponse(), (req, res) -> {});
+            assertTrue(events.list.stream().anyMatch(e -> e.getFormattedMessage().contains("轮询访问已恢复")));
+        } finally { logger.detachAppender(events); }
+    }
+
+    @Test
     void deniedPreflightIsWarnEvenWhenEnvelopeAndHttpAreSuccessful() throws Exception {
         Logger logger = (Logger) LoggerFactory.getLogger(OperationLogFilter.class);
         ListAppender<ILoggingEvent> events = new ListAppender<>();
