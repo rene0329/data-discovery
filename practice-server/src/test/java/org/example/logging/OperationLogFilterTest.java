@@ -14,38 +14,35 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OperationLogFilterTest {
     @Test
-    void mergesOnlyRepeatedPolling401AndReportsCountAndRecovery() throws Exception {
+    void polling401IsDebugButTaskDenialAndServerFailureRemainVisible() throws Exception {
         Logger logger = (Logger) LoggerFactory.getLogger(OperationLogFilter.class);
+        ch.qos.logback.classic.Level previous = logger.getLevel();
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
         ListAppender<ILoggingEvent> events = new ListAppender<>();
         events.start();
         logger.addAppender(events);
-        java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong();
-        OperationLogFilter filter = new OperationLogFilter(now::get);
         try {
-            for (int i = 0; i < 3; i++) {
+            OperationLogFilter filter = new OperationLogFilter();
+            String[] methods = {"GET", "GET", "POST", "GET", "GET"};
+            String[] paths = {"/api/v1/datasets", "/common/networkTopology", "/api/v1/tasks",
+                    "/api/v1/datasets", "/api/v1/datasets"};
+            int[] statuses = {401, 401, 401, 403, 500};
+            for (int i = 0; i < paths.length; i++) {
                 MockHttpServletResponse response = new MockHttpServletResponse();
-                filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"), response,
-                        (req, res) -> response.setStatus(401));
+                final int status = statuses[i];
+                filter.doFilter(new MockHttpServletRequest(methods[i], paths[i]), response,
+                        (req, res) -> response.setStatus(status));
             }
-            assertEquals(1, events.list.size());
-            now.set(java.util.concurrent.TimeUnit.SECONDS.toNanos(60));
-            MockHttpServletResponse response = new MockHttpServletResponse();
-            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"), response,
-                    (req, res) -> response.setStatus(401));
-            assertTrue(events.list.get(1).getFormattedMessage().contains("已合并告警=3次"));
-            for (int i = 0; i < 2; i++) {
-                MockHttpServletResponse denied = new MockHttpServletResponse();
-                filter.doFilter(new MockHttpServletRequest("POST", "/api/v1/tasks"), denied,
-                        (req, res) -> denied.setStatus(401));
-            }
-            assertEquals(4, events.list.size());
-            MockHttpServletResponse repeated = new MockHttpServletResponse();
-            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"), repeated,
-                    (req, res) -> repeated.setStatus(401));
-            filter.doFilter(new MockHttpServletRequest("GET", "/api/v1/datasets"),
-                    new MockHttpServletResponse(), (req, res) -> {});
-            assertTrue(events.list.stream().anyMatch(e -> e.getFormattedMessage().contains("轮询访问已恢复")));
-        } finally { logger.detachAppender(events); }
+            assertEquals(5, events.list.size());
+            assertEquals(ch.qos.logback.classic.Level.DEBUG, events.list.get(0).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.DEBUG, events.list.get(1).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.WARN, events.list.get(2).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.WARN, events.list.get(3).getLevel());
+            assertEquals(ch.qos.logback.classic.Level.ERROR, events.list.get(4).getLevel());
+        } finally {
+            logger.detachAppender(events);
+            logger.setLevel(previous);
+        }
     }
 
     @Test
