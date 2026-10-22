@@ -53,7 +53,7 @@ def display(value):
 
 
 def render_table(headers, rows, total):
-    sizes = [max(4, min(max(30, total - 24) if h in ('reason', 'schedule', 'message') and len(headers) <= 3 else 30,
+    sizes = [max(4, min(max(30, total - 24) if (h in ('reason', 'schedule', 'message') and len(headers) <= 3) or (h == 'description' and len(headers) <= 4) else 30,
                          max([width(h)] + [width(display(r.get(h))) for r in rows]))) for h in headers]
     while sum(sizes) + 3 * len(sizes) + 1 > total:
         index = max(range(len(sizes)), key=lambda i: sizes[i])

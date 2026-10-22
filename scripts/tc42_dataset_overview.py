@@ -23,6 +23,9 @@ def size(value):
 
 
 def overview(kind, rows):
+    if kind == 'catalog':
+        return ['name', 'description', 'version', 'size'], [
+            dict(row, size=size(row.get('size_bytes'))) for row in rows]
     if kind == 'datasets':
         headers = ['name', 'data_heat', 'node_name', 'site_code', 'availability', 'size']
         return headers, [dict(row, data_heat=number(row.get('data_heat')), size=size(row.get('size_bytes')))
@@ -42,7 +45,7 @@ def overview(kind, rows):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('kind', choices=['datasets', 'nodes'])
+    parser.add_argument('kind', choices=['datasets', 'nodes', 'catalog'])
     parser.add_argument('--width', type=int, default=110)
     args = parser.parse_args()
     _, rows = parse(sys.stdin.read())
