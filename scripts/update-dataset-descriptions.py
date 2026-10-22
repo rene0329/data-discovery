@@ -38,7 +38,7 @@ if args.direct_login:
     token = request('/api/v1/auth/direct-login', {}, 'POST')['token']
 if not token:
     parser.error('Set TOPIC4_TOKEN or use --direct-login')
-catalog = json.loads((Path(__file__).parent / 'catalog/dataset-descriptions.json').read_text())
+catalog = json.loads((Path(__file__).parent / 'catalog/dataset-descriptions.json').read_text(encoding='utf-8'))
 descriptions = {item['datasetCode']: item['description'] for item in catalog}
 datasets = []
 page = 1
