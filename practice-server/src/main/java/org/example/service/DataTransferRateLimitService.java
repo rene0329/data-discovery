@@ -80,7 +80,7 @@ public class DataTransferRateLimitService {
             DataTransferRateLimitConfiguration current = mapper.findCurrent();
             if (current != null) return resolve(current, sourceNode, targetNode, "database", comparisonNode);
         } catch (RuntimeException ex) {
-            log.warn("读取动态传输限速配置失败，使用部署配置回退: {}", ex.getMessage());
+            log.warn("读取动态传输配置失败，使用部署配置回退: {}", ex.getMessage());
         }
         DataTransferRateLimitConfiguration fallback = new DataTransferRateLimitConfiguration();
         fallback.setVersion(0L);
@@ -159,7 +159,7 @@ public class DataTransferRateLimitService {
         }
         mapper.insertCurrentHistory();
         DataTransferRateLimitConfiguration updated = requireCurrent();
-        log.info("管理员 {} 更新传输限速配置到版本 {}: enabled={}, adaptive={}, bandwidthProbe={}, paths='{}'",
+        log.debug("管理员 {} 更新传输配置到版本 {}: enabled={}, adaptive={}, bandwidthProbe={}, paths='{}'",
                 username, updated.getVersion(), updated.getEnabled(), updated.getAdaptiveEnabled(),
                 updated.getBandwidthProbeEnabled(), updated.getPathRules());
         return new DataTransferRateLimitDtos.View(updated);
@@ -174,7 +174,7 @@ public class DataTransferRateLimitService {
             AdaptiveTransferRateService.Recommendation recommendation =
                     adaptiveRates.recommend(configuration, sourceNode, targetNode, comparisonNode);
             if (recommendation.isAvailable()) {
-                log.info("路径限速 v{}: {} → {}, rate={}, bandwidth={}Mbps, latency={}ms, comparisonNode={}, targetRatio={}, measurementSource={}, measurementAgeSeconds={}",
+                log.debug("传输配置 v{}: {} → {}, rate={}, bandwidth={}Mbps, latency={}ms, comparisonNode={}, targetRatio={}, measurementSource={}, measurementAgeSeconds={}",
                         configuration.getVersion(), sourceNode, targetNode, recommendation.getRate(),
                         recommendation.getBasisBandwidthMbps(), recommendation.getLatencyMs(),
                         recommendation.getComparisonNode(), recommendation.getTargetRatio(),
@@ -185,7 +185,7 @@ public class DataTransferRateLimitService {
                         recommendation.getBasisBandwidthMbps(),
                         recommendation.getTargetRatio());
             }
-            log.warn("自适应限速无法用于 {} → {}，使用人工规则回退: {}", sourceNode, targetNode,
+            log.warn("动态传输配置无法用于 {} → {}，使用人工规则回退: {}", sourceNode, targetNode,
                     recommendation.getUnavailableReason());
             source = source + "-static-fallback";
         }
