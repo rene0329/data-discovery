@@ -854,9 +854,9 @@ public class K8sTaskOrchestratorService {
                     transferRegistered = false;
                 }
                 validateInputEvidence(dataInfo, initEvidence);
-                log.info("【数据移动】异步任务数据移动结束 [==========] taskId={} datasetId={} mode={} sourceNode={} targetNode={} bytes={} 总耗时={}秒 durationMs={}（传输阶段，校验通过）",
+                log.info("【数据移动】异步任务数据移动结束 [==========] taskId={} datasetId={} mode={} sourceNode={} targetNode={} bytes={} 总耗时={}秒（传输阶段，校验通过）",
                         taskId, registeredDatasetId, type, sourceNodeInfo.getNodeName(), initEvidence.nodeName,
-                        initEvidence.inputBytes, initEvidence.durationMs / 1000.0, initEvidence.durationMs);
+                        initEvidence.inputBytes, formatDurationSeconds(initEvidence.durationMs));
                 if (registeredDatasetId != null) {
                     persistPreparationEvents(taskId, registeredDatasetId, type, jobName,
                             jobResult.getInputPath(), initEvidence, attempt);
@@ -1387,8 +1387,14 @@ public class K8sTaskOrchestratorService {
         else if (successful.size() < expectedCount || !completeEvidence) summary.setStatus("部分完成");
         else summary.setStatus("已完成");
         taskManagementMapper.updateExecutionSummary(summary);
-        log.info("【任务】异步任务结束 taskId={} mode={} status={} 数据准备阶段耗时={}ms 计算阶段耗时={}ms",
-                taskId, executionMode, summary.getStatus(), preparationMs, computeMs);
+        log.info("【任务】异步任务结束 taskId={} mode={} status={} 数据准备阶段耗时={}s 计算阶段耗时={}s",
+                taskId, executionMode, summary.getStatus(),
+                formatDurationSeconds(preparationMs), formatDurationSeconds(computeMs));
+    }
+
+    private static String formatDurationSeconds(Long durationMs) {
+        return durationMs == null ? null
+                : java.math.BigDecimal.valueOf(durationMs, 3).stripTrailingZeros().toPlainString();
     }
 
     /**
