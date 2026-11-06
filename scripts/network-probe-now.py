@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Run the configured network probes once from ZJ without restarting the DaemonSet."""
 import base64
+import datetime
 import fcntl
 import json
 import io
@@ -107,7 +108,10 @@ def run():
     seconds = int(env.get('PROBE_TRANSFER_SECONDS', '2'))
     success = skipped = failed = 0
     print('开始手动探测 {} 条配置链路；自动探测配置保持不变。'.format(len(targets)), flush=True)
-    for source, target, runner, ip in targets:
+    print('延迟方法：ICMP Echo 往返时延；每条链路发送 10 个报文，间隔 1 秒，单次等待 2 秒，总限时 20 秒。', flush=True)
+    print('逐次回显来自目标节点；最终取成功响应的平均 RTT 写回系统，丢包率单独显示。', flush=True)
+    print('这是一次短时采样，不代表长期延迟分布；每日自动探测的采样参数保持不变。', flush=True)
+    for index, (source, target, runner, ip) in enumerate(targets, 1):
         label = '{} ↔ {}'.format(source, target)
         try:
             if runner not in ready or not ip:
@@ -119,8 +123,22 @@ def run():
                 print('跳过 {}：{}'.format(label, decision.get('reason', 'NOT_PERMITTED')), flush=True)
                 continue
             pod = ready[runner]
-            code, output = execute(pod, 'env', 'LC_ALL=C', 'ping', '-n', '-c', '4', ip, timeout=20)
-            latency = parse_latency(output) if code == 0 else None
+            print('\n[{}/{}] {} → {}；实际执行节点 {}，目标 IP {}，Pod {}'.format(
+                index, len(targets), source, target, runner, ip, pod), flush=True)
+            print('开始时间：' + datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S %z'), flush=True)
+            print('执行：ping -n -c 10 -i 1 -W 2 -w 20 ' + ip, flush=True)
+            print('采样中，最多等待 20 秒；结束后显示原始逐次响应和统计：', flush=True)
+            code, output = execute(pod, 'env', 'LC_ALL=C', 'ping', '-n', '-c', '10',
+                                   '-i', '1', '-W', '2', '-w', '20', ip, timeout=30)
+            print(output.rstrip() or '未收到 ping 输出。', flush=True)
+            # iputils can exit 1 at the deadline even when some replies arrived.
+            # Only a valid RTT summary permits using those successful replies.
+            latency = parse_latency(output) if code in (0, 1) else None
+            if latency is not None:
+                print('延迟结果：平均往返时延 {:.3f} ms（仅统计成功响应，未响应报文计入丢包）。'.format(latency), flush=True)
+            else:
+                print('延迟结果：未获得有效 RTT，不能记为 0 ms。', flush=True)
+            print('正在完成其余链路指标检查并提交系统…', flush=True)
             forward = bandwidth(pod, ip, seconds)
             reverse = bandwidth(pod, ip, seconds, reverse=True)
             valid_rates = [rate for rate in (forward, reverse) if rate is not None]
@@ -133,8 +151,8 @@ def run():
                 print('失败 {}：测量不完整，已上报不可用状态。'.format(label), flush=True)
             else:
                 success += 1
-                print('成功 {}：RTT {:.3f} ms，带宽 {:.2f} Mbps；已写回系统。'.format(
-                    label, latency, rate / 1e6), flush=True)
+                print('成功 {}：平均往返时延 {:.3f} ms；已写回系统。'.format(
+                    label, latency), flush=True)
         except Exception as error:
             failed += 1
             # Do not print request objects or credentials.
