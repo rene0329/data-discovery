@@ -47,11 +47,15 @@ class ProbeTest(unittest.TestCase):
                 self.assertIn('10', execute.call_args[0])
                 self.assertIn('20% packet loss', stdout.getvalue())
                 self.assertIn('rtt min/avg/max = 1/2/3 ms', stdout.getvalue())
+                self.assertIn('a ↔ b | 2.000 | 20% | 已写回', stdout.getvalue())
+                self.assertIn('共 1 条，成功 1，跳过 0，失败 0', stdout.getvalue())
                 self.assertNotIn('Mbps', stdout.getvalue())
                 self.assertNotIn('带宽', stdout.getvalue())
             else:
                 with self.assertRaises(SystemExit):
                     probe.run()
+                self.assertIn('a ↔ b | 未测得 | 未知 | 跳过：BUSINESS_TRANSFER_ACTIVE', stdout.getvalue())
+                self.assertIn('共 1 条，成功 0，跳过 1，失败 0', stdout.getvalue())
                 execute.assert_not_called()
                 self.assertEqual(post.call_count, 1)
             self.assertTrue(all(call[0][0] == 'get' for call in kubectl.call_args_list))

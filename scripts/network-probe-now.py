@@ -37,6 +37,21 @@ def parse_latency(output):
     return value if math.isfinite(value) and value >= 0 else None
 
 
+
+def print_summary(results, elapsed):
+    print('\n测量汇总（耗时 {:.1f} 秒）'.format(elapsed), flush=True)
+    print('链路 | 平均往返时延 (ms) | 丢包率 | 写回结果', flush=True)
+    for result in results:
+        latency = result['latency']
+        print('{} | {} | {} | {}'.format(
+            result['label'], '{:.3f}'.format(latency) if latency is not None else '未测得',
+            result['loss'], result['status']), flush=True)
+    counts = {state: sum(r['outcome'] == state for r in results)
+              for state in ('success', 'skipped', 'failed')}
+    print('完成：共 {} 条，成功 {}，跳过 {}，失败 {}。'.format(
+        len(results), counts['success'], counts['skipped'], counts['failed']), flush=True)
+
+
 def execute(pod, *args, timeout=30):
     result = subprocess.run(
         ['kubectl', '-n', NAMESPACE, 'exec', pod, '-c', 'network-probe', '--'] + list(args),
@@ -107,12 +122,17 @@ def run():
         raise RuntimeError('线上未配置探测链路。')
     seconds = int(env.get('PROBE_TRANSFER_SECONDS', '2'))
     success = skipped = failed = 0
+    started = time.monotonic()
+    results = []
     print('开始手动探测 {} 条配置链路；自动探测配置保持不变。'.format(len(targets)), flush=True)
     print('延迟方法：ICMP Echo 往返时延；每条链路发送 10 个报文，间隔 1 秒，单次等待 2 秒，总限时 20 秒。', flush=True)
     print('逐次回显来自目标节点；最终取成功响应的平均 RTT 写回系统，丢包率单独显示。', flush=True)
     print('这是一次短时采样，不代表长期延迟分布；每日自动探测的采样参数保持不变。', flush=True)
     for index, (source, target, runner, ip) in enumerate(targets, 1):
         label = '{} ↔ {}'.format(source, target)
+        result = {'label': label, 'latency': None, 'loss': '未知',
+                  'status': '未写回', 'outcome': 'failed'}
+        results.append(result)
         try:
             if runner not in ready or not ip:
                 raise RuntimeError('探测 Pod 或目标 IP 不可用')
@@ -120,6 +140,7 @@ def run():
                             {'sourceNode': source, 'targetNode': target})['data']
             if not decision.get('permitted'):
                 skipped += 1
+                result.update(outcome='skipped', status='跳过：' + decision.get('reason', 'NOT_PERMITTED'))
                 print('跳过 {}：{}'.format(label, decision.get('reason', 'NOT_PERMITTED')), flush=True)
                 continue
             pod = ready[runner]
@@ -134,6 +155,8 @@ def run():
             # iputils can exit 1 at the deadline even when some replies arrived.
             # Only a valid RTT summary permits using those successful replies.
             latency = parse_latency(output) if code in (0, 1) else None
+            loss = re.search(r'([0-9.]+)% packet loss', output)
+            result.update(latency=latency, loss=loss.group(1) + '%' if loss else '未知')
             if latency is not None:
                 print('延迟结果：平均往返时延 {:.3f} ms（仅统计成功响应，未响应报文计入丢包）。'.format(latency), flush=True)
             else:
@@ -148,16 +171,19 @@ def run():
             post(env['CENTRAL_METRICS_URL'], token, [report])
             if latency is None or rate is None:
                 failed += 1
+                result['status'] = '已上报不可用状态'
                 print('失败 {}：测量不完整，已上报不可用状态。'.format(label), flush=True)
             else:
                 success += 1
+                result.update(outcome='success', status='已写回')
                 print('成功 {}：平均往返时延 {:.3f} ms；已写回系统。'.format(
                     label, latency), flush=True)
         except Exception as error:
             failed += 1
+            result['status'] = '未完成：' + type(error).__name__
             # Do not print request objects or credentials.
             print('失败 {}：{}'.format(label, type(error).__name__), flush=True)
-    print('完成：成功 {}，跳过 {}，失败 {}。'.format(success, skipped, failed), flush=True)
+    print_summary(results, time.monotonic() - started)
     if failed or skipped:
         sys.exit(1)
 
