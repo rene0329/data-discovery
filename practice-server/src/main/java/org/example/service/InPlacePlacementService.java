@@ -139,10 +139,12 @@ public class InPlacePlacementService {
                 usable.add(new Candidate(replica, node));
             }
         }
+        Fit fit = new Fit(demand, ledger, trace);
         // Capture every source-to-compute path before any placement tier can return early.
         // These are topology snapshots, independent of candidate ordering and resource fit.
         for (Candidate candidate : usable) {
-            Map<Integer, NetworkPath> paths = networkTopologyService.pathsFrom(candidate.node.getNodeId());
+            Map<Integer, NetworkPath> paths = fit.paths.computeIfAbsent(candidate.node.getNodeId(),
+                    networkTopologyService::pathsFrom);
             for (NodeManagement compute : computeNodes) {
                 boolean local = Objects.equals(candidate.node.getNodeId(), compute.getNodeId());
                 NetworkPath path = local
@@ -158,7 +160,6 @@ public class InPlacePlacementService {
                                 : "记录源节点到计算节点的路径时延，不受节点选择顺序影响");
             }
         }
-        Fit fit = new Fit(demand, ledger, trace);
         trace.add("STAGE", null, null, null, Tier.LOCAL, null, "STARTED", "检查副本所在节点是否具备计算能力且资源满足请求");
         Placement placement = locate(usable, computeNodes, reasons, fit);
         if (placement.isFound()) {
@@ -216,7 +217,7 @@ public class InPlacePlacementService {
             for (NodeManagement compute : computeNodes) {
                 if (siteCode.equals(compute.getSiteCode())) {
                     // Record available path measurements without changing same-site priority.
-                    NetworkPath path = networkTopologyService.pathsFrom(candidate.node.getNodeId())
+                    NetworkPath path = fit.paths.get(candidate.node.getNodeId())
                             .get(compute.getNodeId());
                     if (fit.accepts(candidate, compute, Tier.SAME_SITE, path, true)) {
                         return fit.placement(candidate.replica, candidate.node, compute, Tier.SAME_SITE, path, reasons);
@@ -234,7 +235,7 @@ public class InPlacePlacementService {
         Placement best = null;
         List<Placement> full = new ArrayList<>();
         for (Candidate candidate : usable) {
-            Map<Integer, NetworkPath> paths = networkTopologyService.pathsFrom(candidate.node.getNodeId());
+            Map<Integer, NetworkPath> paths = fit.paths.get(candidate.node.getNodeId());
             Placement local = null;
             boolean reachable = false;
             for (NodeManagement compute : computeNodes) {
@@ -284,6 +285,7 @@ public class InPlacePlacementService {
         private final NodeResourceLedger ledger;
         private final Set<String> shortages = new LinkedHashSet<>();
         private final DecisionTrace trace;
+        private final Map<Integer, Map<Integer, NetworkPath>> paths = new LinkedHashMap<>();
 
         Fit(JobResourceDemand demand, NodeResourceLedger ledger, DecisionTrace trace) {
             this.demand = demand;
