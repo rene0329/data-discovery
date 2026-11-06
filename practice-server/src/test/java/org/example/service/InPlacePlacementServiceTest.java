@@ -19,8 +19,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class InPlacePlacementServiceTest {
@@ -52,12 +50,22 @@ class InPlacePlacementServiceTest {
     }
 
     @Test
-    void replicaOnAComputeNodeRunsInPlaceWithoutConsultingTopology() {
+    void replicaOnAComputeNodeStillRecordsEverySourceToComputePath() {
         InPlacePlacementService.Placement result = placement.place(Arrays.asList(replica(1, 5), replica(2, 7)));
 
         assertEquals(InPlacePlacementService.Tier.LOCAL, result.getTier());
         assertEquals("cluster-sh-1", result.getComputeNode().getNodeName());
-        verify(topology, never()).pathsFrom(any());
+        List<Map<String, Object>> recorded = result.getDecisionEvents().stream()
+                .filter(event -> "PLACEMENT_PATH".equals(event.get("eventType")))
+                .collect(java.util.stream.Collectors.toList());
+        assertEquals(6, recorded.size());
+        Map<String, Object> local = recorded.stream()
+                .filter(event -> "cluster-sh-1".equals(event.get("sourceNode"))
+                        && "cluster-sh-1".equals(event.get("targetNode")))
+                .findFirst().orElseThrow(AssertionError::new);
+        assertEquals(0.0, local.get("latencyMs"));
+        assertEquals("RECORDED", local.get("outcome"));
+        assertEquals(5, recorded.stream().filter(event -> "UNAVAILABLE".equals(event.get("outcome"))).count());
     }
 
     @Test
@@ -71,6 +79,12 @@ class InPlacePlacementServiceTest {
         assertEquals(InPlacePlacementService.Tier.SAME_SITE, result.getTier());
         assertEquals("cluster-sh-1", result.getComputeNode().getNodeName());
         assertEquals(30.0, result.getPath().getLatencyMs());
+        assertEquals(3, result.getDecisionEvents().stream()
+                .filter(event -> "PLACEMENT_PATH".equals(event.get("eventType"))).count());
+        assertTrue(result.getDecisionEvents().stream().anyMatch(event ->
+                "PLACEMENT_PATH".equals(event.get("eventType"))
+                        && "master-40".equals(event.get("targetNode"))
+                        && Double.valueOf(1.0).equals(event.get("latencyMs"))));
         Map<String, Object> selected = result.getDecisionEvents().stream()
                 .filter(event -> "PLACEMENT_SELECTED".equals(event.get("eventType")))
                 .findFirst().orElseThrow(AssertionError::new);

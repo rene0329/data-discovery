@@ -139,6 +139,25 @@ public class InPlacePlacementService {
                 usable.add(new Candidate(replica, node));
             }
         }
+        // Capture every source-to-compute path before any placement tier can return early.
+        // These are topology snapshots, independent of candidate ordering and resource fit.
+        for (Candidate candidate : usable) {
+            Map<Integer, NetworkPath> paths = networkTopologyService.pathsFrom(candidate.node.getNodeId());
+            for (NodeManagement compute : computeNodes) {
+                boolean local = Objects.equals(candidate.node.getNodeId(), compute.getNodeId());
+                NetworkPath path = local
+                        ? new NetworkPath(Collections.singletonList(compute.getNodeId()), 0.0, Long.MAX_VALUE)
+                        : paths.get(compute.getNodeId());
+                Tier tier = local ? Tier.LOCAL
+                        : candidate.node.getSiteCode() != null
+                        && candidate.node.getSiteCode().equals(compute.getSiteCode()) ? Tier.SAME_SITE : Tier.NEAREST;
+                trace.add("PATH", candidate.replica.getReplicaId(), candidate.node, compute, tier, path,
+                        path == null ? "UNAVAILABLE" : "RECORDED",
+                        local ? "源节点与计算节点相同，路径时延为 0"
+                                : path == null ? "逻辑网络拓扑中没有有效测量路径"
+                                : "记录源节点到计算节点的路径时延，不受节点选择顺序影响");
+            }
+        }
         Fit fit = new Fit(demand, ledger, trace);
         trace.add("STAGE", null, null, null, Tier.LOCAL, null, "STARTED", "检查副本所在节点是否具备计算能力且资源满足请求");
         Placement placement = locate(usable, computeNodes, reasons, fit);
