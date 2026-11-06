@@ -21,7 +21,7 @@ class ProbeTest(unittest.TestCase):
                      (0, json.dumps({'end': {'sum_received': {'bits_per_second': 1200000}}}))]
         with patch.object(probe, 'execute', side_effect=responses) as execute, patch.object(probe.time, 'sleep'):
             self.assertEqual(probe.bandwidth('pod', '10.0.0.1', 2, True), 1200000)
-            self.assertIn('-R', execute.call_args.args)
+            self.assertIn('-R', execute.call_args[0])
 
     def run_fixture(self, permitted, ping_code=0):
         env = {'CENTRAL_AUTH_TOKEN': 'test', 'CENTRAL_PROBE_DECISION_URL': 'decision',
@@ -39,12 +39,12 @@ class ProbeTest(unittest.TestCase):
                 patch.object(probe, 'bandwidth', side_effect=[4000000, 3000000]), patch('sys.stdout', new_callable=io.StringIO) as stdout:
             if permitted:
                 probe.run()
-                report = post.call_args.args[2][0]
+                report = post.call_args[0][2][0]
                 self.assertEqual(report['latencyMs'], 2)
                 self.assertEqual(report['bandwidthBps'], 3000000)
                 self.assertEqual(report['sourceNode'], 'a')
-                self.assertIn('172.16.0.2', execute.call_args.args)
-                self.assertIn('10', execute.call_args.args)
+                self.assertIn('172.16.0.2', execute.call_args[0])
+                self.assertIn('10', execute.call_args[0])
                 self.assertIn('20% packet loss', stdout.getvalue())
                 self.assertIn('rtt min/avg/max = 1/2/3 ms', stdout.getvalue())
                 self.assertNotIn('Mbps', stdout.getvalue())
@@ -54,7 +54,7 @@ class ProbeTest(unittest.TestCase):
                     probe.run()
                 execute.assert_not_called()
                 self.assertEqual(post.call_count, 1)
-            self.assertTrue(all(call.args[0] == 'get' for call in kubectl.call_args_list))
+            self.assertTrue(all(call[0][0] == 'get' for call in kubectl.call_args_list))
 
     def test_reports_metrics_without_changing_daemonset(self):
         self.run_fixture(True)
