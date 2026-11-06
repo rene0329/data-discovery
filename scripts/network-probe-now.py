@@ -3,6 +3,7 @@
 import base64
 import fcntl
 import json
+import io
 import math
 import os
 import re
@@ -16,7 +17,7 @@ NAMESPACE = os.environ.get('TOPIC4_NAMESPACE', 'topic4-1')
 
 def kubectl(*args, timeout=30):
     return subprocess.check_output(
-        ['kubectl', '-n', NAMESPACE] + list(args), timeout=timeout, text=True)
+        ['kubectl', '-n', NAMESPACE] + list(args), timeout=timeout, universal_newlines=True)
 
 
 def post(url, token, payload):
@@ -38,7 +39,7 @@ def parse_latency(output):
 def execute(pod, *args, timeout=30):
     result = subprocess.run(
         ['kubectl', '-n', NAMESPACE, 'exec', pod, '-c', 'network-probe', '--'] + list(args),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, text=True)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, universal_newlines=True)
     return result.returncode, result.stdout
 
 
@@ -144,6 +145,8 @@ def run():
 
 
 if __name__ == '__main__':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', line_buffering=True)
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', line_buffering=True)
     try:
         main()
     except Exception as error:
