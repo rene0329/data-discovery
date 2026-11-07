@@ -5,6 +5,7 @@ import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.PodList;
 import io.fabric8.kubernetes.api.model.PodListBuilder;
+import io.fabric8.kubernetes.api.model.ContainerStatusBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.JobList;
@@ -82,6 +83,7 @@ class K8sTaskOrchestratorServiceTest {
         when(nodes.getNodeById(3)).thenReturn(source);
         when(nodes.getNodeByName("node-a")).thenReturn(source);
         RuntimeImage image = RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true)
+                .name("recsys_bpr").modelType("bpr").taskType("recsys")
                 .resolvedDigest("sha256:image").commandJson("[\"python\"]")
                 .argsTemplateJson("[\"run.py\"]").build();
         when(images.findById(7L)).thenReturn(image);
@@ -102,6 +104,11 @@ class K8sTaskOrchestratorServiceTest {
                 .thenReturn("TRANSFER_MS=1000\nINPUT_BYTES=100\nINPUT_SHA256="
                         + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         when(podResource.inContainer("processing-container").getLog()).thenReturn("result=ok");
+        String firstProgress = "2026-09-19T00:00:01Z Epoch 1/1 started scoped-read-token\n";
+        String finalProgress = "2026-09-19T00:00:03Z Epoch 1/1 train_loss=0.42\n";
+        when(podResource.inContainer("processing-container").usingTimestamps()
+                .limitBytes(65536).tailingLines(200).getLog())
+                .thenReturn(firstProgress, firstProgress + finalProgress);
         Pod completedPod = new PodBuilder().withNewMetadata().withName("task-pod").endMetadata()
                 .withNewSpec().withNodeName("node-a").endSpec()
                 .withNewStatus()
@@ -113,8 +120,14 @@ class K8sTaskOrchestratorServiceTest {
                 .withNewState().withNewTerminated().withExitCode(0)
                 .withStartedAt("2026-09-19T00:00:01Z").withFinishedAt("2026-09-19T00:00:03Z")
                 .endTerminated().endState().endContainerStatus().endStatus().build();
-        doReturn(new PodListBuilder().withItems(completedPod).build()).when(pods).list();
-        when(jobResource.get()).thenReturn(new JobBuilder().withNewStatus().addNewCondition()
+        Pod runningPod = new PodBuilder(completedPod).editStatus()
+                .withContainerStatuses(new ContainerStatusBuilder().withName("processing-container")
+                        .withNewState().withNewRunning().withStartedAt("2026-09-19T00:00:01Z")
+                        .endRunning().endState().build()).endStatus().build();
+        doReturn(new PodListBuilder().withItems(completedPod).build(),
+                new PodListBuilder().withItems(runningPod).build(),
+                new PodListBuilder().withItems(completedPod).build()).when(pods).list();
+        when(jobResource.get()).thenReturn(new JobBuilder().build(), new JobBuilder().withNewStatus().addNewCondition()
                 .withType("Complete").withStatus("True").endCondition().endStatus().build());
         when(jobs.createDataProcessingJob(anyString(), eq("node-a"), eq("test.npz"),
                 eq("/dataset/test.npz"), eq("node-a"), isNull(), any(), any(), any(), same(image),
@@ -127,7 +140,26 @@ class K8sTaskOrchestratorServiceTest {
                 mock(SchedulingPlanMapper.class), mock(DatasetUploadClient.class),
                 authorization, placement(nodes, availability), heat);
 
-        service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
+        ch.qos.logback.classic.Logger serviceLogger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(K8sTaskOrchestratorService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        serviceLogger.addAppender(appender);
+        try {
+            service.executeRegisteredTask(30, Collections.singletonList(10L), 7L, null, "IN_PLACE");
+        } finally {
+            serviceLogger.detachAppender(appender);
+            appender.stop();
+        }
+        List<String> computeOutput = appender.list.stream().map(event -> event.getFormattedMessage())
+                .filter(line -> line.contains("【计算输出】")).collect(Collectors.toList());
+        assertEquals(2, computeOutput.size());
+        assertTrue(computeOutput.get(0).contains("数据集=test.npz"));
+        assertTrue(computeOutput.get(0).contains("模型=bpr"));
+        assertTrue(computeOutput.get(0).contains("node=node-a"));
+        assertTrue(computeOutput.get(0).contains("Epoch 1/1 started [REDACTED]"));
+        assertTrue(computeOutput.get(1).contains("train_loss=0.42"));
 
         ArgumentCaptor<Job> submittedJob = ArgumentCaptor.forClass(Job.class);
         verify(jobApi).create(submittedJob.capture());

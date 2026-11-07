@@ -480,6 +480,7 @@ public class K8sJobFactory {
                 .addNewEnv().withName("DATA_PATH").withValue(selectedDataPath).endEnv()
                 .addNewEnv().withName("OUTPUT_DIR").withValue("/data/output").endEnv()
                 .addNewEnv().withName("N_EPOCHS").withValue(String.valueOf(nEpochs)).endEnv()
+                .addNewEnv().withName("PYTHONUNBUFFERED").withValue("1").endEnv()
                 .withNewResources()
                 .addToRequests("cpu", new Quantity(String.valueOf(effectiveCpu)))
                 .addToRequests("memory", new Quantity(String.valueOf(effectiveMem) + "Gi"))

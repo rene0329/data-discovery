@@ -866,7 +866,9 @@ public class K8sTaskOrchestratorService {
                 migrationTaskMapper.updateLifecycle(migrationTask);
 
                 ProcessingEvidence processingEvidence = waitForJobCompletion(
-                        client, jobName, waitTimeoutMinutes);
+                        client, jobName, waitTimeoutMinutes, taskId, registeredDatasetId,
+                        dataInfo.getDataName(), type, runtimeImage, jobResult.getInputPath(),
+                        accessToken, attempt + 1);
                 if (registeredDatasetId != null) {
                     persistComputeEvents(taskId, registeredDatasetId, type, jobName,
                             jobResult.getInputPath(), processingEvidence, attempt);
@@ -1077,24 +1079,34 @@ public class K8sTaskOrchestratorService {
 
     private ProcessingEvidence waitForJobCompletion(KubernetesClient client,
                                                     String jobName,
-                                                    long timeoutMinutes) throws InterruptedException {
+                                                    long timeoutMinutes, Integer taskId, Long datasetId,
+                                                    String datasetName, String mode, RuntimeImage image,
+                                                    String inputPath, String accessToken,
+                                                    int attempt) throws InterruptedException {
         long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
         long pollMs = Math.max(200L, statusPollIntervalMs);
+        Map<String, ComputeLogState> logStates = new LinkedHashMap<>();
         while (System.nanoTime() < deadlineNanos) {
             Job job = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
-            if (hasJobCondition(job, "Failed")) {
-                throw new IllegalStateException("Job " + jobName + " 的处理容器执行失败");
-            }
             List<Pod> pods = client.pods().inNamespace("default")
                     .withLabel("job-name", jobName).list().getItems();
             for (Pod pod : pods) {
+                String context = "taskId=" + taskId + " datasetId=" + datasetId
+                        + " 数据集=" + datasetName + " mode=" + mode
+                        + " 镜像=" + (image == null ? "default" : image.getName())
+                        + " 模型=" + (image == null ? "default" : image.getModelType())
+                        + " node=" + podNodeName(pod) + " job=" + jobName
+                        + " pod=" + podName(pod) + " attempt=" + attempt;
+                observeProcessingLog(client, pod, context, inputPath, accessToken,
+                        logStates.computeIfAbsent(podName(pod), ignored -> new ComputeLogState()));
                 ContainerStateTerminated terminated = findTerminatedContainer(pod, "processing-container");
                 if (terminated == null) continue;
                 if (terminated.getExitCode() == null || terminated.getExitCode() != 0) {
+                    log.error("【计算失败】{} exitCode={}", context, terminated.getExitCode());
                     throw new IllegalStateException("Job " + jobName + " 的处理容器执行失败，exitCode="
                             + terminated.getExitCode());
                 }
-                if (!hasJobCondition(job, "Complete")) continue;
+                if (hasJobCondition(job, "Failed") || !hasJobCondition(job, "Complete")) continue;
                 Instant startedAt = parseInstant(terminated.getStartedAt());
                 Instant finishedAt = parseInstant(terminated.getFinishedAt());
                 if (startedAt == null || finishedAt == null || finishedAt.isBefore(startedAt)) {
@@ -1103,12 +1115,83 @@ public class K8sTaskOrchestratorService {
                 String output = readContainerLog(client, pod, "processing-container");
                 String summary = output.length() <= 4096
                         ? output : output.substring(output.length() - 4096);
+                log.info("【计算完成】{} exitCode=0 计算耗时={}秒", context,
+                        formatDurationSeconds(Duration.between(startedAt, finishedAt).toMillis()));
                 return new ProcessingEvidence(startedAt, finishedAt, podName(pod),
                         podNodeName(pod), summary, sha256Hex(output));
+            }
+            if (hasJobCondition(job, "Failed")) {
+                log.error("【计算失败】taskId={} datasetId={} 数据集={} job={} Kubernetes Job 已失败",
+                        taskId, datasetId, datasetName, jobName);
+                throw new IllegalStateException("Job " + jobName + " 的处理容器执行失败");
             }
             TimeUnit.MILLISECONDS.sleep(pollMs);
         }
         throw new IllegalStateException("等待 Job " + jobName + " 完成超时（" + timeoutMinutes + " 分钟）");
+    }
+
+    private void observeProcessingLog(KubernetesClient client, Pod pod, String context,
+                                      String inputPath, String secret, ComputeLogState state) {
+        if (pod == null || pod.getStatus() == null || pod.getStatus().getContainerStatuses() == null) return;
+        for (ContainerStatus status : pod.getStatus().getContainerStatuses()) {
+            if (!"processing-container".equals(status.getName()) || status.getState() == null) continue;
+            long now = System.nanoTime();
+            boolean finished = status.getState().getTerminated() != null;
+            if (!finished && status.getState().getRunning() == null) {
+                if (!state.waitReported || now - state.lastActivity >= TimeUnit.SECONDS.toNanos(15)) {
+                    String reason = status.getState().getWaiting() == null ? "等待容器启动"
+                            : status.getState().getWaiting().getReason();
+                    log.info("【计算等待】{} 状态={}", context, reason);
+                    state.waitReported = true;
+                    state.lastActivity = now;
+                }
+                return;
+            }
+            if (!state.started) {
+                String startedAt = finished ? status.getState().getTerminated().getStartedAt()
+                        : status.getState().getRunning().getStartedAt();
+                log.info("【计算开始】{} input={} 开始时间={}", context, inputPath, startedAt);
+                state.started = true;
+                state.lastActivity = now;
+            }
+            if (finished || !state.readOnce || now - state.lastRead >= TimeUnit.SECONDS.toNanos(5)) {
+                try {
+                    String snapshot = client.pods().inNamespace("default").withName(podName(pod))
+                            .inContainer("processing-container").usingTimestamps()
+                            .limitBytes(65536).tailingLines(200).getLog();
+                    List<String> lines = state.cursor.newLines(snapshot, finished);
+                    for (String line : lines) {
+                        String safe = redactSecret(line, secret);
+                        if (safe.length() > 4096) safe = safe.substring(0, 4096) + " [单行已截断]";
+                        log.info("【计算输出】{} | {}", context, safe);
+                    }
+                    if (!lines.isEmpty()) {
+                        state.lastActivity = now;
+                        if (snapshot.length() >= 65536 || snapshot.split("\n").length >= 200) {
+                            log.warn("【计算日志提示】{} 本次只转发最近的有限日志，完整输出请查看计算 Pod 日志", context);
+                        }
+                    }
+                } catch (Exception unavailable) {
+                    log.warn("【计算日志暂不可用】{} 原因={}", context,
+                            redactSecret(unavailable.getMessage(), secret));
+                }
+                state.readOnce = true;
+                state.lastRead = now;
+            }
+            if (!finished && now - state.lastActivity >= TimeUnit.SECONDS.toNanos(15)) {
+                log.info("【计算运行中】{} 容器仍在运行，等待下一条计算进度", context);
+                state.lastActivity = now;
+            }
+        }
+    }
+
+    private static final class ComputeLogState {
+        private final ComputeLogCursor cursor = new ComputeLogCursor();
+        private boolean started;
+        private boolean readOnce;
+        private boolean waitReported;
+        private long lastRead;
+        private long lastActivity;
     }
 
     private boolean hasJobCondition(Job job, String type) {
