@@ -3,7 +3,7 @@
   "upstream_commit": "76b200e6c7cac8dacdbc191ed39872c7e5de4b14",
   "original_image_digest": "sha256:9d8327e890df0ab04ab1356b7302d4e461e837d61698f8ec1a369d7a186d644f",
   "evaluation": "All test users and all items; exact top-k; no sampling",
-  "default_evaluation_batch_size": 128,
+  "default_evaluation_batch_size": 32,
   "unchanged": [
     "load_npz",
     "build_mappings",
@@ -12,5 +12,6 @@
   ],
   "validation_command": "python -m unittest discover -s training-images/recsys-bpr-optimized/tests",
   "benchmark_entrypoint": "python /tests/benchmark_training.py",
-  "default_item_batch_size": 8192
+  "default_ranking_workers": 2,
+  "scoring": "BLAS accumulation into the original biases without an intermediate dot-product matrix"
 }

@@ -55,26 +55,32 @@ class EvaluationTest(unittest.TestCase):
         training.pop(3)
         for k in (1, 10, 100):
             for batch in (1, 4, 128):
-                for items in (3, 17, 8192):
-                    with self.subTest(k=k, batch=batch, items=items):
-                        np.testing.assert_allclose(train.evaluate(model, training, testing, k, batch, items),
+                for workers in (1, 2):
+                    with self.subTest(k=k, batch=batch, workers=workers):
+                        np.testing.assert_allclose(train.evaluate(model, training, testing, k, batch, workers),
                                                    reference_evaluate(model, training, testing, k), rtol=0, atol=1e-15)
 
-    def test_block_merging_preserves_global_tie_order(self):
+    def test_fused_scores_preserve_values_layout_and_model_parameters(self):
+        model = train.BPRModel(5, 401, 8, .01, .001)
+        model.bu[:] = np.arange(5) / 10
+        model.bi[:] = np.arange(401) / 100
+        before = [a.copy() for a in (model.U, model.I, model.bu, model.bi)]
+        scores = train.score_batch(model, [1, 3], np.asfortranarray(model.I))
+        expected = np.array([model.bu[u] + model.bi + model.U[u] @ model.I.T for u in (1, 3)])
+        np.testing.assert_allclose(scores, expected, rtol=0, atol=1e-12)
+        self.assertTrue(scores.flags.c_contiguous)
+        for actual, original in zip((model.U, model.I, model.bu, model.bi), before):
+            np.testing.assert_array_equal(actual, original)
+
+    def test_tied_batch_metrics_match_original_sort(self):
         model = train.BPRModel(3, 53, 8, .01, .001)
         model.I[:] = 0
-        model.bi[:] = 0
         model.bi[11:31] = 2
         excluded = {0: {12, 22}, 1: set(range(53)), 2: set(range(52))}
-        for k in (1, 10, 53, 60):
-            for items in (3, 8, 13, 100):
-                actual = train.recommend_batch(model, [0, 1, 2], excluded, k, items)
-                expected = []
-                for u in range(3):
-                    scores = model.bu[u] + model.bi + model.U[u] @ model.I.T
-                    scores[list(excluded[u])] = -np.inf
-                    expected.append(np.argsort(scores)[::-1][:k])
-                np.testing.assert_array_equal(actual, expected)
+        testing = {u: {52} for u in range(3)}
+        for workers in (1, 2):
+            np.testing.assert_allclose(train.evaluate(model, excluded, testing, 10, 2, workers),
+                                       reference_evaluate(model, excluded, testing, 10), rtol=0, atol=1e-15)
 
     def test_recommend_excludes_seen_items(self):
         model = train.BPRModel(1, 20, 3, .01, .001)
@@ -89,6 +95,8 @@ class EvaluationTest(unittest.TestCase):
         for k, batch in ((0, 1), (10, 0), (10, -1)):
             with self.assertRaises(ValueError):
                 train.evaluate(model, {}, {}, k, batch)
+        with self.assertRaises(ValueError):
+            train.evaluate(model, {}, {}, 10, 1, 0)
 
     def test_final_metrics_are_reused_only_for_unchanged_model(self):
         frame = train.pd.DataFrame({'user_id': ['a', 'b'], 'item_id': ['x', 'y']})

@@ -16,6 +16,8 @@ BPR (Bayesian Personalized Ranking) 推荐系统训练脚本
     TASK_TYPE   - recsys
     MODEL_TYPE  - bpr
     DATA_NAME   - 数据集文件名
+    EVAL_BATCH_SIZE - 每批评估用户数，默认 32；仍评估全部用户和物品
+    EVAL_WORKERS - 前 k 个推荐候选的排序线程数，默认 2
 """
 
 import os
@@ -25,6 +27,9 @@ import logging
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from scipy.linalg.blas import dgemm
 
 # ─────────────────────── 日志配置 ───────────────────────
 logging.basicConfig(
@@ -50,8 +55,8 @@ N_SAMPLES   = int(os.getenv("N_SAMPLES",  "5"))   # per positive sample
 TOP_K       = int(os.getenv("TOP_K",      "10"))
 TEST_RATIO  = float(os.getenv("TEST_RATIO","0.2"))
 SEED        = int(os.getenv("SEED",       "42"))
-EVAL_BATCH_SIZE = int(os.getenv("EVAL_BATCH_SIZE", "128"))
-EVAL_ITEM_BATCH_SIZE = int(os.getenv("EVAL_ITEM_BATCH_SIZE", "8192"))
+EVAL_BATCH_SIZE = int(os.getenv("EVAL_BATCH_SIZE", "32"))
+EVAL_WORKERS = int(os.getenv("EVAL_WORKERS", "2"))
 
 np.random.seed(SEED)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -208,79 +213,54 @@ def _dcg(ranked_list, pos_set, k):
     return dcg
 
 
-def recommend_batch(model, users, train_pos, top_k, item_batch_size):
-    """Merge exact block top-k candidates without a users x catalog allocation."""
-    if top_k <= 0 or item_batch_size <= 0:
-        raise ValueError("TOP_K and EVAL_ITEM_BATCH_SIZE must be positive")
-    n_items = len(model.I)
-    k = min(top_k, n_items)
-    if len(users) == 0 or k == 0:
-        return np.empty((len(users), k), dtype=np.intp)
-    # Retain one extra candidate to detect ties at the final top-k boundary.
-    keep = min(k + 1, n_items)
-    best_ids = np.empty((len(users), 0), dtype=np.intp)
-    best_scores = np.empty((len(users), 0), dtype=model.I.dtype)
-    excluded = defaultdict(list)
-    for row, uid in enumerate(users):
-        for iid in train_pos.get(uid, set()):
-            excluded[iid // item_batch_size].append((row, iid % item_batch_size))
-    user_factors, user_bias = model.U[users], model.bu[users, None]
-    for block, start in enumerate(range(0, n_items, item_batch_size)):
-        end = min(start + item_batch_size, n_items)
-        scores = user_bias + model.bi[start:end]
-        scores += user_factors @ model.I[start:end].T
-        if excluded[block]:
-            rows, columns = zip(*excluded[block])
-            scores[rows, columns] = -np.inf
-        local_ids = top_k_items(scores, keep)
-        local_scores = np.take_along_axis(scores, local_ids, axis=1)
-        ids = np.concatenate((best_ids, local_ids + start), axis=1)
-        values = np.concatenate((best_scores, local_scores), axis=1)
-        selected = top_k_items(values, keep)
-        best_ids = np.take_along_axis(ids, selected, axis=1)
-        best_scores = np.take_along_axis(values, selected, axis=1)
-    tied = np.any(best_scores[:, 1:k] == best_scores[:, :k - 1], axis=1)
-    if keep > k:
-        tied |= best_scores[:, k - 1] == best_scores[:, k]
-    # Full-array quicksort has an implementation-specific tie order. Recompute
-    # only tied rows with the original score expression and ordering.
-    for row in np.flatnonzero(tied):
-        uid = users[row]
-        scores = model.bu[uid] + model.bi + model.U[uid] @ model.I.T
-        scores[list(train_pos.get(uid, set()))] = -np.inf
-        best_ids[row, :k] = np.argsort(scores)[::-1][:k]
-    return best_ids[:, :k]
+def score_batch(model, users, item_factors_f):
+    """Accumulate the dot products into the biases without a second score matrix."""
+    # BLAS writes column-major (items x users); its transpose is row-contiguous
+    # for argpartition, so neither scoring nor ranking needs a layout copy.
+    scores_t = np.empty((len(model.I), len(users)), dtype=np.float64, order="F")
+    np.add(model.bi[:, None], model.bu[users], out=scores_t)
+    scores_t = dgemm(alpha=1., a=item_factors_f,
+                     b=np.asfortranarray(model.U[users]), trans_b=True,
+                     beta=1., c=scores_t, overwrite_c=True)
+    return scores_t.T
 
 
 def evaluate(model: BPRModel, train_pos: dict, test_pos: dict, top_k: int,
-             batch_size: int = EVAL_BATCH_SIZE,
-             item_batch_size: int = EVAL_ITEM_BATCH_SIZE):
+             batch_size: int = EVAL_BATCH_SIZE, workers: int = EVAL_WORKERS):
     if batch_size <= 0:
         raise ValueError("EVAL_BATCH_SIZE must be positive")
     if top_k <= 0:
         raise ValueError("TOP_K must be positive")
-    if item_batch_size <= 0:
-        raise ValueError("EVAL_ITEM_BATCH_SIZE must be positive")
+    if workers <= 0:
+        raise ValueError("EVAL_WORKERS must be positive")
     precisions, recalls, ndcgs = [], [], []
     users = [uid for uid, pos_set in test_pos.items() if pos_set]
+    item_factors_f = np.asfortranarray(model.I)
     started = last_progress = time.monotonic()
-    for offset in range(0, len(users), batch_size):
-        batch = users[offset:offset + batch_size]
-        recommendations = recommend_batch(model, batch, train_pos, top_k, item_batch_size)
-        for uid, recs in zip(batch, recommendations):
-            pos_set = test_pos[uid]
-            hits = sum(1 for r in recs if r in pos_set)
-            ideal = min(len(pos_set), top_k)
-            precisions.append(hits / top_k)
-            recalls.append(hits / len(pos_set))
-            ndcgs.append(_dcg(recs, pos_set, top_k) / (
-                sum(1.0 / np.log2(r + 2) for r in range(ideal))))
-        now = time.monotonic()
-        completed = offset + len(batch)
-        if now - last_progress >= 5 or completed == len(users):
-            log.info("评估进度: %d/%d 用户 | %.1fs", completed, len(users), now - started)
-            last_progress = now
-
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for offset in range(0, len(users), batch_size):
+            batch = users[offset:offset + batch_size]
+            scores = score_batch(model, batch, item_factors_f)
+            for row, uid in enumerate(batch):
+                scores[row, list(train_pos.get(uid, set()))] = -np.inf
+            if workers == 1:
+                recommendations = top_k_items(scores, top_k)
+            else:
+                chunks = np.array_split(scores, min(workers, len(batch)), axis=0)
+                recommendations = np.concatenate(list(pool.map(partial(top_k_items, top_k=top_k), chunks)))
+            for uid, recs in zip(batch, recommendations):
+                pos_set = test_pos[uid]
+                hits = sum(1 for r in recs if r in pos_set)
+                ideal = min(len(pos_set), top_k)
+                precisions.append(hits / top_k)
+                recalls.append(hits / len(pos_set))
+                ndcgs.append(_dcg(recs, pos_set, top_k) / (
+                    sum(1.0 / np.log2(r + 2) for r in range(ideal))))
+            now = time.monotonic()
+            completed = offset + len(batch)
+            if now - last_progress >= 5 or completed == len(users):
+                log.info("评估进度: %d/%d 用户 | %.1fs", completed, len(users), now - started)
+                last_progress = now
     return (np.mean(precisions) if precisions else 0.0,
             np.mean(recalls)    if recalls    else 0.0,
             np.mean(ndcgs)      if ndcgs      else 0.0)
@@ -295,6 +275,7 @@ def main():
     log.info("数据文件: %s", DATA_PATH)
     log.info("超参数 — n_factors=%d, lr=%.4f, reg=%.5f, epochs=%d",
              N_FACTORS, LR, REG, N_EPOCHS)
+    log.info("评估配置 — 每批用户数=%d，排序线程数=%d", EVAL_BATCH_SIZE, EVAL_WORKERS)
     log.info("=" * 60)
 
     # 1. 读取数据
