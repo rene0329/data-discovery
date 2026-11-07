@@ -1,0 +1,21 @@
+name: BPR runtime regression tests
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'training-images/recsys-bpr-optimized/**'
+      - '.github/workflows/bpr-runtime.yml'
+  pull_request:
+    paths:
+      - 'training-images/recsys-bpr-optimized/**'
+      - '.github/workflows/bpr-runtime.yml'
+jobs:
+  exact-evaluation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -r training-images/recsys-bpr-optimized/app/requirements.txt
+      - run: OPENBLAS_NUM_THREADS=2 python -m unittest discover -s training-images/recsys-bpr-optimized/tests
