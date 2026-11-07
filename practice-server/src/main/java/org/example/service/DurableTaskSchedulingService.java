@@ -91,9 +91,12 @@ public class DurableTaskSchedulingService {
     }
     @org.springframework.transaction.annotation.Transactional
     public void enqueueExternal(Long planId,Integer taskId,List<SchedulingAssignment> assignments) {
+        TaskManagement task=tasks.getTaskByTaskId(taskId);
+        if(task==null) throw new IllegalStateException("外部方案关联任务不存在");
         for(SchedulingAssignment a:assignments) {
             DurableTaskJob row=newJob(taskId,a.getDatasetId(),"EXTERNAL"); row.setPlanId(planId); row.setAssignmentId(a.getAssignmentId());
             row.setJobKey("external-"+a.getAssignmentId()); row.setReplicaId(a.getReplicaId());
+            row.setRuntimeImageId(task.getRuntimeImageId()); row.setOverridesJson(task.getResourceOverridesJson());
             NodeManagement target=nodes.getNodeById(a.getTargetNodeId());
             if(target==null) throw new IllegalStateException("外部方案目标节点不存在");
             row.setTargetNode(target.getNodeName()); row.setClusterId(target.getCluster()); jobs.insert(row);
@@ -160,13 +163,23 @@ public class DurableTaskSchedulingService {
             try {
                 RegisteredDataset dataset=datasets.findDatasetById(row.getDatasetId());
                 if(dataset==null || !"ACTIVE".equals(dataset.getStatus())) { fail(row,"数据集不可用"); continue; }
+                if("EXTERNAL".equals(row.getExecutionMode())) {
+                    // Older queued external jobs did not snapshot their parent task's explicit settings.
+                    TaskManagement parent=tasks.getTaskByTaskId(row.getTaskId());
+                    if(parent!=null) {
+                        if(row.getRuntimeImageId()==null) row.setRuntimeImageId(parent.getRuntimeImageId());
+                        if(row.getOverridesJson()==null || row.getOverridesJson().trim().isEmpty() || "null".equals(row.getOverridesJson().trim()))
+                            row.setOverridesJson(parent.getResourceOverridesJson());
+                    }
+                }
                 ResourceRequirements overrides=readOverrides(row);
                 long largestInput=datasets.listReplicas(row.getDatasetId()).stream().map(DatasetReplica::getSizeBytes)
                         .filter(Objects::nonNull).mapToLong(Long::longValue).max().orElse(0L);
                 double storageGi=Math.max(JobResourceDemand.DEFAULT_EPHEMERAL_STORAGE_GI, largestInput/1073741824.0*2+1);
                 Long imageId=row.getRuntimeImageId()!=null?row.getRuntimeImageId():dataset.getDefaultRuntimeImageId();
                 RuntimeImage image=imageId==null?null:images.findById(imageId);
-                if(image==null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())) { fail(row,"运行镜像不可用"); continue; }
+                if(image==null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())
+                        || image.getResolvedDigest()==null || image.getResolvedDigest().trim().isEmpty()) { fail(row,"运行镜像不可用"); continue; }
                 Double requestedGpu=overrides!=null && overrides.getGpu()!=null?overrides.getGpu():dataset.getRequiredGpu();
                 if(requestedGpu==null) requestedGpu=image.getDefaultGpu();
                 Double requestedCpu=overrides!=null && overrides.getCpu()!=null?overrides.getCpu():dataset.getRequiredCpu();
@@ -207,6 +220,8 @@ public class DurableTaskSchedulingService {
                         && row.getTargetNode().equals(orchestrator.getObject().resolveCentralNodeName())) row.setComparisonNode(row.getTargetNode());
                 row.setJobName("t4-"+row.getTaskId()+"-"+row.getId()+"-"+row.getAttempt());
                 row.setSubmittedAt(null); jobs.update(row); // identity commits BEFORE an API request can reach Kubernetes
+                if("EXTERNAL".equals(row.getExecutionMode()) && row.getAssignmentId()!=null)
+                    plans.updateAssignmentStatus(row.getAssignmentId(),"RUNNING",null);
                 recordSelection(row,selected,options,ledger);
                 ledger.reserve(selected.getComputeNode(),wanted);
                 counts.put(row.getTaskId(),counts.getOrDefault(row.getTaskId(),0L)+1);

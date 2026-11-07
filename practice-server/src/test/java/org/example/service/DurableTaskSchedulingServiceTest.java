@@ -63,7 +63,7 @@ class DurableTaskSchedulingServiceTest {
         when(nodes.getNodeByName("node-a")).thenReturn(a); when(nodes.getNodeByName("node-b")).thenReturn(b);
         when(nodes.getNodeById(1)).thenReturn(a); when(nodes.getNodeById(2)).thenReturn(b);
         when(placement.schedulableComputeNodes()).thenReturn(Arrays.asList(a,b));
-        when(images.findById(7L)).thenReturn(RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true).build());
+        when(images.findById(7L)).thenReturn(RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true).resolvedDigest("sha256:verified").build());
         when(factory.getClusterClients()).thenReturn(Collections.singletonMap("main",client));
         MixedOperation<Job,JobList,ScalableResource<Job>> jobApi=mock(MixedOperation.class,RETURNS_SELF);
         ScalableResource<Job> jobResource=mock(ScalableResource.class);
@@ -157,6 +157,36 @@ class DurableTaskSchedulingServiceTest {
                 .thenReturn(new JobBuilder().withNewMetadata().withName("collision").withUid("other").endMetadata().build());
         assertThrows(IllegalStateException.class,() -> service.deleteAndGone(row));
     }
+    @Test void externalEnqueueSnapshotsParentExplicitImageAndResourceOverrides() {
+        when(tasks.getTaskByTaskId(1)).thenReturn(TaskManagement.builder().taskId(1).runtimeImageId(4L)
+                .resourceOverridesJson("{\"cpu\":1.0,\"memoryGi\":2.0}").build());
+        SchedulingAssignment assignment=SchedulingAssignment.builder().assignmentId(20L).datasetId(1L).replicaId(1L)
+                .sourceNodeId(1).targetNodeId(2).action("REMOTE_READ").build();
+        service.enqueueExternal(10L,1,Collections.singletonList(assignment));
+        verify(jobs).insert(argThat(job -> Long.valueOf(4).equals(job.getRuntimeImageId())
+                && "{\"cpu\":1.0,\"memoryGi\":2.0}".equals(job.getOverridesJson())));
+    }
+    @Test void existingQueuedExternalJobUsesParentExplicitImageEvenWhenDatasetDefaultIsInvalid() {
+        DurableTaskJob row=add(1,1); row.setExecutionMode("EXTERNAL"); row.setTargetNode("node-b"); row.setReplicaId(1L);
+        row.setPlanId(10L); row.setAssignmentId(20L);
+        when(tasks.getTaskByTaskId(1)).thenReturn(TaskManagement.builder().taskId(1).runtimeImageId(4L)
+                .resourceOverridesJson("{\"cpu\":1.0,\"memoryGi\":2.0}").build());
+        when(images.findById(7L)).thenReturn(null);
+        when(images.findById(4L)).thenReturn(RuntimeImage.builder().runtimeImageId(4L).status("READY").enabled(true)
+                .resolvedDigest("sha256:explicit-image").build());
+        doAnswer(x -> { DurableTaskJob job=x.getArgument(0); job.setState("PREPARING"); throw new DurableTaskSchedulingService.JobPending(); })
+                .when(runner).advanceExternalJob(any());
+        reconcile(); assertEquals("PREPARING",row.getState()); assertEquals(4L,row.getRuntimeImageId());
+        assertEquals(1.0,row.getCpu()); assertEquals(2.0,row.getMemoryGi());
+        verify(images,never()).findById(7L); verify(runner).advanceExternalJob(row);
+        verify(plans).updateAssignmentStatus(20L,"RUNNING",null);
+    }
+    @Test void runtimeImageWithoutResolvedDigestIsRejectedBeforeCreatingAJob() {
+        DurableTaskJob row=add(1,1);
+        when(images.findById(7L)).thenReturn(RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true).build());
+        reconcile(); assertEquals("FAILED",row.getState()); assertNull(row.getJobName()); verifyNoInteractions(runner);
+    }
+
     @Test void explicitExternalTargetDoesNotRequireAnyMeasuredLogicalRoute() {
         DurableTaskJob row=add(1,1); row.setExecutionMode("EXTERNAL"); row.setTargetNode("node-b"); row.setReplicaId(1L);
         when(placement.candidates(anyList(),anyList())).thenReturn(Collections.emptyList());
