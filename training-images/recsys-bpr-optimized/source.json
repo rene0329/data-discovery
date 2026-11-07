@@ -13,5 +13,6 @@
   "validation_command": "python -m unittest discover -s training-images/recsys-bpr-optimized/tests",
   "benchmark_entrypoint": "python /tests/benchmark_training.py",
   "default_ranking_workers": 2,
-  "scoring": "BLAS accumulation into the original biases without an intermediate dot-product matrix"
+  "scoring": "BLAS accumulation into the original biases without an intermediate dot-product matrix",
+  "default_blas_threads": 1
 }

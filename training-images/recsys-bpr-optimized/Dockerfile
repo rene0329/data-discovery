@@ -5,7 +5,7 @@ FROM ${BASE_IMAGE}
 LABEL maintainer="practice-server"
 LABEL description="BPR matrix factorization with exact batched evaluation (CPU)"
 WORKDIR /app
-ENV OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2
+ENV OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 COPY app/requirements.txt /app/requirements.txt
 RUN python -c "from importlib.metadata import version; from pathlib import Path; requirements=[line.strip().split('==') for line in Path('/app/requirements.txt').read_text().splitlines() if line.strip()]; assert all(version(name)==expected for name,expected in requirements), requirements"
 COPY app/train.py /app/train.py
