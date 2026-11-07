@@ -51,6 +51,7 @@ TOP_K       = int(os.getenv("TOP_K",      "10"))
 TEST_RATIO  = float(os.getenv("TEST_RATIO","0.2"))
 SEED        = int(os.getenv("SEED",       "42"))
 EVAL_BATCH_SIZE = int(os.getenv("EVAL_BATCH_SIZE", "128"))
+EVAL_ITEM_BATCH_SIZE = int(os.getenv("EVAL_ITEM_BATCH_SIZE", "8192"))
 
 np.random.seed(SEED)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -207,23 +208,65 @@ def _dcg(ranked_list, pos_set, k):
     return dcg
 
 
+def recommend_batch(model, users, train_pos, top_k, item_batch_size):
+    """Merge exact block top-k candidates without a users x catalog allocation."""
+    if top_k <= 0 or item_batch_size <= 0:
+        raise ValueError("TOP_K and EVAL_ITEM_BATCH_SIZE must be positive")
+    n_items = len(model.I)
+    k = min(top_k, n_items)
+    if len(users) == 0 or k == 0:
+        return np.empty((len(users), k), dtype=np.intp)
+    # Retain one extra candidate to detect ties at the final top-k boundary.
+    keep = min(k + 1, n_items)
+    best_ids = np.empty((len(users), 0), dtype=np.intp)
+    best_scores = np.empty((len(users), 0), dtype=model.I.dtype)
+    excluded = defaultdict(list)
+    for row, uid in enumerate(users):
+        for iid in train_pos.get(uid, set()):
+            excluded[iid // item_batch_size].append((row, iid % item_batch_size))
+    user_factors, user_bias = model.U[users], model.bu[users, None]
+    for block, start in enumerate(range(0, n_items, item_batch_size)):
+        end = min(start + item_batch_size, n_items)
+        scores = user_bias + model.bi[start:end]
+        scores += user_factors @ model.I[start:end].T
+        if excluded[block]:
+            rows, columns = zip(*excluded[block])
+            scores[rows, columns] = -np.inf
+        local_ids = top_k_items(scores, keep)
+        local_scores = np.take_along_axis(scores, local_ids, axis=1)
+        ids = np.concatenate((best_ids, local_ids + start), axis=1)
+        values = np.concatenate((best_scores, local_scores), axis=1)
+        selected = top_k_items(values, keep)
+        best_ids = np.take_along_axis(ids, selected, axis=1)
+        best_scores = np.take_along_axis(values, selected, axis=1)
+    tied = np.any(best_scores[:, 1:k] == best_scores[:, :k - 1], axis=1)
+    if keep > k:
+        tied |= best_scores[:, k - 1] == best_scores[:, k]
+    # Full-array quicksort has an implementation-specific tie order. Recompute
+    # only tied rows with the original score expression and ordering.
+    for row in np.flatnonzero(tied):
+        uid = users[row]
+        scores = model.bu[uid] + model.bi + model.U[uid] @ model.I.T
+        scores[list(train_pos.get(uid, set()))] = -np.inf
+        best_ids[row, :k] = np.argsort(scores)[::-1][:k]
+    return best_ids[:, :k]
+
+
 def evaluate(model: BPRModel, train_pos: dict, test_pos: dict, top_k: int,
-             batch_size: int = EVAL_BATCH_SIZE):
+             batch_size: int = EVAL_BATCH_SIZE,
+             item_batch_size: int = EVAL_ITEM_BATCH_SIZE):
     if batch_size <= 0:
         raise ValueError("EVAL_BATCH_SIZE must be positive")
     if top_k <= 0:
         raise ValueError("TOP_K must be positive")
+    if item_batch_size <= 0:
+        raise ValueError("EVAL_ITEM_BATCH_SIZE must be positive")
     precisions, recalls, ndcgs = [], [], []
     users = [uid for uid, pos_set in test_pos.items() if pos_set]
     started = last_progress = time.monotonic()
     for offset in range(0, len(users), batch_size):
         batch = users[offset:offset + batch_size]
-        # Bound memory by batch size instead of allocating users x items.
-        scores = model.bu[batch, None] + model.bi
-        scores += model.U[batch] @ model.I.T
-        for row, uid in enumerate(batch):
-            scores[row, list(train_pos.get(uid, set()))] = -np.inf
-        recommendations = top_k_items(scores, top_k)
+        recommendations = recommend_batch(model, batch, train_pos, top_k, item_batch_size)
         for uid, recs in zip(batch, recommendations):
             pos_set = test_pos[uid]
             hits = sum(1 for r in recs if r in pos_set)

@@ -55,9 +55,26 @@ class EvaluationTest(unittest.TestCase):
         training.pop(3)
         for k in (1, 10, 100):
             for batch in (1, 4, 128):
-                with self.subTest(k=k, batch=batch):
-                    np.testing.assert_allclose(train.evaluate(model, training, testing, k, batch),
-                                               reference_evaluate(model, training, testing, k), rtol=0, atol=1e-15)
+                for items in (3, 17, 8192):
+                    with self.subTest(k=k, batch=batch, items=items):
+                        np.testing.assert_allclose(train.evaluate(model, training, testing, k, batch, items),
+                                                   reference_evaluate(model, training, testing, k), rtol=0, atol=1e-15)
+
+    def test_block_merging_preserves_global_tie_order(self):
+        model = train.BPRModel(3, 53, 8, .01, .001)
+        model.I[:] = 0
+        model.bi[:] = 0
+        model.bi[11:31] = 2
+        excluded = {0: {12, 22}, 1: set(range(53)), 2: set(range(52))}
+        for k in (1, 10, 53, 60):
+            for items in (3, 8, 13, 100):
+                actual = train.recommend_batch(model, [0, 1, 2], excluded, k, items)
+                expected = []
+                for u in range(3):
+                    scores = model.bu[u] + model.bi + model.U[u] @ model.I.T
+                    scores[list(excluded[u])] = -np.inf
+                    expected.append(np.argsort(scores)[::-1][:k])
+                np.testing.assert_array_equal(actual, expected)
 
     def test_recommend_excludes_seen_items(self):
         model = train.BPRModel(1, 20, 3, .01, .001)
