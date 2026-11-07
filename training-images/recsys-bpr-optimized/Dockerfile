@@ -1,29 +1,13 @@
-# ──────────────────────────────────────────────
-#  BPR 推荐系统训练镜像 (CPU-only, 轻量)
-# ──────────────────────────────────────────────
-FROM python:3.10-slim
+# Reuse the verified original runtime so benchmarks change only evaluation code.
+ARG BASE_IMAGE=ghcr.io/rene0329/trainer-recsys-bpr@sha256:9d8327e890df0ab04ab1356b7302d4e461e837d61698f8ec1a369d7a186d644f
+FROM ${BASE_IMAGE}
 
 LABEL maintainer="practice-server"
-LABEL description="BPR matrix factorization recommender (CPU)"
-
-# 设置工作目录
+LABEL description="BPR matrix factorization with exact batched evaluation (CPU)"
 WORKDIR /app
-
-# Avoid BLAS thread oversubscription on the 4-vCPU cloud nodes.
 ENV OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 MKL_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2
-
-# 安装系统依赖（gcc 用于编译 numpy 扩展）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# 安装 Python 依赖
 COPY app/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 拷贝训练脚本
+RUN python -c "from importlib.metadata import version; from pathlib import Path; requirements=[line.strip().split('==') for line in Path('/app/requirements.txt').read_text().splitlines() if line.strip()]; assert all(version(name)==expected for name,expected in requirements), requirements"
 COPY app/train.py /app/train.py
 COPY tests /tests
-
-# 默认入口
 ENTRYPOINT ["python", "/app/train.py"]
