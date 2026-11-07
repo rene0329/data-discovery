@@ -55,7 +55,7 @@ public class SchedulingService {
     /** A dataset lives in one place; at most one extra copy (e.g. an isolated verification copy) is allowed. */
     public static final int MAX_LIVE_REPLICAS = 2;
     private static final Set<String> PLAN_STATUSES = new HashSet<>(Arrays.asList(
-            "ACCEPTED", "RUNNING", "COMPLETED", "PARTIAL_COMPLETED", "FAILED"));
+            "ACCEPTED", "RUNNING", "COMPLETED", "PARTIAL_COMPLETED", "FAILED", "CANCELLED"));
 
     private final DatasetRegistrationMapper datasetMapper;
     private final NodeManagementMapper nodeMapper;
@@ -299,9 +299,12 @@ public class SchedulingService {
 
     private void dispatchAfterCommit(Long planId, Integer taskId,
                                      List<SchedulingAssignment> assignments) {
-        Runnable dispatch = taskId == null
-                ? () -> datasetSchedulingExecutor.execute(planId, assignments)
-                : () -> orchestrator.executeExternalPlan(planId, taskId, assignments);
+        if (taskId != null) {
+            // This entry point only inserts durable jobs. Commit them atomically with their plan.
+            orchestrator.executeExternalPlan(planId, taskId, assignments);
+            return;
+        }
+        Runnable dispatch = () -> datasetSchedulingExecutor.execute(planId, assignments);
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             dispatch.run();
             return;

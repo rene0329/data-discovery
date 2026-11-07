@@ -7,6 +7,9 @@ import org.example.dto.registration.TaskPreflightResult;
 import org.example.dto.registration.TaskRunComparison;
 import org.example.service.TaskV1Service;
 import org.example.service.ApiIdempotencyService;
+import org.example.service.DurableTaskSchedulingService;
+import org.example.entity.DurableTaskJob;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.example.vo.ApiV1Response;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,12 +23,16 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/tasks")
 public class TaskV1Controller {
     private final TaskV1Service service;
     private final ApiIdempotencyService idempotency;
+
+    @Autowired
+    private DurableTaskSchedulingService scheduling;
 
     public TaskV1Controller(TaskV1Service service, ApiIdempotencyService idempotency) {
         this.service = service;
@@ -52,6 +59,19 @@ public class TaskV1Controller {
     @GetMapping("/{taskId}")
     public ApiV1Response<TaskExecutionDetail> getExecution(@PathVariable Integer taskId) {
         return ApiV1Response.ok(service.getExecution(taskId));
+    }
+
+    @GetMapping("/{taskId}/jobs")
+    public ApiV1Response<List<DurableTaskJob>> jobs(@PathVariable Integer taskId) {
+        service.getExecution(taskId);
+        return ApiV1Response.ok(scheduling.listJobs(taskId));
+    }
+
+    @PostMapping("/{taskId}/cancel")
+    public ResponseEntity<ApiV1Response<List<DurableTaskJob>>> cancel(@PathVariable Integer taskId) {
+        service.getExecution(taskId);
+        scheduling.cancel(taskId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiV1Response.ok(scheduling.listJobs(taskId)));
     }
 
     @GetMapping("/runs/{acceptanceRunId}/comparison")

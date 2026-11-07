@@ -42,7 +42,7 @@ class DatasetDeletionMapperTest {
     void migrationGuardsIncludeLegacyIdsOnlyWhenPresent() {
         String sql = sql("countActiveMigrationReferences");
         assertTrue(sql.contains("registered_dataset_id = ?"));
-        assertTrue(sql.contains("status NOT IN ('COMPLETED', 'FAILED')"));
+        assertTrue(sql.contains("status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')"));
         assertFalse(sql.contains("AND data_id = ?"));
         params.put("legacyDataId", 7);
         assertTrue(sql("countActiveMigrationReferences")

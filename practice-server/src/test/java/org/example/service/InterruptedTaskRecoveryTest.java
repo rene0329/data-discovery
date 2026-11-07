@@ -100,6 +100,17 @@ class InterruptedTaskRecoveryTest {
     }
 
     @Test
+    void persistentTasksKeepTheirJobsAndReservationsAcrossRestart() {
+        org.example.mapper.DurableTaskJobMapper jobs = mock(org.example.mapper.DurableTaskJobMapper.class);
+        when(jobs.countByTask(243)).thenReturn(2);
+        org.springframework.test.util.ReflectionTestUtils.setField(recovery, "durableJobs", jobs);
+        recovery.afterSingletonsInstantiated();
+        verify(deleter, never()).delete();
+        verify(mapper, never()).failTask(anyInt());
+        verify(transactions, never()).getTransaction(any());
+    }
+
+    @Test
     void repeatStartupWithNoUnfinishedTasksDoesNothing() {
         when(mapper.listInterruptedTasks()).thenReturn(Collections.emptyList());
         recovery.afterSingletonsInstantiated();

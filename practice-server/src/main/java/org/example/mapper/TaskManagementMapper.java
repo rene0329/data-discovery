@@ -70,7 +70,7 @@ public interface TaskManagementMapper {
     // 仅统计未结束任务；已完成、失败和部分完成的历史记录不影响存储策略切换。
     @org.apache.ibatis.annotations.Select("SELECT COUNT(*) FROM task_management " +
             "WHERE status IS NULL OR status NOT IN " +
-            "('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED')")
+            "('已完成', '执行失败', '部分完成', '已取消', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED', 'CANCELLED')")
     int countUnfinishedTasks();
 
 }

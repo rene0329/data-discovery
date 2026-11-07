@@ -253,7 +253,7 @@ class InPlacePlacementServiceTest {
         assertNull(yelp.getResourceNote());
         assertEquals(InPlacePlacementService.Tier.NEAREST, epinions.getTier());
         assertEquals("master-215", epinions.getComputeNode().getNodeName());
-        assertEquals("cluster-sz-1 资源不足（需要 2 CPU / 1 GiB，空闲 1.88 CPU / 6.18 GiB）", epinions.getResourceNote());
+        assertTrue(epinions.getResourceNote().contains("空闲 1.88 CPU / 6.18 GiB 内存"));
         Map<String, Object> rejected = epinions.getDecisionEvents().stream()
                 .filter(event -> "PLACEMENT_CANDIDATE".equals(event.get("eventType"))
                         && "cluster-sz-1".equals(event.get("targetNode"))
@@ -276,6 +276,7 @@ class InPlacePlacementServiceTest {
         paths(7, path(3, 14.483, 6L), path(1, 14.245, 6L));
         NodeResourceLedger ledger = new NodeResourceLedger();
         ledger.put("cluster-sh-1", 0.5, 7.0);
+        ledger.put("master-215", 4.0, 8.0);
 
         InPlacePlacementService.Placement result = centralAware("master-40", "").place(
                 Collections.singletonList(replica(1, 7)), Arrays.asList(master40, master215, sh1),
@@ -300,6 +301,20 @@ class InPlacePlacementServiceTest {
         assertTrue(result.getRejectedReasons().get(0).startsWith("no compute node has enough free resources: "));
         assertTrue(result.getRejectedReasons().get(0).contains("master-215 资源不足"));
         assertTrue(result.getRejectedReasons().get(0).contains("master-40 资源不足"));
+    }
+
+    @Test
+    void orderedCandidatesKeepLocalFirstNetworkOrderingAndCentralFallback() {
+        paths(5, path(1, 1.0, 100L), path(3, 10.0, 50L), path(7, 20.0, 500L));
+        paths(7, path(1, 1.0, 1000L), path(3, 15.0, 100L));
+        List<InPlacePlacementService.Placement> choices = centralAware("master-40", "").candidates(
+                Arrays.asList(replica(1, 5), replica(2, 7)), Arrays.asList(master40, master215, sh1));
+        assertEquals(Arrays.asList("cluster-sh-1", "master-215", "master-215", "cluster-sh-1", "master-40", "master-40"),
+                choices.stream().map(item -> item.getComputeNode().getNodeName())
+                        .collect(java.util.stream.Collectors.toList()));
+        assertEquals(InPlacePlacementService.Tier.LOCAL, choices.get(0).getTier());
+        assertEquals(Long.valueOf(1), choices.get(1).getReplica().getReplicaId());
+        assertEquals(10.0, choices.get(1).getPath().getLatencyMs());
     }
 
     private InPlacePlacementService centralAware(String name, String ip) {

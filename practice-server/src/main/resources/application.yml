@@ -2,6 +2,11 @@ server:
   port: 8080
 
 spring:
+  task:
+    scheduling:
+      pool:
+        # Resource admission must keep progressing during replica verification and node synchronization.
+        size: 3
   output:
     ansi:
       enabled: ${APP_LOG_ANSI:always}
@@ -196,6 +201,10 @@ alioss:
 
 # 任务编排执行控制参数
 app:
+  resource-control:
+    poll-interval-ms: ${RESOURCE_CONTROL_POLL_INTERVAL_MS:3000}
+    max-active-jobs-per-task: ${RESOURCE_CONTROL_MAX_ACTIVE_JOBS_PER_TASK:4}
+    wait-timeout-minutes: ${RESOURCE_CONTROL_WAIT_TIMEOUT_MINUTES:1440}
   auth:
     internal-agent-token: ${APP_AUTH_INTERNAL_AGENT_TOKEN:}
     jwt:

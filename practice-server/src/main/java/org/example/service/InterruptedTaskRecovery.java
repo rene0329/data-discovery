@@ -20,9 +20,10 @@ import java.util.List;
 
 
 /**
- * The orchestrator runs in memory and cannot resume after a JVM restart.
- * Recreate deployment and a single replica ensure the previous executor has stopped.
- * Recover before HTTP startup, and stop orphaned jobs before releasing dataset reservations.
+ * Durable compute tasks retain their Jobs and are reconciled by DurableTaskSchedulingService.
+ * Legacy in-memory tasks cannot resume: stop their orphaned Jobs before releasing reservations.
+ * Keep a single backend replica with Recreate deployment: external COPY/MOVE preparation workers
+ * are process-local and must finish or stop before a replacement backend takes over.
  */
 @Service
 public class InterruptedTaskRecovery implements SmartInitializingSingleton {
@@ -33,6 +34,8 @@ public class InterruptedTaskRecovery implements SmartInitializingSingleton {
     private final TaskManagementMapper tasks;
     private final K8sJobFactory jobs;
     private final TransactionTemplate transaction;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private org.example.mapper.DurableTaskJobMapper durableJobs;
 
     public InterruptedTaskRecovery(TaskRecoveryMapper recovery, TaskManagementMapper tasks,
                                    K8sJobFactory jobs, PlatformTransactionManager transactions) {
@@ -46,6 +49,10 @@ public class InterruptedTaskRecovery implements SmartInitializingSingleton {
     public void afterSingletonsInstantiated() {
         List<TaskManagement> interrupted = recovery.listInterruptedTasks();
         for (TaskManagement task : interrupted) {
+            if (durableJobs != null && durableJobs.countByTask(task.getTaskId()) > 0) {
+                log.info("恢复持久化任务 {}，保留已有作业并继续同步状态", task.getTaskId());
+                continue;
+            }
             stopOrphanedJobs(task.getTaskId());
             transaction.execute(status -> {
                 if (recovery.failTask(task.getTaskId()) == 0) return null;

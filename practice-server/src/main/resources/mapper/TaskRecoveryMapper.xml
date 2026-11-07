@@ -5,19 +5,19 @@
     <select id="listInterruptedTasks" resultType="org.example.entity.TaskManagement">
         SELECT * FROM task_management
         WHERE status IS NULL OR status NOT IN
-            ('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED')
+            ('已完成', '执行失败', '部分完成', '已取消', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED', 'CANCELLED')
         ORDER BY task_id
     </select>
     <update id="failTask">
         UPDATE task_management SET status = '执行失败', finished_at = UTC_TIMESTAMP(3),
             execution_evidence_complete = 0
         WHERE task_id = #{taskId} AND (status IS NULL OR status NOT IN
-            ('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED'))
+            ('已完成', '执行失败', '部分完成', '已取消', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED', 'CANCELLED'))
     </update>
     <update id="failMigrations">
         UPDATE migration_task SET status = 'FAILED', error_message = #{reason},
             finished_at = UTC_TIMESTAMP(3), updated_at = UTC_TIMESTAMP()
-        WHERE task_id = #{taskId} AND (status IS NULL OR status NOT IN ('COMPLETED', 'FAILED'))
+        WHERE task_id = #{taskId} AND (status IS NULL OR status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED'))
     </update>
     <update id="failAssignments">
         UPDATE scheduling_assignment a JOIN scheduling_plan p ON p.plan_id = a.plan_id

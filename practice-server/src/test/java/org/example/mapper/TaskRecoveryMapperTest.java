@@ -29,7 +29,7 @@ class TaskRecoveryMapperTest {
                 }
             } else if (statement.equals("failMigrations")) {
                 assertTrue(sql.contains("task_id = ?"));
-                assertTrue(sql.contains("status NOT IN ('COMPLETED', 'FAILED')"));
+                assertTrue(sql.contains("status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')"));
             } else {
                 assertTrue(sql.contains("internal_task_id = ?"));
                 assertTrue(sql.contains("status IN ('ACCEPTED', 'RUNNING')"));

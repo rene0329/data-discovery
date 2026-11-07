@@ -791,7 +791,17 @@ class K8sTaskOrchestratorServiceTest {
                                                      NetworkTopologyService topology) {
         NodeAvailabilityService nodeAvailability = mock(NodeAvailabilityService.class);
         when(nodeAvailability.isSchedulable(any())).thenReturn(true);
-        return new InPlacePlacementService(nodes, availability, nodeAvailability, topology);
+        NodeResourceService resources = mock(NodeResourceService.class);
+        when(resources.snapshot(any())).thenAnswer(invocation -> {
+            NodeResourceLedger ledger = new NodeResourceLedger();
+            List<NodeManagement> compute = invocation.getArgument(0);
+            for (NodeManagement node : compute) {
+                ledger.put(NodeResourceLedger.key(node), 1000, 1000, 8, 1000);
+                ledger.putCapacity(NodeResourceLedger.key(node), 1000, 1000, 8, 1000);
+            }
+            return ledger;
+        });
+        return new InPlacePlacementService(nodes, availability, nodeAvailability, topology, "", "", resources);
     }
 
     private K8sTaskOrchestratorService aggregationService(DatasetRegistrationMapper datasets,

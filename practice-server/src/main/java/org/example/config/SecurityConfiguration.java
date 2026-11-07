@@ -49,6 +49,8 @@ public class SecurityConfiguration {
                         "/api/network/nodes/heartbeat",
                         "/api/network/probe-decision").hasRole("INTERNAL_AGENT")
                 .antMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                // Ordinary tasks do not yet carry an owner identity. Only administrators may stop them.
+                .antMatchers(HttpMethod.POST, "/api/v1/tasks/*/cancel").hasRole("ADMIN")
                 .antMatchers(HttpMethod.POST, "/api/v1/scheduling/storage-plans/preview")
                         .hasAnyRole("ADMIN", "DATA_OWNER")
                 .antMatchers(HttpMethod.POST,

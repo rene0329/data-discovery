@@ -42,6 +42,9 @@ public class CommonController {
     @Autowired
     private org.example.mapper.DatasetRegistrationMapper datasetRegistrationMapper;
 
+    @Autowired
+    private org.example.mapper.TaskLifecycleAdminMapper taskLifecycleAdminMapper;
+
     private final DataManagementMapper dataManagementMapper;
     private final NodeManagementMapper nodeManagementMapper;
     private final TaskManagementMapper taskManagementMapper;
@@ -256,11 +259,20 @@ public class CommonController {
     @Transactional
     public ResponseEntity<ApiResponse<Map<String, Object>>> clearTasks() {
         Map<String, Object> response = new HashMap<>();
+        if (taskManagementMapper.countUnfinishedTasks() > 0 || taskLifecycleAdminMapper.countActiveJobs() > 0) {
+            response.put("success", false);
+            response.put("message", "存在未结束任务，请先取消并等待资源释放后清空");
+            return ResponseEntity.status(409).body(ApiResponse.ok(response));
+        }
         try {
-            // 迁移记录引用 task_id；先删除明细，避免清空任务后留下孤立引用。
-            migrationTaskMapper.deleteAll();
-            taskManagementMapper.deleteAllTasks();
-            taskManagementMapper.resetAutoIncrement();
+            // Only delete the terminal identities observed here. A concurrent submission must survive.
+            for (TaskManagement task : taskManagementMapper.list("")) {
+                if (!isTerminalTask(task.getStatus())) continue;
+                if (taskLifecycleAdminMapper.countActiveJobsForTask(task.getTaskId()) > 0) continue;
+                migrationTaskMapper.deleteByTaskId(task.getTaskId());
+                taskLifecycleAdminMapper.deleteTerminalJobs(task.getTaskId());
+                taskManagementMapper.deleteTaskById(task.getTaskId());
+            }
             response.put("success", true);
         } catch (Exception e) {
             response.put("success", false);
@@ -411,6 +423,9 @@ public class CommonController {
      */
     @PostMapping("/updateTask")
     public ResponseEntity<ApiResponse<TaskManagement>> updateTask(@RequestBody TaskManagement task) {
+        if (task.getTaskId() != null && taskLifecycleAdminMapper.countJobsForTask(task.getTaskId()) > 0) {
+            return ResponseEntity.status(409).body(ApiResponse.error(409, "计算任务状态由调度系统维护，请使用取消接口"));
+        }
         taskManagementMapper.updateTask(task);
         TaskManagement refreshed = task.getTaskId() != null ? taskManagementMapper.getTaskByTaskId(task.getTaskId()) : task;
         return ResponseEntity.ok(ApiResponse.ok(refreshed));
@@ -428,12 +443,25 @@ public class CommonController {
             resp.put("message", "taskId is required");
             return ResponseEntity.badRequest().body(ApiResponse.ok(resp));
         }
+        TaskManagement existing = taskManagementMapper.getTaskByTaskId(task.getTaskId());
+        if ((existing != null && !isTerminalTask(existing.getStatus()))
+                || taskLifecycleAdminMapper.countActiveJobsForTask(task.getTaskId()) > 0) {
+            resp.put("success", false);
+            resp.put("message", "任务尚未结束，请先取消并等待资源释放后删除");
+            return ResponseEntity.status(409).body(ApiResponse.ok(resp));
+        }
         // 删除任务时同步清理其迁移明细。AUTO_INCREMENT 只保证唯一递增，
         // 单条删除产生空号是数据库的正常行为，不应复用已有任务的主键。
         migrationTaskMapper.deleteByTaskId(task.getTaskId());
+        taskLifecycleAdminMapper.deleteTerminalJobs(task.getTaskId());
         taskManagementMapper.deleteTaskById(task.getTaskId());
         resp.put("success", true);
         return ResponseEntity.ok(ApiResponse.ok(resp));
+    }
+
+    private static boolean isTerminalTask(String status) {
+        return Arrays.asList("已完成", "执行失败", "部分完成", "已取消",
+                "COMPLETED", "FAILED", "PARTIAL_COMPLETED", "CANCELLED").contains(status);
     }
 
     /**

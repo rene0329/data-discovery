@@ -44,7 +44,27 @@ class K8sJobFactoryTopologyTest {
         factory = new K8sJobFactory("unused", nodes, "cluster.local",
                 "curl:test", "python:test", "discovery", "default", 8080, "", 1, topology, availability);
         Map<String, KubernetesClient> clients = (Map<String, KubernetesClient>) ReflectionTestUtils.getField(factory, "clusterClients");
-        clients.put("cluster-a", mock(KubernetesClient.class));
+        KubernetesClient client = mock(KubernetesClient.class);
+        io.fabric8.kubernetes.client.dsl.NonNamespaceOperation<io.fabric8.kubernetes.api.model.Node,
+                io.fabric8.kubernetes.api.model.NodeList,
+                io.fabric8.kubernetes.client.dsl.Resource<io.fabric8.kubernetes.api.model.Node>> operation =
+                mock(io.fabric8.kubernetes.client.dsl.NonNamespaceOperation.class);
+        io.fabric8.kubernetes.client.dsl.Resource<io.fabric8.kubernetes.api.model.Node> resource =
+                mock(io.fabric8.kubernetes.client.dsl.Resource.class);
+        when(client.nodes()).thenReturn(operation);
+        when(operation.withName("cluster-bj-1")).thenReturn(resource);
+        when(resource.get()).thenReturn(new io.fabric8.kubernetes.api.model.NodeBuilder().withNewStatus().addNewCondition().withType("Ready").withStatus("True").endCondition()
+                .addToAllocatable("cpu", new io.fabric8.kubernetes.api.model.Quantity("4"))
+                .addToAllocatable("memory", new io.fabric8.kubernetes.api.model.Quantity("8Gi"))
+                .addToAllocatable("ephemeral-storage", new io.fabric8.kubernetes.api.model.Quantity("100Gi"))
+                .endStatus().build());
+        io.fabric8.kubernetes.client.dsl.MixedOperation<io.fabric8.kubernetes.api.model.Pod,
+                io.fabric8.kubernetes.api.model.PodList, io.fabric8.kubernetes.client.dsl.PodResource> pods =
+                mock(io.fabric8.kubernetes.client.dsl.MixedOperation.class, RETURNS_SELF);
+        when(client.pods()).thenReturn(pods);
+        doReturn(new io.fabric8.kubernetes.api.model.PodListBuilder().withItems(Collections.emptyList()).build())
+                .when(pods).list();
+        clients.put("cluster-a", client);
     }
 
     @Test
@@ -103,7 +123,14 @@ class K8sJobFactoryTopologyTest {
                 "cluster-hz-1", null, 0.5, 1.0, null, null, "scoped-read-token");
 
         assertEquals("cluster-hz-1", result.getSelectedNodeName());
-        assertEquals("cluster-hz-1", result.getJob().getSpec().getTemplate().getSpec().getNodeName());
+        io.fabric8.kubernetes.api.model.PodSpec spec = result.getJob().getSpec().getTemplate().getSpec();
+        assertNull(spec.getNodeName());
+        assertEquals("metadata.name", spec.getAffinity().getNodeAffinity()
+                .getRequiredDuringSchedulingIgnoredDuringExecution().getNodeSelectorTerms().get(0)
+                .getMatchFields().get(0).getKey());
+        assertEquals(Collections.singletonList("cluster-hz-1"), spec.getAffinity().getNodeAffinity()
+                .getRequiredDuringSchedulingIgnoredDuringExecution().getNodeSelectorTerms().get(0)
+                .getMatchFields().get(0).getValues());
     }
 
     @Test
@@ -147,6 +174,36 @@ class K8sJobFactoryTopologyTest {
                 .getJob().getSpec().getTemplate().getSpec().getInitContainers().get(0).getCommand().get(2);
         assertTrue(limited.contains(" --limit-rate 1536k"));
         assertFalse(local.contains("--limit-rate"));
+    }
+
+    @Test
+    void everyContainerHasCpuMemoryAndStorageBoundsMatchingAdmissionDemand() {
+        JobCreationResult result = factory.createDataProcessingJob("bounded-job", "cluster-hz-1",
+                "test.npz", "/dataset/test.npz", "cluster-bj-1", null,
+                2.0, 4.0, 1.0, null, "token", null, 30.0);
+        io.fabric8.kubernetes.api.model.PodSpec spec = result.getJob().getSpec().getTemplate().getSpec();
+        List<Container> all = new java.util.ArrayList<>(spec.getInitContainers());
+        all.addAll(spec.getContainers());
+        for (Container container : all) {
+            assertEquals(container.getResources().getRequests().get("cpu"), container.getResources().getLimits().get("cpu"));
+            assertEquals(container.getResources().getRequests().get("memory"), container.getResources().getLimits().get("memory"));
+            assertEquals("30.0Gi", container.getResources().getRequests().get("ephemeral-storage").toString());
+            assertEquals(container.getResources().getRequests().get("ephemeral-storage"),
+                    container.getResources().getLimits().get("ephemeral-storage"));
+        }
+        assertArrayEquals(new double[]{2, 4, 1, 30},
+                org.example.service.NodeResourceService.resourceRequests(spec), 1e-9);
+        assertEquals("30.0Gi", spec.getVolumes().get(0).getEmptyDir().getSizeLimit().toString());
+    }
+
+    @Test
+    void invalidResourceSpecificationsAreRejectedBeforeSubmission() {
+        for (Double cpu : Arrays.asList(0.0, -1.0, Double.NaN, Double.POSITIVE_INFINITY))
+            assertThrows(IllegalArgumentException.class, () -> factory.createDataProcessingJob("bad-job",
+                    "cluster-hz-1", "test.npz", "/dataset/test.npz", "cluster-bj-1", null, cpu, 1.0));
+        assertThrows(IllegalArgumentException.class, () -> factory.createDataProcessingJob("bad-gpu",
+                "cluster-hz-1", "test.npz", "/dataset/test.npz", "cluster-bj-1", null,
+                1.0, 1.0, 0.5, null));
     }
 
     private NodeManagement node(int id, String name) {

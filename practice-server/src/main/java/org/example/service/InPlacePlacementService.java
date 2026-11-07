@@ -101,9 +101,76 @@ public class InPlacePlacementService {
         return place(replicas, schedulableComputeNodes, null, null);
     }
 
+    /**
+     * Ordered source-replica/compute-node alternatives, independent of current capacity.
+     * The admission coordinator checks a fresh resource snapshot before choosing an alternative.
+     */
+    public List<Placement> candidates(List<DatasetReplica> replicas, List<NodeManagement> computeNodes) {
+        List<Candidate> sources = new ArrayList<>();
+        for (DatasetReplica replica : replicas == null ? Collections.<DatasetReplica>emptyList() : replicas) {
+            if (!replicaAvailabilityService.evaluate(replica).isUsable()) continue;
+            NodeManagement source = nodeMapper.getNodeById(replica.getNodeId());
+            if (source == null) source = computeNodes.stream()
+                    .filter(node -> Objects.equals(node.getNodeId(), replica.getNodeId())).findFirst().orElse(null);
+            if (source != null) sources.add(new Candidate(replica, source));
+        }
+        Map<String, Placement> ordered = new LinkedHashMap<>();
+        Map<Integer, Map<Integer, NetworkPath>> paths = new LinkedHashMap<>();
+        for (Candidate source : sources) {
+            paths.computeIfAbsent(source.node.getNodeId(), networkTopologyService::pathsFrom);
+            for (NodeManagement compute : computeNodes) {
+                if (Objects.equals(source.node.getNodeId(), compute.getNodeId()))
+                    addCandidate(ordered, source, compute, Tier.LOCAL, null);
+            }
+        }
+        List<NodeManagement> distributed = computeNodes.stream().filter(node -> !isCentral(node))
+                .collect(Collectors.toList());
+        appendNearbyCandidates(ordered, sources, distributed, paths);
+        appendNearbyCandidates(ordered, sources, computeNodes.stream().filter(this::isCentral)
+                .collect(Collectors.toList()), paths);
+        return Collections.unmodifiableList(new ArrayList<>(ordered.values()));
+    }
+
+    private void appendNearbyCandidates(Map<String, Placement> ordered, List<Candidate> sources,
+                                        List<NodeManagement> computes,
+                                        Map<Integer, Map<Integer, NetworkPath>> paths) {
+        for (Candidate source : sources) {
+            if (source.node.getSiteCode() == null) continue;
+            for (NodeManagement compute : computes) {
+                if (source.node.getSiteCode().equals(compute.getSiteCode()))
+                    addCandidate(ordered, source, compute, Tier.SAME_SITE,
+                            paths.get(source.node.getNodeId()).get(compute.getNodeId()));
+            }
+        }
+        List<Placement> remote = new ArrayList<>();
+        for (Candidate source : sources) {
+            for (NodeManagement compute : computes) {
+                NetworkPath path = paths.get(source.node.getNodeId()).get(compute.getNodeId());
+                if (path != null) remote.add(new Placement(source.replica, source.node, compute,
+                        Tier.NEAREST, path, Collections.emptyList(), null));
+            }
+        }
+        remote.sort(Comparator.comparingDouble((Placement item) -> item.getPath().getLatencyMs())
+                .thenComparing(Comparator.comparingLong((Placement item) -> item.getPath().getBandwidthMbps()).reversed())
+                .thenComparing(item -> item.getComputeNode().getNodeId())
+                .thenComparing(item -> String.valueOf(item.getComputeNode().getNodeName())));
+        for (Placement item : remote) addCandidate(ordered, new Candidate(item.replica, item.replicaNode),
+                item.computeNode, item.tier, item.path);
+    }
+
+    private void addCandidate(Map<String, Placement> ordered, Candidate source, NodeManagement target,
+                              Tier tier, NetworkPath path) {
+        String key = source.replica.getReplicaId() + "/" + NodeResourceLedger.key(target);
+        DecisionTrace trace = new DecisionTrace(null, null);
+        trace.add("SELECTED", source.replica.getReplicaId(), source.node, target, tier, path, "SELECTED",
+                "按本地、同站点、跨站点网络顺序选择候选；实际资源由统一调度协调器检查");
+        ordered.putIfAbsent(key, new Placement(source.replica, source.node, target, tier, path,
+                Collections.emptyList(), null, trace.events));
+    }
+
     /** Free resources of the given compute nodes for one placement pass; null when they cannot be read. */
     public NodeResourceLedger resourceLedger(List<NodeManagement> computeNodes) {
-        return nodeResourceService == null ? null : nodeResourceService.snapshot(computeNodes);
+        return nodeResourceService == null ? new NodeResourceLedger() : nodeResourceService.snapshot(computeNodes);
     }
 
     /** With a null ledger (or demand) resources are not checked, as before. */
@@ -279,6 +346,8 @@ public class InPlacePlacementService {
         return node == null || node.getNodeName() == null ? "node " + nodeId : node.getNodeName();
     }
 
+    private static String resourceKey(NodeManagement node) { return NodeResourceLedger.key(node); }
+
     /** The resource check of one placement; remembers the better nodes it had to skip. */
     private static final class Fit {
         private final JobResourceDemand demand;
@@ -294,21 +363,21 @@ public class InPlacePlacementService {
         }
 
         boolean fits(NodeManagement compute) {
-            return ledger == null || demand == null || ledger.fits(compute.getNodeName(), demand);
+            return ledger == null || demand == null || ledger.fits(resourceKey(compute), demand);
         }
 
         /** Like {@link #fits}, but a node that does not fit is recorded as skipped. */
         boolean accepts(NodeManagement compute) {
             if (fits(compute)) return true;
-            shortages.add(ledger.shortage(compute.getNodeName(), demand));
+            shortages.add(ledger.shortage(resourceKey(compute), demand));
             return false;
         }
 
         boolean accepts(Candidate source, NodeManagement compute, Tier tier, NetworkPath path,
                         boolean rememberShortage) {
             boolean fits = fits(compute);
-            String reason = !fits ? ledger.shortage(compute.getNodeName(), demand)
-                    : ledger == null || demand == null || ledger.availableCpu(compute.getNodeName()) == null
+            String reason = !fits ? ledger.shortage(resourceKey(compute), demand)
+                    : ledger == null || demand == null || ledger.availableCpu(resourceKey(compute)) == null
                     ? "没有完整的资源快照，按现有策略继续选择" : "CPU 和内存空闲资源满足请求";
             trace.add("CANDIDATE", source.replica.getReplicaId(), source.node, compute, tier, path,
                     fits ? "ELIGIBLE" : "REJECTED", reason);
@@ -317,7 +386,7 @@ public class InPlacePlacementService {
         }
 
         void reserve(NodeManagement compute) {
-            if (ledger != null && demand != null) ledger.reserve(compute.getNodeName(), demand);
+            if (ledger != null && demand != null) ledger.reserve(resourceKey(compute), demand);
         }
 
         String note() {
@@ -355,11 +424,11 @@ public class InPlacePlacementService {
             event.put("reason", reason);
             event.put("cpuRequested", demand == null ? null : demand.getCpu());
             event.put("memoryRequestedGi", demand == null ? null : demand.getMemoryGi());
-            event.put("cpuFree", ledger == null || target == null ? null : ledger.availableCpu(target.getNodeName()));
-            event.put("memoryFreeGi", ledger == null || target == null ? null : ledger.availableMemoryGi(target.getNodeName()));
+            event.put("cpuFree", ledger == null || target == null ? null : ledger.availableCpu(resourceKey(target)));
+            event.put("memoryFreeGi", ledger == null || target == null ? null : ledger.availableMemoryGi(resourceKey(target)));
             event.put("resourceCheck", ledger == null || demand == null || target == null
-                    || ledger.availableCpu(target.getNodeName()) == null ? "UNAVAILABLE"
-                    : ledger.fits(target.getNodeName(), demand) ? "PASSED" : "INSUFFICIENT");
+                    || ledger.availableCpu(resourceKey(target)) == null ? "UNAVAILABLE"
+                    : ledger.fits(resourceKey(target), demand) ? "PASSED" : "INSUFFICIENT");
             event.put("latencyMs", path == null ? null : path.getLatencyMs());
             event.put("bandwidthMbps", path == null ? null : path.getBandwidthMbps());
             event.put("pathNodeIds", path == null ? null : path.getNodeIds());

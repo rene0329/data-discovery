@@ -12,6 +12,7 @@ import io.fabric8.kubernetes.api.model.batch.v1.JobCondition;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import lombok.extern.slf4j.Slf4j;
 import org.example.entity.DataManagement;
+import org.example.entity.DurableTaskJob;
 import org.example.entity.MigrationTask;
 import org.example.entity.NodeManagement;
 import org.example.entity.RegisteredDataset;
@@ -97,6 +98,11 @@ public class K8sTaskOrchestratorService {
 
     private final InPlacePlacementService inPlacePlacement;
     private final DatasetHeatService heat;
+    @Autowired(required = false) private DurableTaskSchedulingService durableScheduling;
+    @Autowired(required = false) private FixedJobAccessSecretService jobAccessSecrets;
+    private final ThreadLocal<DurableTaskJob> durableContext = new ThreadLocal<>();
+    private final ThreadLocal<Boolean> externalPreparationOnly = new ThreadLocal<>();
+    private final Map<String, Map<String, ComputeLogState>> durableLogStates = new java.util.concurrent.ConcurrentHashMap<>();
     // 【架构修正#1】: 不再需要单例的KubernetesClient，已移除。
 
     /** 等待单个 K8s Job 完成的超时时间（分钟）。 */
@@ -155,12 +161,199 @@ public class K8sTaskOrchestratorService {
     }
 
 
+    void cleanupDurableCredential(DurableTaskJob row) {
+        durableLogStates.remove(row.getJobName());
+        if (jobAccessSecrets != null) jobAccessSecrets.removeToken(durableScheduling.client(row), row.getJobName());
+    }
+
+    void clearDurableTransfer(DurableTaskJob row) {
+        if (activeDataTransfers != null) activeDataTransfers.complete(row.getJobName());
+    }
+
+    DataItemResult advanceRegisteredJob(DurableTaskJob row, ResourceRequirements overrides) {
+        durableContext.set(row);
+        try { return processRegisteredDataItem(row.getTaskId(), row.getDatasetId(), row.getRuntimeImageId(),
+                overrides, row.getExecutionMode(), null); }
+        finally { durableContext.remove(); }
+    }
+
+    DataItemResult advanceExternalJob(DurableTaskJob row) {
+        durableContext.set(row);
+        try {
+            SchedulingAssignment assignment = schedulingPlanMapper.listAssignments(row.getPlanId()).stream()
+                    .filter(a -> row.getAssignmentId().equals(a.getAssignmentId())).findFirst()
+                    .orElseThrow(() -> new DurableTaskSchedulingService.JobFailed("外部方案操作不存在"));
+            return processExternalAssignment(row.getTaskId(), assignment);
+        } finally { durableContext.remove(); }
+    }
+
+    void prepareExternalJob(DurableTaskJob row) {
+        externalPreparationOnly.set(true);
+        try { advanceExternalJob(row); }
+        finally { externalPreparationOnly.remove(); }
+    }
+
+    @org.springframework.transaction.annotation.Transactional
+    public void finalizeDurableTask(Integer taskId, List<DurableTaskJob> rows) {
+        TaskManagement task = taskManagementMapper.getTaskByTaskId(taskId);
+        if (task == null) return;
+        try {
+            List<Long> ids = objectMapper.readValue(task.getDatasetIdsJson(), new TypeReference<List<Long>>() {});
+            Map<String, DataItemResult> results = new LinkedHashMap<>();
+            Set<Long> read = new LinkedHashSet<>();
+            for (DurableTaskJob row : rows) if ("COMPLETED".equals(row.getState()) && row.getResultJson() != null) {
+                DataItemResult result = objectMapper.readValue(row.getResultJson(), DataItemResult.class);
+                results.put(row.getDatasetId() + ":" + row.getExecutionMode(), result);
+                if (hasCompleteEvidence(result)) read.add(row.getDatasetId());
+            }
+            if (TaskV1Service.MODE_COMPARISON.equals(task.getExecutionMode())) {
+                updateComparisonTaskStatus(taskId, ids,
+                        ids.stream().map(id -> results.get(id + ":" + TaskV1Service.MODE_IN_PLACE)).collect(Collectors.toList()),
+                        ids.stream().map(id -> results.get(id + ":" + TaskV1Service.MODE_CENTRALIZED)).collect(Collectors.toList()));
+            } else {
+                List<DataItemResult> successful = new ArrayList<>(results.values());
+                updateRegisteredTaskStatus(taskId, task.getExecutionMode(), successful.stream()
+                        .map(DataItemResult::getScheduleT1).collect(Collectors.toList()), successful, ids.size());
+            }
+            if (results.isEmpty() && rows.stream().anyMatch(r -> "CANCELLED".equals(r.getState()))) {
+                TaskManagement cancelled = new TaskManagement(); cancelled.setTaskId(taskId);
+                cancelled.setStatus("已取消"); cancelled.setFinishedAt(DurableTaskSchedulingService.now());
+                taskManagementMapper.updateExecutionSummary(cancelled);
+            }
+            for (Long datasetId : read) {
+                DatasetHeatService.logAccessUpdate(datasetId, taskId, null, heat.recordAccess(datasetId));
+            }
+        } catch (Exception ex) { throw new IllegalStateException("无法汇总持久化作业结果", ex); }
+    }
+
+    private long advanceDurableKubernetesJob(DurableTaskJob row, String type, NodeManagement source,
+            DataManagement dataInfo, Long datasetId, RuntimeImage image, Double gpu,
+            AtomicReference<String> selectedNode, AtomicReference<JobExecutionEvidence> evidenceOut,
+            String comparisonNode) {
+        KubernetesClient client = durableScheduling.client(row);
+        Job job = client.batch().v1().jobs().inNamespace("default").withName(row.getJobName()).get();
+        String inputPath;
+        String token = null;
+        if (job == null) {
+            if (row.getJobUid() != null) throw new DurableTaskSchedulingService.JobFailed("已提交的作业丢失，拒绝自动重复执行");
+            durableScheduling.ensureMigration(row, dataInfo, source);
+            if (row.getSubmittedAt() == null) { row.setSubmittedAt(DurableTaskSchedulingService.now()); durableScheduling.save(row); }
+            token = issueReadToken(row.getTaskId(), row.getJobName(), datasetId, dataInfo, source);
+            if (jobAccessSecrets == null) throw new IllegalStateException("作业读取凭证存储服务不可用");
+            jobAccessSecrets.putToken(client, row.getJobName(), token);
+            row.setCredentialRefreshedAt(DurableTaskSchedulingService.now()); durableScheduling.save(row);
+            JobCreationResult created = k8sJobFactory.createDataProcessingJob(row.getJobName(), source.getNodeName(),
+                    dataInfo.getDataName(), dataInfo.getFilePath(), row.getTargetNode(), null,
+                    row.getCpu(), row.getMemoryGi(), row.getGpu(), image, token, row.getComparisonNode(), row.getEphemeralStorageGi());
+            Job spec = new JobBuilder(created.getJob()).editOrNewMetadata()
+                    .addToLabels(InterruptedTaskRecovery.TASK_LABEL, row.getTaskId().toString())
+                    .addToLabels("topic4.io/compute-job-id", row.getId().toString()).endMetadata()
+                    .editOrNewSpec().withTtlSecondsAfterFinished(null).withActiveDeadlineSeconds(null)
+                    .withBackoffLimit(0).editOrNewTemplate().editOrNewMetadata()
+                    .addToLabels(InterruptedTaskRecovery.TASK_LABEL, row.getTaskId().toString())
+                    .addToLabels("topic4.io/compute-job-id", row.getId().toString()).endMetadata()
+                    .endTemplate().endSpec().build();
+            spec.getSpec().getTemplate().getSpec().getInitContainers().stream()
+                    .filter(c -> "data-transfer-container".equals(c.getName())).forEach(c -> {
+                        c.getEnv().removeIf(e -> "DATASET_ACCESS_TOKEN".equals(e.getName()));
+                        c.getEnv().add(new io.fabric8.kubernetes.api.model.EnvVarBuilder().withName("DATASET_ACCESS_TOKEN")
+                                .withNewValueFrom().withNewSecretKeyRef().withName("topic4-compute-input-tokens")
+                                .withKey(row.getJobName()).withOptional(false).endSecretKeyRef().endValueFrom().build());
+                    });
+            try { job = client.batch().v1().jobs().inNamespace("default").create(spec); }
+            catch (io.fabric8.kubernetes.client.KubernetesClientException ex) {
+                if (ex.getCode() != 409) throw ex;
+                job = client.batch().v1().jobs().inNamespace("default").withName(row.getJobName()).get();
+                if (job == null) throw ex;
+            }
+            inputPath = created.getInputPath();
+        } else {
+            if (job.getMetadata().getLabels() == null || !row.getId().toString().equals(job.getMetadata().getLabels().get("topic4.io/compute-job-id")))
+                throw new DurableTaskSchedulingService.JobFailed("作业身份冲突");
+            inputPath = job.getSpec().getTemplate().getSpec().getContainers().stream()
+                    .filter(c -> "processing-container".equals(c.getName())).flatMap(c -> c.getEnv().stream())
+                    .filter(e -> "DATA_PATH".equals(e.getName())).map(io.fabric8.kubernetes.api.model.EnvVar::getValue)
+                    .findFirst().orElseThrow(() -> new DurableTaskSchedulingService.JobFailed("作业缺少输入路径"));
+        }
+        if (row.getJobUid() != null && !row.getJobUid().equals(job.getMetadata().getUid()))
+            throw new DurableTaskSchedulingService.JobFailed("作业UID与持久化记录不一致");
+        row.setJobUid(job.getMetadata().getUid()); durableScheduling.save(row);
+        List<Pod> pods = client.pods().inNamespace("default").withLabel("job-name", row.getJobName()).list().getItems();
+        boolean transferStarted = pods.stream().filter(p -> p.getStatus() != null && p.getStatus().getInitContainerStatuses() != null)
+                .flatMap(p -> p.getStatus().getInitContainerStatuses().stream())
+                .anyMatch(c -> "data-transfer-container".equals(c.getName()) && c.getState() != null
+                        && (c.getState().getRunning() != null || c.getState().getTerminated() != null));
+        if (!transferStarted && (row.getCredentialRefreshedAt() == null
+                || row.getCredentialRefreshedAt().plusMinutes(5).isBefore(DurableTaskSchedulingService.now()))) {
+            if (jobAccessSecrets == null) throw new IllegalStateException("作业读取凭证存储服务不可用");
+            token = issueReadToken(row.getTaskId(), row.getJobName(), datasetId, dataInfo, source);
+            jobAccessSecrets.putToken(client, row.getJobName(), token);
+            row.setCredentialRefreshedAt(DurableTaskSchedulingService.now()); durableScheduling.save(row);
+        }
+        Pod bound = pods.stream().filter(p -> p.getSpec() != null && p.getSpec().getNodeName() != null
+                && !p.getSpec().getNodeName().isEmpty()).findFirst().orElse(null);
+        if (bound == null) {
+            row.setWaitingReason("等待Kubernetes确认目标节点资源");
+            throw new DurableTaskSchedulingService.JobPending();
+        }
+        if (!row.getTargetNode().equals(bound.getSpec().getNodeName())) throw new DurableTaskSchedulingService.JobFailed("作业运行节点不符合资源分配结果");
+        if (row.getBoundAt() == null) {
+            row.setBoundAt(DurableTaskSchedulingService.now());
+            TaskManagement task = taskManagementMapper.getTaskByTaskId(row.getTaskId());
+            if (task != null && task.getStartedAt() == null) {
+                TaskManagement started = new TaskManagement(); started.setTaskId(row.getTaskId()); started.setStartedAt(row.getBoundAt());
+                taskManagementMapper.updateExecutionSummary(started);
+            }
+        }
+        if (!"RUNNING".equals(row.getState())) row.setState("PREPARING");
+        if (hasJobCondition(job, "Failed")) throw new DurableTaskSchedulingService.JobFailed("Kubernetes作业执行失败");
+        Instant preparationFinished = null;
+        if (activeDataTransfers != null && !"RUNNING".equals(row.getState()))
+            activeDataTransfers.begin(row.getJobName(), source.getNodeName(), row.getTargetNode());
+        try {
+            InitContainerEvidence prepared = waitForInitContainerEvidence(client, row.getJobName(), "data-transfer-container",
+                    Math.max(1, jobWaitTimeoutMinutes), row.getTaskId(), type, source.getNodeName(), row.getTargetNode());
+            validateInputEvidence(dataInfo, prepared);
+            preparationFinished = prepared.finishedAt;
+            if (activeDataTransfers != null) activeDataTransfers.complete(row.getJobName());
+            if (!"RUNNING".equals(row.getState())) {
+                if (datasetId != null) persistPreparationEvents(row.getTaskId(), datasetId, type, row.getJobName(), inputPath, prepared, row.getAttempt());
+                row.setState("RUNNING"); row.setWaitingReason(null); durableScheduling.save(row);
+                durableScheduling.migrationState(row,"VERIFYING");
+            }
+            ProcessingEvidence computed = waitForJobCompletion(client, row.getJobName(), Math.max(1, jobWaitTimeoutMinutes),
+                    row.getTaskId(), datasetId, dataInfo.getDataName(), type, image, inputPath, token, row.getAttempt()+1);
+            if (Duration.between(computed.startedAt, computed.finishedAt).toMillis() > Math.max(1, jobWaitTimeoutMinutes)*60000L)
+                throw new DurableTaskSchedulingService.JobFailed("计算阶段超过执行时限");
+            if (datasetId != null) persistComputeEvents(row.getTaskId(), datasetId, type, row.getJobName(), inputPath, computed, row.getAttempt());
+            if (selectedNode != null) selectedNode.set(row.getTargetNode());
+            if (evidenceOut != null) evidenceOut.set(new JobExecutionEvidence(prepared.startedAt, prepared.finishedAt,
+                    computed.startedAt, computed.finishedAt, computed.nodeName, prepared.inputBytes,
+                    prepared.inputChecksumSha256, computed.outputChecksumSha256));
+            return prepared.durationMs;
+        } catch (DurableTaskSchedulingService.JobPending pending) {
+            if ("RUNNING".equals(row.getState()) && preparationFinished != null
+                    && preparationFinished.plusSeconds(Math.max(1, jobWaitTimeoutMinutes)*60L).isBefore(Instant.now()))
+                throw new DurableTaskSchedulingService.JobFailed("计算阶段超时");
+            if (!"RUNNING".equals(row.getState()) && row.getBoundAt().plusMinutes(Math.max(1,jobWaitTimeoutMinutes)).isBefore(DurableTaskSchedulingService.now()))
+                throw new DurableTaskSchedulingService.JobFailed("数据准备阶段超时");
+            throw pending;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt(); throw new DurableTaskSchedulingService.JobPending();
+        } catch (io.fabric8.kubernetes.client.KubernetesClientException ex) { throw ex; }
+        catch (IllegalStateException ex) { throw new DurableTaskSchedulingService.JobFailed(ex.getMessage()); }
+    }
+
     @Async
     public void executeRegisteredTask(Integer taskId, List<Long> datasetIds,
                                       Long explicitRuntimeImageId,
                                       ResourceRequirements overrides,
                                       String executionMode) {
         final String normalizedMode = normalizeExecutionMode(executionMode);
+        if (durableScheduling != null) {
+            durableScheduling.enqueueRegistered(taskId, datasetIds, explicitRuntimeImageId, overrides, normalizedMode);
+            return;
+        }
         log.info("【任务】异步任务开始 taskId={} mode={} datasetIds={}", taskId, normalizedMode, datasetIds);
         TaskManagement running = new TaskManagement();
         running.setTaskId(taskId);
@@ -297,9 +490,12 @@ public class K8sTaskOrchestratorService {
         });
     }
 
-    @Async
     public void executeExternalPlan(Long planId, Integer taskId,
                                     List<SchedulingAssignment> assignments) {
+        if (durableScheduling != null) {
+            durableScheduling.enqueueExternal(planId, taskId, assignments);
+            return;
+        }
         schedulingPlanMapper.updatePlanStatus(planId, "RUNNING", null);
         // 调度结果页按目标节点展示：每个目标节点一个分组，保持 assignment 提交顺序。
         Map<String, List<String>> schedulesByTarget = new LinkedHashMap<>();
@@ -417,7 +613,8 @@ public class K8sTaskOrchestratorService {
         if (!SchedulingService.isComputeNode(targetNode)) throw new IllegalStateException("目标节点不具备计算能力");
         // Validate the selected image before any transfer or source deletion.
         TaskManagement task = taskManagementMapper.getTaskByTaskId(taskId);
-        Long imageId = task != null && task.getRuntimeImageId() != null
+        Long imageId = durableContext.get() != null && durableContext.get().getRuntimeImageId() != null
+                ? durableContext.get().getRuntimeImageId() : task != null && task.getRuntimeImageId() != null
                 ? task.getRuntimeImageId() : dataset.getDefaultRuntimeImageId();
         RuntimeImage image = imageId == null ? null : runtimeImageMapper.findById(imageId);
         if (image == null || !"READY".equals(image.getStatus()) || !Boolean.TRUE.equals(image.getEnabled())
@@ -433,11 +630,43 @@ public class K8sTaskOrchestratorService {
         if (("COPY_AND_USE".equals(assignment.getAction())
                 || "MOVE_AND_USE".equals(assignment.getAction()))
                 && !sourceNode.getNodeId().equals(targetNode.getNodeId())) {
+            if (durableContext.get() != null && !Boolean.TRUE.equals(durableContext.get().getExternalPrepared())
+                    && !Boolean.TRUE.equals(externalPreparationOnly.get())) {
+                durableContext.get().setState("PREPARING");
+                durableContext.get().setWaitingReason("正在复制或迁移数据副本");
+                durableScheduling.requestExternalPreparation(durableContext.get());
+                throw new DurableTaskSchedulingService.JobPending();
+            }
             DatasetMetadata metadata = datasetRegistrationMapper.findDatasetMetadata(dataset.getDatasetId());
             Long authoritativeSize = requireAuthoritativeSize(metadata);
             String authoritativeSha256 = requireAuthoritativeSha256(metadata);
             DatasetReplica targetReplica = datasetRegistrationMapper.findReplicaByDatasetNodePath(
                     dataset.getDatasetId(), targetNode.getNodeId(), replica.getFilePath());
+            boolean validTarget = targetReplica != null && "AVAILABLE".equals(targetReplica.getAvailability())
+                    && Objects.equals(authoritativeSize, targetReplica.getSizeBytes())
+                    && authoritativeSha256.equalsIgnoreCase(targetReplica.getChecksum());
+            boolean prepared = durableContext.get() != null && (Boolean.TRUE.equals(durableContext.get().getExternalPrepared()) || validTarget);
+            if (prepared) {
+                if (targetReplica == null || !"AVAILABLE".equals(targetReplica.getAvailability())
+                        || !Objects.equals(authoritativeSize, targetReplica.getSizeBytes())
+                        || !authoritativeSha256.equalsIgnoreCase(targetReplica.getChecksum())) {
+                    throw new DurableTaskSchedulingService.JobFailed("已完成复制的目标副本不再满足版本校验");
+                }
+                executionSource = targetNode;
+                executionSize = targetReplica.getSizeBytes();
+                executionChecksumAlgorithm = "SHA-256";
+                executionChecksum = targetReplica.getChecksum();
+                if (durableContext.get() != null && !Boolean.TRUE.equals(durableContext.get().getExternalPrepared())) {
+                    if ("MOVE_AND_USE".equals(assignment.getAction()) && !"MISSING".equals(replica.getAvailability())) {
+                        String requestId = "task-" + taskId + "-assignment-" + assignment.getAssignmentId();
+                        datasetUploadClient.delete(sourceNode, replica.getFilePath(), dataset.getDatasetId(),
+                                dataset.getDatasetVersion(), requestId, task == null ? null : task.getAcceptanceRunId());
+                        datasetRegistrationMapper.updateReplicaAvailability(replica.getReplicaId(), "MISSING", false);
+                    }
+                    durableContext.get().setExternalPrepared(true);
+                    durableScheduling.markExternalPrepared(durableContext.get());
+                }
+            } else {
             if (targetReplica == null) {
                 targetReplica = DatasetReplica.builder()
                         .datasetId(dataset.getDatasetId())
@@ -486,7 +715,13 @@ public class K8sTaskOrchestratorService {
                 datasetRegistrationMapper.updateReplicaAvailability(
                         replica.getReplicaId(), "MISSING", false);
             }
+            if (durableContext.get() != null) {
+                durableContext.get().setExternalPrepared(true);
+                durableScheduling.markExternalPrepared(durableContext.get());
+            }
+            }
         }
+        if (Boolean.TRUE.equals(externalPreparationOnly.get())) return null;
         String fileName = replica.getFilePath();
         int slash = fileName == null ? -1 : fileName.lastIndexOf('/');
         if (slash >= 0) fileName = fileName.substring(slash + 1);
@@ -538,7 +773,12 @@ public class K8sTaskOrchestratorService {
         String targetNodeName;
         DatasetReplica replica;
         String placementNote = null;
-        if (TaskV1Service.MODE_IN_PLACE.equals(executionMode)) {
+        DurableTaskJob durableJob = durableContext.get();
+        if (durableJob != null && durableJob.getReplicaId() != null && durableJob.getTargetNode() != null) {
+            replica = replicas.stream().filter(r -> durableJob.getReplicaId().equals(r.getReplicaId()))
+                    .findFirst().orElseThrow(() -> new DurableTaskSchedulingService.JobFailed("已分配的源副本不存在"));
+            targetNodeName = durableJob.getTargetNode();
+        } else if (TaskV1Service.MODE_IN_PLACE.equals(executionMode)) {
             // Same helper as TaskV1Service preflight: the replica's own compute node, else a
             // compute node in the replica's site, else the nearest reachable compute node in
             // any site (by network latency, then bandwidth).
@@ -694,7 +934,7 @@ public class K8sTaskOrchestratorService {
      * 节点名已显式配置时直接用于 K8s 调度，并用 IP 对节点表做一致性检查。
      * 节点同步尚未完成时允许继续使用显式节点名；未配置节点名时才按 IP 解析。
      */
-    private String resolveCentralNodeName() {
+    String resolveCentralNodeName() {
         String configuredName = centralNodeName == null ? "" : centralNodeName.trim();
         String configuredIp = centralNodeIp == null ? "" : centralNodeIp.trim();
 
@@ -772,6 +1012,10 @@ public class K8sTaskOrchestratorService {
                                                    Double gpuRequest, AtomicReference<String> selectedNodeOut,
                                                    AtomicReference<JobExecutionEvidence> evidenceOut,
                                                    String comparisonNode) {
+        if (durableContext.get() != null) {
+            return advanceDurableKubernetesJob(durableContext.get(), type, sourceNodeInfo, dataInfo,
+                    registeredDatasetId, runtimeImage, gpuRequest, selectedNodeOut, evidenceOut, comparisonNode);
+        }
         String dataNameForJob = dataInfo.getDataName() == null
                 ? "dataset"
                 : dataInfo.getDataName().toLowerCase().replace("_", "-");
@@ -1071,6 +1315,7 @@ public class K8sTaskOrchestratorService {
             if (hasJobCondition(currentJob, "Failed")) {
                 throw new IllegalStateException("Job " + jobName + " 在数据传输阶段失败");
             }
+            if (durableContext.get() != null) throw new DurableTaskSchedulingService.JobPending();
             TimeUnit.MILLISECONDS.sleep(pollMs);
         }
         throw new IllegalStateException("等待 Job " + jobName + " 的数据传输阶段超时（"
@@ -1085,7 +1330,8 @@ public class K8sTaskOrchestratorService {
                                                     int attempt) throws InterruptedException {
         long deadlineNanos = System.nanoTime() + TimeUnit.MINUTES.toNanos(timeoutMinutes);
         long pollMs = Math.max(200L, statusPollIntervalMs);
-        Map<String, ComputeLogState> logStates = new LinkedHashMap<>();
+        Map<String, ComputeLogState> logStates = durableContext.get() == null ? new LinkedHashMap<>()
+                : durableLogStates.computeIfAbsent(jobName, ignored -> new LinkedHashMap<>());
         while (System.nanoTime() < deadlineNanos) {
             Job job = client.batch().v1().jobs().inNamespace("default").withName(jobName).get();
             List<Pod> pods = client.pods().inNamespace("default")
@@ -1125,6 +1371,7 @@ public class K8sTaskOrchestratorService {
                         taskId, datasetId, datasetName, jobName);
                 throw new IllegalStateException("Job " + jobName + " 的处理容器执行失败");
             }
+            if (durableContext.get() != null) throw new DurableTaskSchedulingService.JobPending();
             TimeUnit.MILLISECONDS.sleep(pollMs);
         }
         throw new IllegalStateException("等待 Job " + jobName + " 完成超时（" + timeoutMinutes + " 分钟）");

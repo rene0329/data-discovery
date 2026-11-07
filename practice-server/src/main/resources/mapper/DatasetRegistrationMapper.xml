@@ -261,7 +261,7 @@
             <if test="legacyDataId != null">
                 OR (registered_dataset_id IS NULL AND data_id = #{legacyDataId})
             </if>
-        ) AND status NOT IN ('COMPLETED', 'FAILED')
+        ) AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
     </select>
 
     <select id="countActiveSchedulingReferences" resultType="int">
@@ -291,7 +291,7 @@
     <select id="countActiveTaskReferences" resultType="int">
         SELECT COUNT(*) FROM task_management
         WHERE (status IS NULL OR status NOT IN
-            ('已完成', '执行失败', '部分完成', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED'))
+            ('已完成', '执行失败', '部分完成', '已取消', 'COMPLETED', 'FAILED', 'PARTIAL_COMPLETED', 'CANCELLED'))
         AND CASE WHEN JSON_VALID(dataset_ids_json)
             THEN JSON_CONTAINS(dataset_ids_json, CAST(#{datasetId} AS JSON))
             ELSE (LOCATE(#{datasetName}, selected_data) &gt; 0 OR EXISTS (

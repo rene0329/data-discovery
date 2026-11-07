@@ -49,6 +49,8 @@ public class TaskV1Service {
     private final DatasetUsagePolicyService usagePolicy;
     private final InPlacePlacementService inPlacePlacement;
     private final String centralNodeName;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private DurableTaskSchedulingService durableScheduling;
 
     static final String MODE_CENTRALIZED = "CENTRALIZED";
     static final String MODE_IN_PLACE = "IN_PLACE";
@@ -132,6 +134,10 @@ public class TaskV1Service {
         taskMapper.submitData(task);
         auditMapper.insert("TASK", String.valueOf(task.getTaskId()), "CREATE", "system", requestId,
                 writeJson(request));
+        if (durableScheduling != null) {
+            durableScheduling.enqueueRegistered(task.getTaskId(), request.getDatasetIds(),
+                    request.getRuntimeImageId(), request.getResourceOverrides(), executionMode);
+        } else {
         DatasetOperationGuard.afterCommit(() -> {
             log.info("【任务】异步任务已提交 taskId={} mode={} requestId={}", task.getTaskId(), executionMode, requestId);
             try {
@@ -142,6 +148,7 @@ public class TaskV1Service {
                 throw ex;
             }
         });
+        }
         return taskCreated(task);
     }
 
@@ -196,9 +203,10 @@ public class TaskV1Service {
             throw RegistrationException.invalid("datasetIds must be unique and non-null");
         }
         ResourceRequirements resources = request.getResourceOverrides();
-        if (resources != null && (negative(resources.getCpu()) || negative(resources.getMemoryGi())
-                || negative(resources.getGpu()))) {
-            throw RegistrationException.invalid("resourceOverrides values must not be negative");
+        if (resources != null && (invalidPositive(resources.getCpu()) || invalidPositive(resources.getMemoryGi())
+                || (resources.getGpu() != null && (!Double.isFinite(resources.getGpu()) || resources.getGpu() < 0
+                    || resources.getGpu() != Math.rint(resources.getGpu()))))) {
+            throw RegistrationException.invalid("CPU和内存必须为有限正数，GPU必须为非负整数");
         }
         normalizeExecutionMode(request.getExecutionMode());
         if (request.getAcceptanceRunId() != null && request.getAcceptanceRunId().trim().length() > 128) {
@@ -208,6 +216,8 @@ public class TaskV1Service {
             throw RegistrationException.invalid("runRound must be at least 1");
         }
     }
+
+    private boolean invalidPositive(Double value) { return value != null && (!Double.isFinite(value) || value <= 0); }
 
     public TaskPreflightResult preflight(CreateTaskRequest request) {
         validate(request);
@@ -311,7 +321,8 @@ public class TaskV1Service {
         // replica's site, else the nearest reachable compute node in any site. Like the
         // orchestrator, the datasets share one resource ledger in request order.
         List<TaskPreflightCheck> checks = new ArrayList<>();
-        NodeResourceLedger ledger = inPlacePlacement.resourceLedger(availableNodes);
+        // Capacity may be temporarily exhausted; preflight validates topology, admission waits for resources.
+        NodeResourceLedger ledger = null;
         for (Long datasetId : datasetIds) {
             RegisteredDataset dataset = datasetMapper.findDatasetById(datasetId);
             List<DatasetReplica> replicas = dataset == null || !"ACTIVE".equals(dataset.getStatus())

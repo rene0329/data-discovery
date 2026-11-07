@@ -13,6 +13,8 @@ import org.example.entity.RuntimeImage;
 import org.example.service.DataTransferAddressResolver;
 import org.example.service.DataTransferRateLimitService;
 import org.example.service.JobResourceDemand;
+import org.example.service.NodeResourceService;
+import org.example.service.NodeResourceLedger;
 import org.example.service.NetworkTopologyService;
 import org.example.mapper.NodeManagementMapper;
 import org.example.service.NodeAvailabilityService;
@@ -322,14 +324,28 @@ public class K8sJobFactory {
                                                      Double cpuRequest, Double memoryRequest, Double gpuRequest,
                                                      RuntimeImage runtimeImage, String datasetAccessToken,
                                                      String comparisonNode) {
+        return createDataProcessingJob(jobName, sourceNodeName, dataFileName, dataFilePath,
+                overrideTargetNode, excludedTargetNode, cpuRequest, memoryRequest, gpuRequest,
+                runtimeImage, datasetAccessToken, comparisonNode, JobResourceDemand.DEFAULT_EPHEMERAL_STORAGE_GI);
+    }
+
+    /** Explicit storage request must match the admission coordinator's Pod demand. */
+    public JobCreationResult createDataProcessingJob(String jobName, String sourceNodeName,
+                                                     String dataFileName, String dataFilePath,
+                                                     String overrideTargetNode, String excludedTargetNode,
+                                                     Double cpuRequest, Double memoryRequest, Double gpuRequest,
+                                                     RuntimeImage runtimeImage, String datasetAccessToken,
+                                                     String comparisonNode, Double ephemeralStorageGi) {
 
         // 未显式传入 runtimeImage 时，不再按数据集文件名猜测训练配置（旧的 training_profile
         // 关键字匹配已随注册中心的 RuntimeImage 体系下线），一律用固定的通用默认值。
-        JobResourceDemand demand = JobResourceDemand.of(cpuRequest, memoryRequest);
+        Double requestedGpu = gpuRequest != null ? gpuRequest
+                : (runtimeImage != null ? runtimeImage.getDefaultGpu() : null);
+        JobResourceDemand demand = JobResourceDemand.of(cpuRequest, memoryRequest, requestedGpu, ephemeralStorageGi);
         double effectiveCpu = demand.getCpu();
         double effectiveMem = demand.getMemoryGi();
-        double effectiveGpu = gpuRequest != null ? gpuRequest
-                : (runtimeImage != null && runtimeImage.getDefaultGpu() != null ? runtimeImage.getDefaultGpu() : 0.0);
+        double effectiveGpu = demand.getGpu();
+        String storageQuantity = demand.getEphemeralStorageGi() + "Gi";
         String selectedMainImage = runtimeImage != null
                 ? immutableImageRef(runtimeImage.getImageRef(), runtimeImage.getResolvedDigest())
                 : mainContainerImage;
@@ -386,7 +402,7 @@ public class K8sJobFactory {
             bestNode = new CandidateNode(overrideTargetNode, overrideTargetClusterId, 0.0, 0.0, 0.0, 0.0, 0, 0.0, 0.0);
         } else {
             log.info("===== [智能调度流程开始] Job: {} =====", jobName);
-            List<CandidateNode> allAvailableNodes = gatherAvailableNodes(effectiveCpu, effectiveMem, sourceNodeName);
+            List<CandidateNode> allAvailableNodes = gatherAvailableNodes(demand, sourceNodeName);
             if (excludedTargetNode != null && !excludedTargetNode.trim().isEmpty()) {
                 List<CandidateNode> alternatives = allAvailableNodes.stream()
                         .filter(node -> !excludedTargetNode.equalsIgnoreCase(node.getName()))
@@ -453,11 +469,19 @@ public class K8sJobFactory {
                         : Collections.emptyList())
                 .addNewVolume()
                 .withName("shared-data")
-                .withNewEmptyDir().endEmptyDir()
+                .withNewEmptyDir().withSizeLimit(new Quantity(storageQuantity)).endEmptyDir()
                 .endVolume()
 
                 .addNewInitContainer()
                 .withName("data-transfer-container")
+                .withNewResources()
+                .addToRequests("cpu", new Quantity(String.valueOf(effectiveCpu)))
+                .addToRequests("memory", new Quantity(effectiveMem + "Gi"))
+                .addToRequests("ephemeral-storage", new Quantity(storageQuantity))
+                .addToLimits("cpu", new Quantity(String.valueOf(effectiveCpu)))
+                .addToLimits("memory", new Quantity(effectiveMem + "Gi"))
+                .addToLimits("ephemeral-storage", new Quantity(storageQuantity))
+                .endResources()
                 .withImage(initContainerImage)
                 .withImagePullPolicy("IfNotPresent")
                 .withCommand("sh", "-c", buildWgetCommand(selectedDataPath, dataSourceUrl,
@@ -484,6 +508,10 @@ public class K8sJobFactory {
                 .withNewResources()
                 .addToRequests("cpu", new Quantity(String.valueOf(effectiveCpu)))
                 .addToRequests("memory", new Quantity(String.valueOf(effectiveMem) + "Gi"))
+                .addToRequests("ephemeral-storage", new Quantity(storageQuantity))
+                .addToLimits("cpu", new Quantity(String.valueOf(effectiveCpu)))
+                .addToLimits("memory", new Quantity(effectiveMem + "Gi"))
+                .addToLimits("ephemeral-storage", new Quantity(storageQuantity))
                 .endResources()
                 .addNewVolumeMount()
                 .withName("shared-data")
@@ -492,7 +520,14 @@ public class K8sJobFactory {
                 .endContainer()
 
                 .withRestartPolicy("Never")
-                .withNodeName(bestNode.getName())
+                .withNewAffinity().withNewNodeAffinity()
+                .withNewRequiredDuringSchedulingIgnoredDuringExecution()
+                .addNewNodeSelectorTerm()
+                .addNewMatchField().withKey("metadata.name").withOperator("In")
+                .withValues(bestNode.getName()).endMatchField()
+                .endNodeSelectorTerm()
+                .endRequiredDuringSchedulingIgnoredDuringExecution()
+                .endNodeAffinity().endAffinity()
                 .endSpec()
                 .endTemplate()
                 .withBackoffLimit(2)
@@ -614,6 +649,12 @@ public class K8sJobFactory {
     }
 
     private List<CandidateNode> gatherAvailableNodes(double cpuRequest, double memoryRequestGi, String sourceNodeName) {
+        return gatherAvailableNodes(JobResourceDemand.of(cpuRequest, memoryRequestGi), sourceNodeName);
+    }
+
+    private List<CandidateNode> gatherAvailableNodes(JobResourceDemand demand, String sourceNodeName) {
+        double cpuRequest = demand.getCpu();
+        double memoryRequestGi = demand.getMemoryGi();
         List<CandidateNode> allNodes = new ArrayList<>();
         // 直接从 DB 查询所有具备计算能力的节点（含双角色节点），不再依赖 K8s label
         List<NodeManagement> computeNodes = nodeManagementMapper.getComputeCapableNodes();
@@ -645,15 +686,19 @@ public class K8sJobFactory {
                     continue;
                 }
             }
-            double maxCpu = nm.getMaxCpu() != null ? nm.getMaxCpu() : 0.0;
-            double maxMemGi = nm.getMaxMemory() != null ? nm.getMaxMemory() : 0.0;
-            double usedCpu = nm.getCurrentCpu() != null ? nm.getCurrentCpu() : 0.0;
-            double usedMemGi = nm.getCurrentMemory() != null ? nm.getCurrentMemory() : 0.0;
-            double cpuFree = Math.max(0.0, maxCpu - usedCpu);
-            double memFreeGi = Math.max(0.0, maxMemGi - usedMemGi);
+            NodeResourceLedger resources = new NodeResourceService(clusterClients.get(clusterId))
+                    .snapshot(Collections.singletonList(nm));
+            String resourceKey = NodeResourceLedger.key(nm);
+            Double availableCpu = resources.availableCpu(resourceKey);
+            Double availableMemory = resources.availableMemoryGi(resourceKey);
+            if (availableCpu == null || availableMemory == null) continue;
+            double maxCpu = resources.capacityCpu(resourceKey);
+            double maxMemGi = resources.capacityMemoryGi(resourceKey);
+            double cpuFree = Math.max(0.0, availableCpu);
+            double memFreeGi = Math.max(0.0, availableMemory);
             boolean cpuOk = cpuFree >= cpuRequest * (1.0 + cpuHeadroom);
             boolean memOk = memFreeGi >= memoryRequestGi * (1.0 + memHeadroom);
-            if (cpuOk && memOk) {
+            if (cpuOk && memOk && resources.fits(resourceKey, demand)) {
                 boolean localData = sourceNodeName != null && sourceNodeName.equals(nm.getNodeName());
                 NetworkTopologyService.NetworkPath path = paths.get(nm.getNodeId());
                 if (path == null) {
