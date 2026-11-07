@@ -40,6 +40,7 @@ class DurableTaskSchedulingServiceTest {
     ExternalDurableJobHandler external=mock(ExternalDurableJobHandler.class);
     KubernetesClient client=mock(KubernetesClient.class,RETURNS_DEEP_STUBS);
     RuntimeImageMapper images=mock(RuntimeImageMapper.class);
+    DatasetReplicaAvailabilityService replicaAvailability=mock(DatasetReplicaAvailabilityService.class);
     DurableTaskSchedulingService service;
     List<DurableTaskJob> rows=new ArrayList<>();
     NodeManagement a=NodeManagement.builder().nodeId(1).nodeName("node-a").cluster("main").type("compute").build();
@@ -52,6 +53,8 @@ class DurableTaskSchedulingServiceTest {
                 new ObjectMapper(),mock(DataSource.class),runners,handlers);
         ReflectionTestUtils.setField(service,"images",images);
         ReflectionTestUtils.setField(service,"migrations",mock(MigrationTaskMapper.class));
+        ReflectionTestUtils.setField(service,"replicaAvailability",replicaAvailability);
+        when(replicaAvailability.evaluate(any())).thenReturn(new ReplicaAvailability("AVAILABLE",true,null));
         when(jobs.listActive()).thenAnswer(x -> rows.stream().filter(j -> !j.terminal()).collect(Collectors.toList()));
         when(jobs.listByTask(anyInt())).thenAnswer(x -> rows.stream().filter(j -> j.getTaskId().equals(x.getArgument(0))).collect(Collectors.toList()));
         when(jobs.listCleanup()).thenReturn(Collections.emptyList());
@@ -87,6 +90,7 @@ class DurableTaskSchedulingServiceTest {
         when(datasets.findDatasetById(dataset)).thenReturn(data);
         DatasetReplica replica=DatasetReplica.builder().replicaId(dataset).datasetId(dataset).nodeId(1).sizeBytes(100L).build();
         when(datasets.listReplicas(dataset)).thenReturn(Collections.singletonList(replica));
+        when(datasets.findReplicaById(dataset)).thenReturn(replica);
         List<InPlacePlacementService.Placement> candidates=Arrays.asList(
                 new InPlacePlacementService.Placement(replica,a,a,InPlacePlacementService.Tier.LOCAL,null,Collections.emptyList(),null),
                 new InPlacePlacementService.Placement(replica,a,b,InPlacePlacementService.Tier.NEAREST,null,Collections.emptyList(),null));
@@ -141,6 +145,7 @@ class DurableTaskSchedulingServiceTest {
         reconcile(); assertEquals("CANCELLING",row.getState());
         when(client.pods().inNamespace("default").withLabel("job-name","cancelling").list()).thenReturn(new PodListBuilder().build());
         reconcile(); assertEquals("CANCELLED",row.getState()); assertNotNull(row.getFinishedAt());
+        assertEquals("任务已取消，资源已释放",row.getWaitingReason());
     }
     @Test void cancellingQueuedWorkDoesNotCreateAJob() {
         DurableTaskJob row=add(1,1); row.setState("CANCELLING"); reconcile();
@@ -152,6 +157,46 @@ class DurableTaskSchedulingServiceTest {
                 .thenReturn(new JobBuilder().withNewMetadata().withName("collision").withUid("other").endMetadata().build());
         assertThrows(IllegalStateException.class,() -> service.deleteAndGone(row));
     }
+    @Test void explicitExternalTargetDoesNotRequireAnyMeasuredLogicalRoute() {
+        DurableTaskJob row=add(1,1); row.setExecutionMode("EXTERNAL"); row.setTargetNode("node-b"); row.setReplicaId(1L);
+        when(placement.candidates(anyList(),anyList())).thenReturn(Collections.emptyList());
+        doAnswer(x -> { DurableTaskJob job=x.getArgument(0); job.setState("PREPARING"); throw new DurableTaskSchedulingService.JobPending(); })
+                .when(runner).advanceExternalJob(any());
+        reconcile(); assertEquals("PREPARING",row.getState()); assertEquals("node-b",row.getTargetNode());
+        verify(placement,never()).candidates(anyList(),anyList()); verify(runner).advanceExternalJob(row);
+        verify(tasks).insertExecutionEvent(argThat(event -> event.getDetailsJson().contains("不要求逻辑拓扑测量路径")));
+    }
+    @Test void preparedMoveCanResumeAfterDeclaredSourceBecameMissing() {
+        DurableTaskJob row=add(1,1); row.setExecutionMode("EXTERNAL"); row.setTargetNode("node-b"); row.setReplicaId(1L);
+        row.setExternalPrepared(true);
+        when(replicaAvailability.evaluate(any())).thenReturn(new ReplicaAvailability("MISSING",false,"source moved"));
+        doAnswer(x -> { DurableTaskJob job=x.getArgument(0); job.setState("PREPARING"); throw new DurableTaskSchedulingService.JobPending(); })
+                .when(runner).advanceExternalJob(any());
+        reconcile(); assertEquals("PREPARING",row.getState()); verify(runner).advanceExternalJob(row);
+    }
+    @Test void centralizedModePrefersLocalReplicaThenOriginalReplicaOrderWithoutTopology() {
+        DurableTaskJob row=add(1,1); row.setExecutionMode("CENTRALIZED"); when(runner.resolveCentralNodeName()).thenReturn("node-b");
+        DatasetReplica remote=datasets.findReplicaById(1L);
+        DatasetReplica local=DatasetReplica.builder().replicaId(2L).datasetId(1L).nodeId(2).sizeBytes(100L).build();
+        when(datasets.listReplicas(1L)).thenReturn(Arrays.asList(remote,local));
+        reconcile(); assertEquals("PREPARING",row.getState()); assertEquals(2L,row.getReplicaId());
+        verify(placement,never()).candidates(anyList(),anyList());
+    }
+    @Test void centralizedModePreservesRemoteReplicaOrderWithoutTopology() {
+        DurableTaskJob row=add(1,1); row.setExecutionMode("CENTRALIZED"); when(runner.resolveCentralNodeName()).thenReturn("node-b");
+        DatasetReplica first=DatasetReplica.builder().replicaId(99L).datasetId(1L).nodeId(1).sizeBytes(100L).build();
+        DatasetReplica second=datasets.findReplicaById(1L);
+        when(datasets.listReplicas(1L)).thenReturn(Arrays.asList(first,second));
+        reconcile(); assertEquals("PREPARING",row.getState()); assertEquals(99L,row.getReplicaId());
+        verify(placement,never()).candidates(anyList(),anyList());
+    }
+    @Test void externalUnavailableSourceRemainsWaitingBeforePreparation() {
+        DurableTaskJob row=add(1,1); row.setExecutionMode("EXTERNAL"); row.setTargetNode("node-b"); row.setReplicaId(1L);
+        when(replicaAvailability.evaluate(any())).thenReturn(new ReplicaAvailability("MISSING",false,"source missing"));
+        reconcile(); assertEquals("WAITING",row.getState()); assertNull(row.getJobName());
+        verify(runner,never()).advanceExternalJob(any());
+    }
+
     @Test void asynchronousExternalPreparationDoesNotBlockOtherTasks() {
         DurableTaskJob externalRow=add(1,1); externalRow.setExecutionMode("EXTERNAL"); externalRow.setState("PREPARING");
         externalRow.setTargetNode("node-a"); externalRow.setCpu(.5); externalRow.setMemoryGi(1.0); externalRow.setGpu(0.0); externalRow.setEphemeralStorageGi(2.0);

@@ -39,6 +39,7 @@ public class DurableTaskSchedulingService {
     private final ObjectProvider<ExternalDurableJobHandler> external;
     @org.springframework.beans.factory.annotation.Autowired private RuntimeImageMapper images;
     @org.springframework.beans.factory.annotation.Autowired private MigrationTaskMapper migrations;
+    @org.springframework.beans.factory.annotation.Autowired private DatasetReplicaAvailabilityService replicaAvailability;
     @Value("${app.resource-control.max-active-jobs-per-task:4}") private int maxPerTask = 4;
     @Value("${app.resource-control.wait-timeout-minutes:1440}") private long waitTimeout = 1440;
     @Value("${dispatch.central-node.name:}") private String centralNode;
@@ -176,13 +177,9 @@ public class DurableTaskSchedulingService {
                         requestedGpu,storageGi);
                 row.setRuntimeImageId(imageId);
                 row.setCpu(wanted.getCpu()); row.setMemoryGi(wanted.getMemoryGi()); row.setGpu(wanted.getGpu()); row.setEphemeralStorageGi(wanted.getEphemeralStorageGi());
-                List<InPlacePlacementService.Placement> options=placement.candidates(datasets.listReplicas(row.getDatasetId()),compute);
-                if(!TaskV1Service.MODE_IN_PLACE.equals(row.getExecutionMode())) {
-                    String fixed="EXTERNAL".equals(row.getExecutionMode())?row.getTargetNode():orchestrator.getObject().resolveCentralNodeName();
-                    options=options.stream().filter(p -> p.getComputeNode().getNodeName().equals(fixed))
-                            .filter(p -> !"EXTERNAL".equals(row.getExecutionMode()) || p.getReplica().getReplicaId().equals(row.getReplicaId()))
-                            .collect(Collectors.toList());
-                }
+                List<InPlacePlacementService.Placement> options=TaskV1Service.MODE_IN_PLACE.equals(row.getExecutionMode())
+                        ?placement.candidates(datasets.listReplicas(row.getDatasetId()),compute)
+                        :fixedCandidates(row,compute);
                 if(options.isEmpty()) { waiting(row,"暂无满足数据访问和节点约束的可用计算节点"); continue; }
                 boolean known=options.stream().allMatch(p -> ledger.availableCpu(NodeResourceLedger.key(p.getComputeNode()))!=null);
                 boolean ever=options.stream().anyMatch(p -> ledger.canEverFit(p.getComputeNode(),wanted));
@@ -219,6 +216,35 @@ public class DurableTaskSchedulingService {
         }
         refreshTaskStates(); finishTasks(); cleanupTerminalJobs();
     }
+    /** Explicit and centralized modes never required a measured logical route before resource admission. */
+    private List<InPlacePlacementService.Placement> fixedCandidates(DurableTaskJob row,List<NodeManagement> compute) {
+        boolean externalMode="EXTERNAL".equals(row.getExecutionMode());
+        String targetName=externalMode?row.getTargetNode():orchestrator.getObject().resolveCentralNodeName();
+        NodeManagement target=compute.stream().filter(n -> targetName.equals(n.getNodeName())).findFirst().orElse(null);
+        if(target==null) return Collections.emptyList();
+        List<DatasetReplica> replicas;
+        if(externalMode) {
+            DatasetReplica replica=datasets.findReplicaById(row.getReplicaId());
+            replicas=replica==null?Collections.emptyList():Collections.singletonList(replica);
+        } else replicas=new ArrayList<>(datasets.listReplicas(row.getDatasetId()));
+        List<InPlacePlacementService.Placement> result=new ArrayList<>();
+        for(DatasetReplica replica:replicas) {
+            if(!row.getDatasetId().equals(replica.getDatasetId())) continue;
+            // A completed MOVE deliberately leaves the declared source MISSING. The execution path
+            // independently verifies its prepared target against dataset-version authority before use.
+            boolean prepared=externalMode && Boolean.TRUE.equals(row.getExternalPrepared());
+            if(!prepared && !replicaAvailability.evaluate(replica).isUsable()) continue;
+            NodeManagement source=nodes.getNodeById(replica.getNodeId());
+            if(source==null) continue;
+            boolean local=source.getNodeId().equals(target.getNodeId());
+            result.add(new InPlacePlacementService.Placement(replica,source,target,
+                    local?InPlacePlacementService.Tier.LOCAL:InPlacePlacementService.Tier.NEAREST,
+                    null,Collections.emptyList(),null));
+        }
+        if(!externalMode) result.sort(Comparator.comparing(p -> !p.getReplicaNode().getNodeId().equals(target.getNodeId())));
+        return result;
+    }
+
     private void recordSelection(DurableTaskJob row,InPlacePlacementService.Placement selected,
             List<InPlacePlacementService.Placement> options,NodeResourceLedger ledger) {
         Map<String,Object> details=new LinkedHashMap<>();
@@ -231,7 +257,11 @@ public class DurableTaskSchedulingService {
         details.put("memoryFreeGi",ledger.availableMemoryGi(NodeResourceLedger.key(selected.getComputeNode())));
         details.put("latencyMs",selected.getPath()==null?null:selected.getPath().getLatencyMs());
         details.put("bandwidthMbps",selected.getPath()==null?null:selected.getPath().getBandwidthMbps());
-        details.put("reason","沿用本地、同站点、跨站点、中心节点回退顺序；跨站点按延迟升序、瓶颈带宽降序；跳过资源不足候选");
+        details.put("reason","EXTERNAL".equals(row.getExecutionMode())
+                ?"使用外部方案明确指定的源副本与目标节点；检查节点资源，不要求逻辑拓扑测量路径"
+                :TaskV1Service.MODE_CENTRALIZED.equals(row.getExecutionMode())
+                    ?"使用固定中心节点；优先中心节点已有副本，否则按可用副本原顺序选择；检查节点资源，不要求逻辑拓扑测量路径"
+                    :"沿用本地、同站点、跨站点、中心节点回退顺序；跨站点按延迟升序、瓶颈带宽降序；跳过资源不足候选");
         TaskExecutionEvent event=TaskExecutionEvent.builder().taskId(row.getTaskId()).datasetId(row.getDatasetId())
                 .executionMode(row.getExecutionMode()).eventType("PLACEMENT_SELECTED").nodeName(row.getTargetNode())
                 .occurredAt(now()).detailsJson(write(details)).build(); tasks.insertExecutionEvent(event);
@@ -248,7 +278,7 @@ public class DurableTaskSchedulingService {
             if ("EXTERNAL".equals(row.getExecutionMode()) && external.getObject().isPreparing(row.getId())) return;
             if("CANCELLING".equals(row.getState()) || "FAILING".equals(row.getState())) {
                 if(deleteAndGone(row)) {
-                    if("CANCELLING".equals(row.getState())) { row.setState("CANCELLED"); row.setFinishedAt(now()); jobs.update(row); migrationState(row,"CANCELLED"); }
+                    if("CANCELLING".equals(row.getState())) { row.setState("CANCELLED"); row.setWaitingReason("任务已取消，资源已释放"); row.setFinishedAt(now()); jobs.update(row); migrationState(row,"CANCELLED"); }
                     else if("FAILING".equals(row.getState())) { row.setState("FAILED"); row.setFinishedAt(now()); jobs.update(row); migrationState(row,"FAILED"); }
                 }
                 return;
