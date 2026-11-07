@@ -1,6 +1,7 @@
 package org.example.service;
 
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -23,7 +24,9 @@ final class ComputeLogCursor {
             if (space <= 0) continue;
             Instant instant;
             try {
-                instant = Instant.parse(line.substring(0, space));
+                // Kubernetes log timestamps may use the node's +08:00 offset.
+                // Java 8 Instant.parse accepts Z only; normalize the offset first.
+                instant = OffsetDateTime.parse(line.substring(0, space)).toInstant();
             } catch (RuntimeException invalidTimestamp) {
                 continue;
             }

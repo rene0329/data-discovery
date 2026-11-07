@@ -7,6 +7,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ComputeLogCursorTest {
     @Test
+    void acceptsNodeTimezoneOffsetsAndNormalizesTheCursorToUtc() {
+        ComputeLogCursor cursor = new ComputeLogCursor();
+        String line = "2026-11-07T09:00:00.123456789+08:00 Epoch 1/1\n";
+        assertEquals(Collections.singletonList(line.trim()), cursor.newLines(line, false));
+        assertTrue(cursor.newLines("2026-11-07T01:00:00.123456789Z Epoch 1/1\n", false).isEmpty());
+        assertEquals(1, cursor.newLines("2026-11-07T09:00:01+08:00 loss=0.42\n", false).size());
+    }
+    @Test
     void overlappingSnapshotsDoNotRepeatLinesButKeepRepeatedProgressAtNewTimes() {
         ComputeLogCursor cursor = new ComputeLogCursor();
         String first = "2026-11-07T01:00:00.123456789Z training\n";
