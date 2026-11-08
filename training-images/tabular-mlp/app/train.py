@@ -80,6 +80,7 @@ def train(config):
     torch.manual_seed(config.seed)
     x = torch.tensor(features, dtype=torch.float32)
     y = torch.tensor(labels, dtype=torch.float32)
+    del features, labels  # Release Python row objects before training the 500k sample.
     mean = x.mean(0)
     scale = x.std(0, unbiased=False).clamp_min(1e-6)
     x = (x-mean)/scale
