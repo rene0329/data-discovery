@@ -47,9 +47,35 @@ class ReaderTest(unittest.TestCase):
     def test_positive_options_and_explicit_epoch_override(self):
         with patch.dict('os.environ', {'N_EPOCHS':'1'}):
             self.assertEqual(train.arguments(['--epochs','10']).epochs,10)
-        self.assertEqual(train.arguments([]).max_samples,500000)
-        for field in ['--epochs','--batch-size','--threads','--max-samples']:
+        self.assertEqual(train.arguments([]).max_samples,0)
+        self.assertEqual(train.arguments(['--epochs','1']).epochs,1)
+        for field in ['--epochs','--batch-size','--threads','--chunk-size']:
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):train.arguments([field,'0'])
+
+    def test_streaming_preserves_all_rows_and_tail(self):
+        self.write('\n'.join(str(i%2)+','+','.join([str(i)]*28) for i in range(130)))
+        chunks=list(train.iter_chunks(self.path,37))
+        self.assertEqual([len(y) for x,y in chunks],[37,37,37,19])
+        self.assertEqual([row[0] for x,y in chunks for row in x],list(range(130)))
+
+    def test_full_read_checks_gzip_trailer(self):
+        self.write('0,'+','.join(['1']*28)+'\n')
+        data=bytearray(self.path.read_bytes());data[-8]^=255;self.path.write_bytes(data)
+        with self.assertRaises(OSError):list(train.iter_rows(self.path))
+
+    def test_full_training_counts_every_row_once(self):
+        try:import torch
+        except ImportError:self.skipTest('PyTorch integration runs in the build image')
+        self.write('\n'.join(str(i%2)+','+','.join([str(i%2)]*28) for i in range(130)))
+        config=train.arguments(['--data-path',str(self.path),'--output-dir',self.tmp.name,
+                                '--epochs','1','--max-samples','0','--chunk-size','37','--batch-size','16'])
+        r=train.train(config)
+        self.assertEqual(r['samples'],130)
+        self.assertEqual(r['history'][0]['positive_samples'],65)
+        self.assertEqual(r['history'][0]['batches'],11)
+        self.assertTrue(r['parameters_changed'])
+        self.assertEqual(r['sampling'],'all_rows')
+        self.assertEqual(r['epochs'],1)
 
     def test_real_training_updates_and_writes_ten_epochs(self):
         try:import torch
