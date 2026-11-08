@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Read-only backend state viewer for Topic4 data scheduling. Run it on the ZJ build
 # host after the scheduling API returns a plan_id. The script does not create,
@@ -146,21 +147,19 @@ mysql_raw() {
       --init-command="SET time_zone='+00:00'" -e "$1"
 }
 
+mysql_xml() {
+  kubectl exec -n "$NAMESPACE" "$MYSQL_WORKLOAD" -- env MYSQL_PWD="$DB_PASSWORD" \
+    mysql --connect-timeout=5 --default-character-set=utf8mb4 -u"$MYSQL_USER" -D"$MYSQL_DATABASE" \
+    --xml --init-command="SET time_zone='+00:00'" -e "$1"
+}
 mysql_table() {
-  kubectl exec -n "${NAMESPACE}" "${MYSQL_WORKLOAD}" -- \
-    env MYSQL_PWD="${DB_PASSWORD}" \
-    mysql --connect-timeout=5 --default-character-set=utf8mb4 \
-      -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --table \
-      --init-command="SET time_zone='+00:00'" -e "$1"
+  mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}"
 }
-
 mysql_vertical() {
-  kubectl exec -n "${NAMESPACE}" "${MYSQL_WORKLOAD}" -- \
-    env MYSQL_PWD="${DB_PASSWORD}" \
-    mysql --connect-timeout=5 --default-character-set=utf8mb4 \
-      -u"${MYSQL_USER}" -D"${MYSQL_DATABASE}" --vertical \
-      --init-command="SET time_zone='+00:00'" -e "$1"
+  mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}" --vertical
 }
+export TC42_DATASET_NAMES="$(mysql_raw 'SELECT COALESCE(JSON_OBJECTAGG(dataset_id,name),JSON_OBJECT()) FROM registered_dataset;')"
+exec > >(PYTHONIOENCODING=utf-8 python3 -u "$SCRIPT_DIR/tc42_names.py")
 
 plan_status() {
   mysql_raw "SELECT status FROM scheduling_plan WHERE plan_id=${PLAN_ID};"
@@ -199,7 +198,6 @@ echo "Topic4 后端调度信息"
 echo "plan_id=${PLAN_ID} namespace=${NAMESPACE} query_time=$(date '+%Y-%m-%d %H:%M:%S %Z')"
 if [[ "${RECORDS_ONLY}" == "1" ]]; then
   echo "record_view=HISTORICAL_PLAN_WITH_CURRENT_REPLICA_STATE"
-  echo "仅查询已有计划和审计；副本为当前状态，本次不验证历史目标文件、不判定迁移通过。"
 fi
 echo
 

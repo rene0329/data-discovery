@@ -95,7 +95,7 @@ else
   HOT="$saved_hot"; CONTROL="$saved_control"
   require_positive_integer hot "$HOT"; require_positive_integer control "$CONTROL"
 fi
-printf '【用例三】阶段=%s  热数据集=%s  对照数据集=%s\n采集目录：%s\n' "$stage" "$HOT" "$CONTROL" "$SESSION"
+printf '【用例三】阶段=%s  热数据集=%s  对照数据集=%s\n采集目录：%s\n' "$stage" "$(python3 -B "$SCRIPT_DIR/tc42_names.py" "$HOT")" "$(python3 -B "$SCRIPT_DIR/tc42_names.py" "$CONTROL")" "$SESSION"
 task_sql() {
   local ids; ids="$(join_integer_ids "${TASKS[@]}")"
   printf '%s' "SELECT task_id,dataset_ids_json,runtime_image_id,resource_overrides_json,execution_mode,status,execution_evidence_complete,UNIX_TIMESTAMP(started_at) AS started_epoch,UNIX_TIMESTAMP(finished_at) AS finished_epoch FROM task_management WHERE task_id IN ($ids) ORDER BY task_id;"
@@ -133,33 +133,33 @@ case "$stage" in
     echo '下一步：在前端预览并确认热敏存储，取得 plan_id 后执行 storage。' ;;
   storage)
     [[ "$(mysql_raw "SELECT COUNT(*) FROM scheduling_plan p JOIN scheduling_assignment a ON a.plan_id=p.plan_id WHERE p.plan_id=$PLAN AND p.algorithm_name='热敏存储' AND a.dataset_id=$HOT;")" != 0 ]] || fail "方案不存在、不是热敏存储或不包含本次热数据集"
-    echo '【热敏存储方案及执行结果】历史记录；当前文件或副本状态不作为历史时刻的还原。'
+    echo '【热敏存储方案及执行结果】'
     mysql_table "SELECT p.plan_id,p.external_plan_id,p.status AS plan_status,p.error_message AS plan_error,p.algorithm_name,p.created_at,p.updated_at,a.assignment_id,a.dataset_id,src.node_name AS source_node,dst.node_name AS target_node,a.action,a.status AS assignment_status,a.error_message FROM scheduling_plan p JOIN scheduling_assignment a ON a.plan_id=p.plan_id LEFT JOIN node_management src ON src.node_id=a.source_node_id LEFT JOIN node_management dst ON dst.node_id=a.target_node_id WHERE p.plan_id=$PLAN ORDER BY a.assignment_id;"
     echo '【方案节点选择与执行日志】实际留存日志；无记录时不以当前预览替代。'
     external="$(mysql_raw "SELECT external_plan_id FROM scheduling_plan WHERE plan_id=$PLAN;")"
     logs plan "$PLAN" "$external"
-    echo '【迁移访问审计】按本方案请求编号关联。'
+    echo '【迁移访问审计】'
     mysql_table "SELECT event_id,request_id,dataset_id,action,target_node,decision,reason,file_path,created_at FROM dataset_access_audit_event WHERE request_id LIKE 'storage-plan-$PLAN-assignment-%' ORDER BY event_id;"
     printf '%s\n' "$PLAN" > "$SESSION/plan-id"
     current_state
     echo '下一步：在前端再次运行同一热数据集，用 compare 提供前后两次任务ID。' ;;
   compare)
-    echo '【前后任务条件核对】同数据集、镜像、资源和模式；任务必须完成且执行证据完整。'
+    echo '【前后任务条件核对】'
     mysql_xml "$(task_sql)" | view compare-check --ids "${TASKS[@]}" --hot "$HOT" --control "$CONTROL"
     mysql_table "$(task_sql)"
     if [[ -f "$SESSION/plan-id" ]]; then
       PLAN="$(cat "$SESSION/plan-id")"; require_positive_integer plan_id "$PLAN"
-      echo '【任务与热敏存储的时间关系】应为前任务结束 → 方案创建及完成 → 后任务开始。'
+      echo '【任务与热敏存储的时间关系】'
       mysql_table "SELECT p.plan_id,p.status AS plan_status,b.finished_at AS before_task_finished,p.created_at AS plan_created,p.updated_at AS plan_updated,a.started_at AS after_task_started,CASE WHEN p.status='COMPLETED' AND b.finished_at<=p.created_at AND a.started_at>=p.updated_at THEN 'ORDER_CONFIRMED' ELSE 'NOT_CONFIRMED' END AS chronology FROM scheduling_plan p JOIN task_management b ON b.task_id=${TASKS[0]} JOIN task_management a ON a.task_id=${TASKS[1]} WHERE p.plan_id=$PLAN;"
     else
-      echo '没有关联方案记录，不能将两次任务差异直接归因于热敏存储。'
+      echo '未找到关联方案。'
     fi
     ids="$(join_integer_ids "${TASKS[@]}")"
-    echo '【调度时记录的访问路径时延】latency_ms 是调度观测的网络路径时延，不是实际读取耗时；NULL 不按0处理。'
+    echo '【调度时记录的访问路径时延】'
     mysql_table "SELECT task_id,dataset_id,execution_mode,JSON_UNQUOTE(JSON_EXTRACT(details_json,'$.sourceNode')) AS source_node,JSON_UNQUOTE(JSON_EXTRACT(details_json,'$.targetNode')) AS target_node,JSON_EXTRACT(details_json,'$.latencyMs') AS latency_ms,JSON_EXTRACT(details_json,'$.bandwidthMbps') AS bandwidth_mbps,JSON_EXTRACT(details_json,'$.pathNodeIds') AS path_node_ids,occurred_at FROM task_execution_event WHERE task_id IN ($ids) AND dataset_id=$HOT AND event_type='PLACEMENT_SELECTED' ORDER BY task_id,event_id;"
-    echo '【访问路径时延变化】只对同一数据集、同一执行模式配对。'
+    echo '【访问路径时延变化】'
     mysql_xml "SELECT task_id,dataset_id,execution_mode,JSON_UNQUOTE(JSON_EXTRACT(details_json,'$.latencyMs')) AS latency_ms FROM task_execution_event WHERE task_id IN ($ids) AND dataset_id=$HOT AND event_type='PLACEMENT_SELECTED' ORDER BY task_id,event_id;" | view latency --ids "${TASKS[@]}"
-    echo '【实际读取记录】如无记录，说明该路径没有单独记录读取事件，不能用网络时延填充。'
+    echo '【实际读取记录】'
     mysql_table "SELECT task_id,dataset_id,consumer_node_id,source_node_id,bytes_read,cache_hit_bytes,duration_ms,success,completed_at FROM dataset_access_event WHERE task_id IN ($ids) AND dataset_id=$HOT ORDER BY event_id;"
     current_state ;;
 esac

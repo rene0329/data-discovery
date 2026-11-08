@@ -1,9 +1,11 @@
 import importlib.util
+import sys
 from pathlib import Path
 import unittest
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location('tc42_table', str(ROOT / 'tc42_table.py'))
 tables = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tables)

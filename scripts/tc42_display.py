@@ -100,7 +100,7 @@ def context_data(payload):
 
 def dataset_label(dataset_id, context):
     row = context.get('datasets', {}).get(str(dataset_id), {})
-    return row.get('name') or '#{}'.format(dataset_id)
+    return row.get('name') or '未登记数据集'
 
 
 def node_label(node_id, context):
@@ -336,7 +336,7 @@ def dataset_view(records, context, heat=False):
         nodes = list(dict.fromkeys(node_label(r.get('nodeId'), context) for r in replicas))
         temp = d.get('dataHeat')
         eligible = '达到阈值' if numeric(temp) and numeric(threshold) and temp >= threshold else '低于阈值' if numeric(temp) and numeric(threshold) else '—'
-        common = [d.get('datasetId'), d.get('name'), '{:.2f}'.format(temp) if numeric(temp) else '—']
+        common = [d.get('name'), '{:.2f}'.format(temp) if numeric(temp) else '—']
         if heat:
             rows.append(common + [eligible, '、'.join(nodes), d.get('heatUpdatedAt'),
                                  '{}/{}'.format(d.get('availableReplicaCount', '—'), d.get('totalReplicaCount', len(replicas)))])
@@ -344,10 +344,10 @@ def dataset_view(records, context, heat=False):
             rows.append(common + [size_text(d.get('authoritativeSizeBytes')), '、'.join(nodes),
                                  text(d.get('healthStatus') or d.get('status'))])
     if heat:
-        lines.extend(table(['ID', '数据集', '温度', '阈值对照', '当前存储节点', '温度更新时间', '可用/总副本'], rows,
-                           [5, 20, 8, 10, 26, 24, 12]))
+        lines.extend(table(['数据集', '温度', '阈值对照', '当前存储节点', '温度更新时间', '可用/总副本'], rows,
+                           [20, 8, 10, 26, 24, 12]))
     else:
-        lines.extend(table(['ID', '数据集', '温度', '大小', '当前存储节点', '状态'], rows, [5, 28, 8, 12, 30, 12]))
+        lines.extend(table(['数据集', '温度', '大小', '当前存储节点', '状态'], rows, [28, 8, 12, 30, 12]))
     return lines
 
 
@@ -364,22 +364,19 @@ def plan_view(data, context):
             lines.append('失败原因：' + a['errorMessage'])
     if plan.get('errorMessage'):
         lines.append('计划错误：' + plan['errorMessage'])
-    lines.append('本表为计划执行记录；当前数据位置以数据集查询为准。')
     return lines
 
 
 def access_view(data, context):
     me = context.get('me') or {}
     lines = ['TC-4.2.4 当前访问权限  |  用户：{}'.format(me.get('username', '身份信息未取得'))]
-    if 'ADMIN' in (me.get('roles') or []):
-        lines.append('当前为管理员身份；受限用户结果需使用该用户会话查询。')
     has_grants = any(d.get('grantId') is not None for d in items(data))
-    rows = [[d.get('datasetId'), d.get('name'), '、'.join(d.get('domainNames') or []),
+    rows = [[d.get('name'), '、'.join(d.get('domainNames') or []),
              '允许' if d.get('accessible') is True else '拒绝' if d.get('accessible') is False else '未提供',
              d.get('grantId'), d.get('grantExpiresAt')] for d in items(data)]
-    headers, limits = ['ID', '数据集', '所属域', '当前访问', '授权编号', '授权到期时间'], [5, 30, 18, 10, 8, 25]
+    headers, limits = ['数据集', '所属域', '当前访问', '授权编号', '授权到期时间'], [30, 18, 10, 8, 25]
     if not has_grants:
-        rows, headers, limits = [row[:4] for row in rows], headers[:4], limits[:4]
+        rows, headers, limits = [row[:3] for row in rows], headers[:3], limits[:3]
     lines.extend(table(headers, rows, limits))
     return lines
 

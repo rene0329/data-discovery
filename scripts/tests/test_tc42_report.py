@@ -74,7 +74,8 @@ class ReportTests(unittest.TestCase):
     def test_missing_baseline_is_explicit_and_never_reconstructed(self):
         code, output, error = self.report('CENTRALIZED')
         self.assertEqual(code, 0, error)
-        self.assertIn('不能用当前副本状态代替测试前状态', output)
+        self.assertIn('未找到匹配的测试前快照', output)
+        self.assertNotIn('不能用当前副本状态代替测试前状态', output)
         self.assertIn('TASK task_id=900', output)
 
     def test_comparison_adds_speedup_only_for_the_requested_task(self):

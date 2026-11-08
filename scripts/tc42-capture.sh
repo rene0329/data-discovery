@@ -70,7 +70,7 @@ usage() {
 
 records 不校验当前文件是否仍属于历史计划；after-storage 按原命令执行目标文件校验。
 返回0：查询均成功；1：有查询或文件核查失败；2：参数或任务对应关系不正确。
-查询成功不等于测试通过。计算、更新温度、迁移及授权仍在平台操作。
+
 HELP
 }
 fail() { echo "错误：$*" >&2; exit 2; }
@@ -332,7 +332,7 @@ if [[ "$CASE" == all ]]; then
 else
   run_case "$CASE"
 fi
-printf '\n采集结束：失败步骤 %s。查询完成情况不代表用例通过。\n' "$FAILURES"
+printf '\n采集结束：失败步骤 %s。\n' "$FAILURES"
 [[ "$DRY_RUN" == 1 ]] || echo "文件索引：$RUN_DIR/index.tsv"
 ((IDENTITY_FAILURES == 0)) || exit 2
 ((FAILURES == 0))

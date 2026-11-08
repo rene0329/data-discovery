@@ -54,7 +54,7 @@ class Case3Tests(unittest.TestCase):
         output=result.stdout.decode()
         self.assertIn('1.853',output)
         self.assertIn('—',output)
-        self.assertIn('不按0处理',output)
+        self.assertNotIn('不按0处理',output)
 
     def test_missing_task_is_not_an_empty_success(self):
         self.assertTrue(view.task_errors([],['1'],'7','9'))

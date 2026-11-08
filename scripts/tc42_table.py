@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Width-bounded MySQL XML tables without renaming fields or truncating evidence."""
 import argparse
+import os
+from tc42_names import project
 import sys
 import unicodedata
 import xml.etree.ElementTree as ET
 
-KEYS = ('event_id', 'migration_id', 'replica_id', 'grant_id', 'task_id', 'dataset_id')
+KEYS = ('event_id', 'migration_id', 'replica_id', 'grant_id', 'task_id', 'dataset_id', 'name')
 IMPORTANT = set(KEYS + ('status', 'event_type', 'execution_mode', 'duration_ms',
                         'data_preparation_ms', 'compute_duration_ms', 'execution_evidence_complete',
                         'decision', 'error_message'))
@@ -75,7 +77,7 @@ def render_table(headers, rows, total):
 def groups(headers, total):
     key = next((key for key in KEYS if key in headers), headers[0])
     if 'grant_id' in headers:
-        requests = [('申请记录', ['grant_id','username','dataset_id','dataset_code','name','reason']),
+        requests = [('申请记录', ['grant_id','username','dataset_id','name','dataset_code','reason']),
                     ('有效时间', ['grant_id','created_at','expires_at','ttl_seconds']),
                     ('当前有效性', ['grant_id','grant_status_now','remaining_seconds'])]
         used = set()
@@ -88,7 +90,7 @@ def groups(headers, total):
         if rest:
             yield '其他字段', ['grant_id'] + rest
     elif 'event_id' in headers and 'decision' in headers:
-        requests = [('访问结果', ['event_id','principal','dataset_id','action','decision','reason','created_at']),
+        requests = [('访问结果', ['event_id','principal','dataset_id','name','action','decision','reason','created_at']),
                     ('请求关联', ['event_id','request_id','run_id','target_node','policy_rule',
                                   'token_expires_at','client_ip','evidence_scope','file_path'])]
         used = set()
@@ -102,7 +104,7 @@ def groups(headers, total):
             yield '其他字段', ['event_id'] + rest
     elif 'event_type' in headers and 'event_id' in headers:
         requested = [
-            ('执行状态', ['event_id', 'dataset_id', 'execution_mode', 'event_type', 'node_name', 'attempt', 'occurred_at']),
+            ('执行状态', ['event_id', 'dataset_id', 'name', 'execution_mode', 'event_type', 'node_name', 'attempt', 'occurred_at']),
             ('执行计时', ['event_id', 'bytes_processed', 'duration_ms']),
             ('Job / Pod 关联', ['event_id', 'job_name', 'pod_name']),
             ('文件校验', ['event_id', 'checksum_sha256', 'output_checksum_sha256'])]
@@ -129,9 +131,10 @@ def format_xml(source, total=120, vertical=False):
 
 
 def format_data(headers, rows, total=120, vertical=False):
+    headers, rows = project(headers, rows)
     if not rows:
         return ['  (no records)']
-    hidden = [h for h in headers if h not in IMPORTANT and all(r.get(h) is None for r in rows)]
+    hidden = [] if os.environ.get('TC42_TABLE_LAYOUT') == 'raw' else [h for h in headers if h not in IMPORTANT and all(r.get(h) is None for r in rows)]
     headers = [h for h in headers if h not in hidden]
     result = []
     if not vertical and 'event_type' in headers and 'execution_mode' in headers:
@@ -152,7 +155,7 @@ def format_data(headers, rows, total=120, vertical=False):
     else:
         for title, selected in groups(headers, total):
             if title:
-                result.append(title + '  ({} 对应同一条原始记录)'.format('grant_id' if 'grant_id' in selected else 'event_id'))
+                result.append(title)
             shown = rows
             if title in ('执行计时', '文件校验'):
                 shown = [row for row in rows if any(row.get(name) is not None for name in selected if name != 'event_id')]
@@ -168,8 +171,6 @@ def format_data(headers, rows, total=120, vertical=False):
                     result.extend(render_table([join_key] + rest[start:start + capacity - 1], shown, total))
             else:
                 result.extend(render_table(selected, shown, total))
-    if hidden:
-        result.append('已隐藏全为 NULL 的非关键列；--raw 可查看全部字段。')
     return result
 
 

@@ -80,9 +80,9 @@ def preview(width):
     print('【各数据集的节点选择理由】')
     print('\n'.join(format_data(['datasetId','reason'], rows, width)))
     for notice in data.get('notices') or []:
-        print('\n'.join(wrap('说明：' + str(notice), width)))
+        print('\n'.join(wrap(str(notice), width)))
     if not rows:
-        print('当前预览没有需要移动的数据；不能据此重建历史方案的选择原因。')
+        print('当前无需迁移。')
 
 
 def main():
@@ -103,7 +103,7 @@ def main():
             unique[row['dataset_id']] = row
         print('热度状态：')
         print('\n'.join(format_data(['dataset_id','name','data_heat','heat_updated_at'],list(unique.values()),args.width)))
-        print('当前副本位置（以 dataset_id 关联上表）：')
+        print('当前副本位置：')
         print('\n'.join(format_data(['dataset_id','replica_id','node_name','node_type','availability','size_bytes'],records,args.width)))
     elif args.action == 'latency':
         _, records = parse(sys.stdin.read())
@@ -127,11 +127,9 @@ def main():
                            'latency_reduction_ms': None if before is None or after is None else round(before - after, 6)})
         print('\n'.join(format_data(['dataset_id','execution_mode','before_task_id','after_task_id',
                                     'latency_ms_before','latency_ms_after','latency_reduction_ms'], output, args.width)))
-        print('latency_reduction_ms=前值−后值；缺失或非数值不按0处理。同一任务同一模式取最后一条已保存的节点选择事件。')
     elif args.action == 'delta':
         rows = heat_delta(Path(args.before).read_text(encoding='utf-8'), sys.stdin.read())
         print('\n'.join(format_data(['dataset_id','name','data_heat_before','data_heat_after','heat_delta'], rows, args.width)))
-        print('heat_delta 为两次实际观测差值，包含期间的热度衰减及其他访问，不能全部归因于指定任务。')
     elif args.action in ('validate-task', 'compare-check'):
         _, rows = parse(sys.stdin.read())
         errors = task_errors(rows, args.ids, args.hot, args.control)
@@ -140,13 +138,13 @@ def main():
                 print('对照检查：' + error)
             if args.action == 'validate-task':
                 return 2
-            print('对照条件不足；仅展示原始记录，不据此认定热敏存储带来改善。')
+            print('对照条件不足。')
         else:
             print('任务数据集及对照条件核对完成。')
     else:
         content = sys.stdin.read()
         if not content.strip():
-            print('当前容器日志中没有匹配记录，可能已因重启或轮转丢失；数据库记录仍可核对。')
+            print('当前容器无匹配日志。')
         for line in content.splitlines():
             print('\n'.join(wrap(line, args.width)))
     return 0

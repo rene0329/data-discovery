@@ -107,6 +107,8 @@ backend_init() {
   DB_PASSWORD="$(kubectl get secret -n "${NAMESPACE}" "${MYSQL_SECRET}" \
     -o "jsonpath={.data.${MYSQL_SECRET_KEY}}" | base64 -d)"
   [[ -n "${DB_PASSWORD}" ]] || fail "无法读取数据库密码"
+  export TC42_DATASET_NAMES="$(mysql_raw 'SELECT COALESCE(JSON_OBJECTAGG(dataset_id,name),JSON_OBJECT()) FROM registered_dataset;')"
+  exec > >(PYTHONIOENCODING=utf-8 python3 -u "$SCRIPT_DIR/tc42_names.py")
 }
 
 mysql_raw() {
@@ -127,7 +129,7 @@ mysql_xml() {
 }
 
 mysql_table() {
-  if [[ "${TC42_TABLE_LAYOUT:-raw}" == compact ]]; then
+  if [[ "${TC42_TABLE_LAYOUT:-raw}" == compact || -n "${TC42_DATASET_NAMES:-}" ]]; then
     mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}" | python3 -u "${SCRIPT_DIR}/computation_terms.py"
     return
   fi
@@ -139,7 +141,7 @@ mysql_table() {
 }
 
 mysql_vertical() {
-  if [[ "${TC42_TABLE_LAYOUT:-raw}" == compact ]]; then
+  if [[ "${TC42_TABLE_LAYOUT:-raw}" == compact || -n "${TC42_DATASET_NAMES:-}" ]]; then
     mysql_xml "$1" | PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_table.py" --width "${TC42_TABLE_WIDTH:-120}" --vertical | python3 -u "${SCRIPT_DIR}/computation_terms.py"
     return
   fi
@@ -289,7 +291,7 @@ show_placement_events() {
   mysql_raw "
 SELECT CONCAT(
   DATE_FORMAT(occurred_at, '%Y-%m-%d %H:%i:%s.%f'), ' ', event_type,
-  ' task_id=', task_id, ' dataset_id=', dataset_id, ' mode=', execution_mode,
+  ' task_id=', task_id, ' name=', COALESCE((SELECT name FROM registered_dataset WHERE registered_dataset.dataset_id=task_execution_event.dataset_id),'未登记数据集'), ' mode=', execution_mode,
   CHAR(10), '  tier=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.tier')), 'null'),
   ' outcome=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.outcome')), 'null'),
   ' replica=', COALESCE(JSON_UNQUOTE(JSON_EXTRACT(details_json, '$.replicaId')), 'null'),
@@ -367,8 +369,6 @@ show_task() {
 
   echo
   echo "========== 二、任务后端执行结果 =========="
-  echo "说明：核对任务编号、模式、数据集、完成状态及执行证据；时间沿用数据库 UTC 记录。"
-  echo "data_preparation_ms 为数据准备阶段跨度，不等同于逐数据集传输耗时之和；NULL 表示未记录。"
   echo "[backend.task]"
   mysql_vertical "
 SELECT
@@ -398,7 +398,6 @@ WHERE task_id = ${task_id};"
 
   echo
   echo "========== 三、任务调度方案与执行证据 =========="
-  echo "说明：PLACEMENT_SELECTED 是最终选定的数据源和计算节点；下方事件核对实际执行节点及传输耗时。"
   show_placement_events "${task_id}"
 
   echo
@@ -425,7 +424,7 @@ ORDER BY event_id;"
 
   echo
   echo "========== 四、数据迁移状态与访问审计 =========="
-  echo "4.1 数据迁移：核对源节点、目标节点、完成状态、重试及错误。NULL 不表示已完成校验。"
+  echo "4.1 数据迁移"
   echo "[backend.migration_tasks]"
   mysql_table "
 SELECT
@@ -449,7 +448,7 @@ WHERE migration.task_id = ${task_id}
 ORDER BY migration.id;"
 
   echo
-  echo "4.2 访问审计：TASK_REQUEST 为本任务请求；RUN_CONTEXT 为同轮次辅助记录，不作为本任务的独立执行证明。"
+  echo "4.2 访问审计"
   echo "[backend.task_access_audit]"
   mysql_table "
 SELECT
@@ -782,7 +781,6 @@ show_report() {
     COMPARISON) echo "测试用例五 · 集中式计算／原位计算对比 · 任务 ${task_id}" ;;
     *) fail "任务模式不支持：${mode}" ;;
   esac
-  echo "只查询指定任务；本命令不会创建任务、移动数据或更新业务记录。"
   echo
   echo "========== 一、测试前数据副本记录 =========="
   PYTHONIOENCODING=utf-8 python3 -B "$SCRIPT_DIR/tc42_snapshot.py" \
@@ -791,7 +789,7 @@ show_report() {
   if [[ "$mode" == COMPARISON ]]; then
     echo
     echo "========== 五、集中式计算／原位计算计时与数据移动加速比 =========="
-    echo "T1=集中式计算数据移动时间，T2=原位计算数据移动时间，加速比=T1/T2；以下保留原始值，不代替人工验收结论。"
+    echo "T1=集中式计算数据移动时间，T2=原位计算数据移动时间，加速比=T1/T2。"
     show_speedup "$task_id"
   fi
 }
