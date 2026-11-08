@@ -108,6 +108,27 @@ class DurableTaskSchedulingServiceTest {
         add(1,1); when(resources.snapshot(any())).thenReturn(ledger(0,0)); reconcile();
         assertEquals("WAITING",rows.get(0).getState()); assertNull(rows.get(0).getJobName()); verifyNoInteractions(runner);
     }
+    @Test void waitingAdmissionLogsEveryCandidateOnceAtInfoLevel() {
+        ch.qos.logback.classic.Logger logger=(ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(SchedulingCandidateLogger.class);
+        ch.qos.logback.classic.Level previous=logger.getLevel();
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs=
+                new ch.qos.logback.core.read.ListAppender<>();
+        logs.start(); logger.addAppender(logs); logger.setLevel(ch.qos.logback.classic.Level.INFO);
+        try {
+            add(1,1); when(resources.snapshot(any())).thenReturn(ledger(0,0));
+            reconcile(); reconcile();
+            List<String> messages=logs.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                    .collect(Collectors.toList());
+            assertEquals(3,messages.size());
+            assertTrue(messages.get(1).contains("targetNode=node-a"));
+            assertTrue(messages.get(2).contains("targetNode=node-b"));
+            assertTrue(messages.get(2).contains("latencyMs=未测量"));
+            assertTrue(messages.get(2).contains("outcome=RESOURCE_INSUFFICIENT"));
+            assertEquals("WAITING",rows.get(0).getState());
+            verifyNoInteractions(runner);
+        } finally { logger.detachAppender(logs); logger.setLevel(previous); logs.stop(); }
+    }
     @Test void unboundIntentReservesCapacityBeforeFollowingTask() {
         DurableTaskJob active=add(1,1); active.setTargetNode("node-a"); active.setClusterId("main"); active.setState("PREPARING");
         active.setJobName("existing"); active.setCpu(.5); active.setMemoryGi(1.0); active.setGpu(0.0); active.setEphemeralStorageGi(2.0);

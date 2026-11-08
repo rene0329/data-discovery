@@ -37,6 +37,7 @@ public class DurableTaskSchedulingService {
     private final DataSource dataSource;
     private final ObjectProvider<K8sTaskOrchestratorService> orchestrator;
     private final ObjectProvider<ExternalDurableJobHandler> external;
+    private final SchedulingCandidateLogger candidateLogger = new SchedulingCandidateLogger();
     @org.springframework.beans.factory.annotation.Autowired private RuntimeImageMapper images;
     @org.springframework.beans.factory.annotation.Autowired private MigrationTaskMapper migrations;
     @org.springframework.beans.factory.annotation.Autowired private DatasetReplicaAvailabilityService replicaAvailability;
@@ -141,6 +142,7 @@ public class DurableTaskSchedulingService {
     }
     private void reconcile() {
         List<DurableTaskJob> active=jobs.listActive();
+        candidateLogger.retainJobs(active.stream().map(DurableTaskJob::getId).collect(Collectors.toSet()));
         // Observe running work first. Queued work never consumes an executor thread.
         for(DurableTaskJob row:active) if(!"WAITING".equals(row.getState())
                 && (row.getNextAttemptAt()==null || !row.getNextAttemptAt().isAfter(now()) || "CANCELLING".equals(row.getState()))) observe(row);
@@ -193,12 +195,13 @@ public class DurableTaskSchedulingService {
                 List<InPlacePlacementService.Placement> options=TaskV1Service.MODE_IN_PLACE.equals(row.getExecutionMode())
                         ?placement.candidates(datasets.listReplicas(row.getDatasetId()),compute)
                         :fixedCandidates(row,compute);
-                if(options.isEmpty()) { waiting(row,"暂无满足数据访问和节点约束的可用计算节点"); continue; }
+                if(options.isEmpty()) { candidateLogger.report(row,options,ledger,wanted,null); waiting(row,"暂无满足数据访问和节点约束的可用计算节点"); continue; }
                 boolean known=options.stream().allMatch(p -> ledger.availableCpu(NodeResourceLedger.key(p.getComputeNode()))!=null);
                 boolean ever=options.stream().anyMatch(p -> ledger.canEverFit(p.getComputeNode(),wanted));
-                if(known && !ever) { fail(row,"资源规格超过所有候选节点的可分配容量"); continue; }
+                if(known && !ever) { candidateLogger.report(row,options,ledger,wanted,null); fail(row,"资源规格超过所有候选节点的可分配容量"); continue; }
                 InPlacePlacementService.Placement selected=options.stream()
                         .filter(p -> ledger.fits(p.getComputeNode(),wanted)).findFirst().orElse(null);
+                candidateLogger.report(row,options,ledger,wanted,selected);
                 if(selected==null) { waiting(row,"候选节点CPU、内存、GPU或临时存储不足，等待资源释放"); continue; }
                 TaskManagement task=tasks.getTaskByTaskId(row.getTaskId());
                 if(task!=null && TaskV1Service.MODE_COMPARISON.equals(task.getExecutionMode())
@@ -277,6 +280,8 @@ public class DurableTaskSchedulingService {
                 :TaskV1Service.MODE_CENTRALIZED.equals(row.getExecutionMode())
                     ?"使用固定中心节点；优先中心节点已有副本，否则按可用副本原顺序选择；检查节点资源，不要求逻辑拓扑测量路径"
                     :"沿用本地、同站点、跨站点、中心节点回退顺序；跨站点按延迟升序、瓶颈带宽降序；跳过资源不足候选");
+        log.info("【调度选中】taskId={} datasetId={} mode={} details={}",
+                row.getTaskId(),row.getDatasetId(),row.getExecutionMode(),write(details));
         TaskExecutionEvent event=TaskExecutionEvent.builder().taskId(row.getTaskId()).datasetId(row.getDatasetId())
                 .executionMode(row.getExecutionMode()).eventType("PLACEMENT_SELECTED").nodeName(row.getTargetNode())
                 .occurredAt(now()).detailsJson(write(details)).build(); tasks.insertExecutionEvent(event);

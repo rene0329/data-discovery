@@ -59,6 +59,7 @@ public final class NodeResourceLedger {
     public Double availableMemoryGi(String key) { return available(key, 1); }
     public Double availableGpu(String key) { return available(key, 2); }
     public Double availableEphemeralStorageGi(String key) { return available(key, 3); }
+    public Double availablePodSlots(String key) { return available(key, 4); }
     private Double available(String key, int index) { return free.containsKey(key) ? free.get(key)[index] : null; }
     public String shortage(String key, JobResourceDemand demand) {
         double[] available = free.get(key);
