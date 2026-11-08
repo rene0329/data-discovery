@@ -20,38 +20,22 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Chooses where a distributed (IN_PLACE) run of one dataset executes. Task preflight and the
- * orchestrator both call {@link #place}, so a task that passes preflight runs exactly where
- * preflight said it could. Priority:
- * <ol>
- *   <li>a usable replica already on a schedulable compute node runs there (zero hops);</li>
- *   <li>else a usable replica whose site_code has a schedulable compute node runs on that
- *       same-site compute node;</li>
- *   <li>else, over every usable replica, the schedulable compute node nearest to the replica's
- *       node on the logical network topology: lowest total latency, then highest bottleneck
- *       bandwidth, then lowest node id. This crosses site boundaries (and may pick the central
- *       node); it also covers replicas whose node has no site_code.</li>
- * </ol>
- * Tiers 2 and 3 skip the central node, which is where CENTRALIZED runs execute: a distributed run
- * lands there only when its replica is on it, or when no other compute node is reachable.
- * Given a resource ledger, a compute node whose free CPU or memory cannot hold the Job is skipped
- * and the next node in the same order is used (the second-best node); the Job's request is then
- * reserved in the ledger, so later datasets of the same task see it.
- * Only when no usable replica can reach any schedulable compute node is there no placement.
+ * Multi-source nearest placement for IN_PLACE jobs. All usable replica nodes are zero-cost
+ * sources; accumulated measured latency is the transmission cost. Site and central-node labels
+ * do not change candidate priority. Equal-cost targets are ordered by node id for reproducibility.
+ * Admission checks the current job demand and reserves capacity before the next job is considered.
  */
 @Service
 public class InPlacePlacementService {
+    /** Describes the selected source/target relationship, not a scheduling priority. */
     public enum Tier { LOCAL, SAME_SITE, NEAREST }
 
     private final NodeManagementMapper nodeMapper;
     private final DatasetReplicaAvailabilityService replicaAvailabilityService;
     private final NodeAvailabilityService nodeAvailabilityService;
     private final NetworkTopologyService networkTopologyService;
-    private final String centralNodeName;
-    private final String centralNodeIp;
     private final NodeResourceService nodeResourceService;
 
-    /** Without a configured central node every compute node is treated alike. */
     public InPlacePlacementService(NodeManagementMapper nodeMapper,
                                    DatasetReplicaAvailabilityService replicaAvailabilityService,
                                    NodeAvailabilityService nodeAvailabilityService,
@@ -59,7 +43,7 @@ public class InPlacePlacementService {
         this(nodeMapper, replicaAvailabilityService, nodeAvailabilityService, networkTopologyService, null, null);
     }
 
-    /** Without a resource service no ledger is available and resources are not checked. */
+    /** Central-node arguments remain compatible with existing callers; all targets compete equally. */
     public InPlacePlacementService(NodeManagementMapper nodeMapper,
                                    DatasetReplicaAvailabilityService replicaAvailabilityService,
                                    NodeAvailabilityService nodeAvailabilityService,
@@ -82,14 +66,14 @@ public class InPlacePlacementService {
         this.replicaAvailabilityService = replicaAvailabilityService;
         this.nodeAvailabilityService = nodeAvailabilityService;
         this.networkTopologyService = networkTopologyService;
-        this.centralNodeName = centralNodeName == null ? "" : centralNodeName.trim();
-        this.centralNodeIp = centralNodeIp == null ? "" : centralNodeIp.trim();
     }
 
-    /** Compute-capable nodes that are currently schedulable, in mapper order. */
     public List<NodeManagement> schedulableComputeNodes() {
-        List<NodeManagement> computeNodes = nodeMapper.getComputeCapableNodes();
-        return computeNodes == null ? Collections.emptyList() : computeNodes.stream()
+        return schedulable(nodeMapper.getComputeCapableNodes());
+    }
+
+    private List<NodeManagement> schedulable(List<NodeManagement> nodes) {
+        return nodes == null ? Collections.emptyList() : nodes.stream()
                 .filter(nodeAvailabilityService::isSchedulable).collect(Collectors.toList());
     }
 
@@ -97,249 +81,119 @@ public class InPlacePlacementService {
         return place(replicas, schedulableComputeNodes());
     }
 
-    public Placement place(List<DatasetReplica> replicas, List<NodeManagement> schedulableComputeNodes) {
-        return place(replicas, schedulableComputeNodes, null, null);
+    public Placement place(List<DatasetReplica> replicas, List<NodeManagement> computeNodes) {
+        return place(replicas, computeNodes, null, null);
     }
 
-    /**
-     * Ordered source-replica/compute-node alternatives, independent of current capacity.
-     * The admission coordinator checks a fresh resource snapshot before choosing an alternative.
+    /** One nearest source per reachable compute node, ordered by cumulative transmission cost.
+     * Enumerate all targets so the coordinator can log shortages and distinguish temporary
+     * contention from a request exceeding every node's total capacity, then admit the first fit.
      */
     public List<Placement> candidates(List<DatasetReplica> replicas, List<NodeManagement> computeNodes) {
-        List<Candidate> sources = new ArrayList<>();
+        return orderedCandidates(usableSources(replicas, schedulable(computeNodes), new ArrayList<>(), null),
+                schedulable(computeNodes));
+    }
+
+    private List<Candidate> usableSources(List<DatasetReplica> replicas, List<NodeManagement> computeNodes,
+                                         List<String> reasons, DecisionTrace trace) {
+        List<Candidate> usable = new ArrayList<>();
         for (DatasetReplica replica : replicas == null ? Collections.<DatasetReplica>emptyList() : replicas) {
-            if (!replicaAvailabilityService.evaluate(replica).isUsable()) continue;
             NodeManagement source = nodeMapper.getNodeById(replica.getNodeId());
             if (source == null) source = computeNodes.stream()
                     .filter(node -> Objects.equals(node.getNodeId(), replica.getNodeId())).findFirst().orElse(null);
-            if (source != null) sources.add(new Candidate(replica, source));
+            ReplicaAvailability availability = replicaAvailabilityService.evaluate(replica);
+            String reason = source == null ? "副本所在节点不存在"
+                    : availability.isUsable() ? "副本通过可用性检查" : availability.getReason();
+            if (trace != null) trace.add("REPLICA", replica.getReplicaId(), source, null, null, null,
+                    source != null && availability.isUsable() ? "USABLE" : "REJECTED", reason);
+            if (source != null && availability.isUsable()) usable.add(new Candidate(replica, source));
+            else reasons.add(label(source, replica.getNodeId()) + ": " + reason);
         }
-        Map<String, Placement> ordered = new LinkedHashMap<>();
-        Map<Integer, Map<Integer, NetworkPath>> paths = new LinkedHashMap<>();
-        for (Candidate source : sources) {
-            paths.computeIfAbsent(source.node.getNodeId(), networkTopologyService::pathsFrom);
-            for (NodeManagement compute : computeNodes) {
-                if (Objects.equals(source.node.getNodeId(), compute.getNodeId()))
-                    addCandidate(ordered, source, compute, Tier.LOCAL, null);
-            }
-        }
-        List<NodeManagement> distributed = computeNodes.stream().filter(node -> !isCentral(node))
-                .collect(Collectors.toList());
-        appendNearbyCandidates(ordered, sources, distributed, paths);
-        appendNearbyCandidates(ordered, sources, computeNodes.stream().filter(this::isCentral)
-                .collect(Collectors.toList()), paths);
-        return Collections.unmodifiableList(new ArrayList<>(ordered.values()));
+        usable.sort(Comparator.comparing((Candidate source) -> source.replica.getReplicaId(),
+                Comparator.nullsLast(Comparator.naturalOrder())));
+        return usable;
     }
 
-    private void appendNearbyCandidates(Map<String, Placement> ordered, List<Candidate> sources,
-                                        List<NodeManagement> computes,
-                                        Map<Integer, Map<Integer, NetworkPath>> paths) {
-        for (Candidate source : sources) {
-            if (source.node.getSiteCode() == null) continue;
-            for (NodeManagement compute : computes) {
-                if (source.node.getSiteCode().equals(compute.getSiteCode()))
-                    addCandidate(ordered, source, compute, Tier.SAME_SITE,
-                            paths.get(source.node.getNodeId()).get(compute.getNodeId()));
-            }
+    private List<Placement> orderedCandidates(List<Candidate> sources, List<NodeManagement> computeNodes) {
+        if (sources.isEmpty() || computeNodes.isEmpty()) return Collections.emptyList();
+        Map<Integer, Candidate> bySource = new LinkedHashMap<>();
+        for (Candidate source : sources) bySource.putIfAbsent(source.node.getNodeId(), source);
+        Map<Integer, NetworkPath> paths = networkTopologyService.pathsFromSources(bySource.keySet());
+        List<Placement> result = new ArrayList<>();
+        for (NodeManagement target : computeNodes) {
+            // Local reads need no measured link. Multi-source roots always have cost zero.
+            NetworkPath path = bySource.containsKey(target.getNodeId())
+                    ? new NetworkPath(Collections.singletonList(target.getNodeId()), 0.0, Long.MAX_VALUE)
+                    : paths.get(target.getNodeId());
+            if (path == null) continue;
+            Candidate source = bySource.get(path.getNodeIds().get(0));
+            if (source == null) continue;
+            Tier tier = tier(source.node, target);
+            DecisionTrace trace = new DecisionTrace(null, null);
+            trace.add("SELECTED", source.replica.getReplicaId(), source.node, target, tier, path, "SELECTED",
+                    "多源最短路径按累计时延升序选择候选；实际资源由统一调度协调器检查");
+            result.add(new Placement(source.replica, source.node, target, tier, path,
+                    Collections.emptyList(), null, trace.events));
         }
-        List<Placement> remote = new ArrayList<>();
-        for (Candidate source : sources) {
-            for (NodeManagement compute : computes) {
-                NetworkPath path = paths.get(source.node.getNodeId()).get(compute.getNodeId());
-                if (path != null) remote.add(new Placement(source.replica, source.node, compute,
-                        Tier.NEAREST, path, Collections.emptyList(), null));
-            }
-        }
-        remote.sort(Comparator.comparingDouble((Placement item) -> item.getPath().getLatencyMs())
-                .thenComparing(Comparator.comparingLong((Placement item) -> item.getPath().getBandwidthMbps()).reversed())
-                .thenComparing(item -> item.getComputeNode().getNodeId())
-                .thenComparing(item -> String.valueOf(item.getComputeNode().getNodeName())));
-        for (Placement item : remote) addCandidate(ordered, new Candidate(item.replica, item.replicaNode),
-                item.computeNode, item.tier, item.path);
+        result.sort(Comparator.comparingDouble((Placement option) -> option.path.getLatencyMs())
+                .thenComparing(option -> option.computeNode.getNodeId())
+                .thenComparing(option -> NodeResourceLedger.key(option.computeNode)));
+        return Collections.unmodifiableList(result);
     }
 
-    private void addCandidate(Map<String, Placement> ordered, Candidate source, NodeManagement target,
-                              Tier tier, NetworkPath path) {
-        String key = source.replica.getReplicaId() + "/" + NodeResourceLedger.key(target);
-        DecisionTrace trace = new DecisionTrace(null, null);
-        trace.add("SELECTED", source.replica.getReplicaId(), source.node, target, tier, path, "SELECTED",
-                "按本地、同站点、跨站点网络顺序选择候选；实际资源由统一调度协调器检查");
-        ordered.putIfAbsent(key, new Placement(source.replica, source.node, target, tier, path,
-                Collections.emptyList(), null, trace.events));
-    }
-
-    /** Free resources of the given compute nodes for one placement pass; null when they cannot be read. */
     public NodeResourceLedger resourceLedger(List<NodeManagement> computeNodes) {
         return nodeResourceService == null ? new NodeResourceLedger() : nodeResourceService.snapshot(computeNodes);
     }
 
-    /** With a null ledger (or demand) resources are not checked, as before. */
+    /** Legacy/preflight placement shares candidate ordering with durable resource admission. */
     public Placement place(List<DatasetReplica> replicas, List<NodeManagement> schedulableComputeNodes,
                            JobResourceDemand demand, NodeResourceLedger ledger) {
-        List<NodeManagement> computeNodes = schedulableComputeNodes == null
-                ? Collections.emptyList() : schedulableComputeNodes;
+        List<NodeManagement> computeNodes = schedulable(schedulableComputeNodes);
         List<String> reasons = new ArrayList<>();
-        List<Candidate> usable = new ArrayList<>();
         DecisionTrace trace = new DecisionTrace(demand, ledger);
         trace.add("STARTED", null, null, null, null, null, "STARTED",
-                "副本所在计算节点优先，其次同站点；再按路径时延升序、瓶颈带宽降序、节点编号升序选择；同站点按候选顺序选择");
-        for (NodeManagement compute : computeNodes) {
-            trace.add("NODE", null, null, compute, null, null, "SCHEDULABLE",
-                    "当前可用于调度的计算节点；空闲资源为可分配资源减去 Pod 已申请资源");
-        }
-        for (DatasetReplica replica : replicas == null ? Collections.<DatasetReplica>emptyList() : replicas) {
-            NodeManagement node = nodeMapper.getNodeById(replica.getNodeId());
-            if (node == null) {
-                node = computeNodes.stream().filter(compute -> Objects.equals(
-                        compute.getNodeId(), replica.getNodeId())).findFirst().orElse(null);
-            }
-            ReplicaAvailability availability = replicaAvailabilityService.evaluate(replica);
-            trace.add("REPLICA", replica.getReplicaId(), node, null, null, null,
-                    availability.isUsable() && node != null ? "USABLE" : "REJECTED",
-                    node == null ? "副本所在节点不存在"
-                            : availability.isUsable() ? "副本通过可用性检查" : availability.getReason());
-            if (!availability.isUsable()) {
-                reasons.add(label(node, replica.getNodeId()) + ": " + availability.getReason());
-            } else if (node == null) {
-                reasons.add(label(null, replica.getNodeId()) + ": replica node not found");
-            } else {
-                usable.add(new Candidate(replica, node));
-            }
-        }
-        Fit fit = new Fit(demand, ledger, trace);
-        // Capture every source-to-compute path before any placement tier can return early.
-        // These are topology snapshots, independent of candidate ordering and resource fit.
-        for (Candidate candidate : usable) {
-            Map<Integer, NetworkPath> paths = fit.paths.computeIfAbsent(candidate.node.getNodeId(),
-                    networkTopologyService::pathsFrom);
-            for (NodeManagement compute : computeNodes) {
-                boolean local = Objects.equals(candidate.node.getNodeId(), compute.getNodeId());
-                NetworkPath path = local
-                        ? new NetworkPath(Collections.singletonList(compute.getNodeId()), 0.0, Long.MAX_VALUE)
-                        : paths.get(compute.getNodeId());
-                Tier tier = local ? Tier.LOCAL
-                        : candidate.node.getSiteCode() != null
-                        && candidate.node.getSiteCode().equals(compute.getSiteCode()) ? Tier.SAME_SITE : Tier.NEAREST;
-                trace.add("PATH", candidate.replica.getReplicaId(), candidate.node, compute, tier, path,
+                "以所有可用副本为源执行多源最短路径搜索，按累计时延升序选择资源满足当前作业需求的节点；同代价按节点编号升序");
+        for (NodeManagement compute : computeNodes) trace.add("NODE", null, null, compute, null, null,
+                "SCHEDULABLE", "当前可用于调度的计算节点；剩余资源扣除 Pod 申请量及本轮资源预留");
+        List<Candidate> sources = usableSources(replicas, computeNodes, reasons, trace);
+        // Preserve every source-to-target path for diagnostics, even when selection can stop early.
+        for (Candidate source : sources) {
+            Map<Integer, NetworkPath> paths = networkTopologyService.pathsFrom(source.node.getNodeId());
+            for (NodeManagement target : computeNodes) {
+                NetworkPath path = Objects.equals(source.node.getNodeId(), target.getNodeId())
+                        ? new NetworkPath(Collections.singletonList(target.getNodeId()), 0.0, Long.MAX_VALUE)
+                        : paths.get(target.getNodeId());
+                trace.add("PATH", source.replica.getReplicaId(), source.node, target, tier(source.node, target), path,
                         path == null ? "UNAVAILABLE" : "RECORDED",
-                        local ? "源节点与计算节点相同，路径时延为 0"
-                                : path == null ? "逻辑网络拓扑中没有有效测量路径"
-                                : "记录源节点到计算节点的路径时延，不受节点选择顺序影响");
+                        path == null ? "逻辑网络拓扑中没有有效测量路径" : "记录源节点到计算节点的累计路径时延");
             }
         }
-        trace.add("STAGE", null, null, null, Tier.LOCAL, null, "STARTED", "检查副本所在节点是否具备计算能力且资源满足请求");
-        Placement placement = locate(usable, computeNodes, reasons, fit);
-        if (placement.isFound()) {
-            String reason = placement.getTier() == Tier.LOCAL ? "数据副本所在计算节点优先"
-                    : placement.getTier() == Tier.SAME_SITE ? "按候选节点顺序选择副本同站点计算节点"
-                    : "在可达候选节点中，按路径时延升序、瓶颈带宽降序、节点编号升序选择";
-            if (isCentral(placement.getComputeNode()) && placement.getTier() != Tier.LOCAL) {
-                reason += "；其他计算节点无可用放置，回退到中心节点";
-            }
-            if (placement.getResourceNote() != null) reason += "；" + placement.getResourceNote();
-            trace.add("SELECTED", placement.getReplica().getReplicaId(), placement.getReplicaNode(),
-                    placement.getComputeNode(), placement.getTier(), placement.getPath(), "SELECTED", reason);
-            fit.reserve(placement.getComputeNode());
-        } else {
-            trace.add("FAILED", null, null, null, null, null, "FAILED", String.join("; ", reasons));
+        Set<String> shortages = new LinkedHashSet<>();
+        for (Placement option : orderedCandidates(sources, computeNodes)) {
+            boolean fits = ledger == null || demand == null || ledger.fits(option.computeNode, demand);
+            String reason = !fits ? ledger.shortage(resourceKey(option.computeNode), demand)
+                    : ledger == null || demand == null ? "未执行资源容量检查" : "剩余资源满足当前作业需求";
+            trace.add("CANDIDATE", option.replica.getReplicaId(), option.replicaNode, option.computeNode,
+                    option.tier, option.path, fits ? "ELIGIBLE" : "REJECTED", reason);
+            if (!fits) { shortages.add(reason); continue; }
+            String note = shortages.isEmpty() ? null : String.join("；", shortages);
+            trace.add("SELECTED", option.replica.getReplicaId(), option.replicaNode, option.computeNode,
+                    option.tier, option.path, "SELECTED", "按最小累计时延选择首个资源满足要求的计算节点");
+            if (ledger != null && demand != null) ledger.reserve(option.computeNode, demand);
+            return new Placement(option.replica, option.replicaNode, option.computeNode, option.tier, option.path,
+                    reasons, note, trace.events);
         }
-        return new Placement(placement.getReplica(), placement.getReplicaNode(), placement.getComputeNode(),
-                placement.getTier(), placement.getPath(), placement.getRejectedReasons(),
-                placement.getResourceNote(), trace.events);
+        if (!shortages.isEmpty()) reasons.add("no compute node has enough free resources: " + String.join("；", shortages));
+        else for (Candidate source : sources)
+            reasons.add(label(source.node, source.node.getNodeId()) + ": no reachable compute node with a measured path");
+        trace.add("FAILED", null, null, null, null, null, "FAILED", String.join("; ", reasons));
+        return new Placement(null, null, null, null, null, reasons, null, trace.events);
     }
 
-    private Placement locate(List<Candidate> usable, List<NodeManagement> computeNodes,
-                             List<String> reasons, Fit fit) {
-        for (Candidate candidate : usable) {
-            for (NodeManagement compute : computeNodes) {
-                if (Objects.equals(compute.getNodeId(), candidate.node.getNodeId())
-                        && fit.accepts(candidate, compute, Tier.LOCAL, null, true)) {
-                    return fit.placement(candidate.replica, candidate.node, compute, Tier.LOCAL, null, reasons);
-                }
-            }
-        }
-        List<NodeManagement> awayFromCentral = computeNodes.stream()
-                .filter(compute -> !isCentral(compute)).collect(Collectors.toList());
-        if (awayFromCentral.size() < computeNodes.size()) {
-            fit.trace.add("STAGE", null, null, null, null, null, "STARTED", "本地放置不可用；优先检查非中心计算节点");
-            Placement distributed = nearby(usable, awayFromCentral, reasons, new ArrayList<>(), fit);
-            if (distributed != null) return distributed;
-            fit.trace.add("STAGE", null, null, null, null, null, "FALLBACK", "非中心计算节点无可用放置；将中心节点纳入候选范围");
-        }
-        List<String> unreachable = new ArrayList<>();
-        Placement any = nearby(usable, computeNodes, reasons, unreachable, fit);
-        if (any != null) return any;
-        reasons.addAll(unreachable);
-        if (fit.note() != null) reasons.add("no compute node has enough free resources: " + fit.note());
-        return new Placement(null, null, null, null, null, reasons, null);
-    }
-
-    /** Tiers 2 and 3 over the given compute nodes; null when none is reachable (and fits). */
-    private Placement nearby(List<Candidate> usable, List<NodeManagement> computeNodes,
-                             List<String> reasons, List<String> unreachable, Fit fit) {
-        fit.trace.add("STAGE", null, null, null, Tier.SAME_SITE, null, "STARTED", "检查副本同站点的计算节点，按候选节点顺序选择");
-        for (Candidate candidate : usable) {
-            String siteCode = candidate.node.getSiteCode();
-            if (siteCode == null) continue;
-            for (NodeManagement compute : computeNodes) {
-                if (siteCode.equals(compute.getSiteCode())) {
-                    // Record available path measurements without changing same-site priority.
-                    NetworkPath path = fit.paths.get(candidate.node.getNodeId())
-                            .get(compute.getNodeId());
-                    if (fit.accepts(candidate, compute, Tier.SAME_SITE, path, true)) {
-                        return fit.placement(candidate.replica, candidate.node, compute, Tier.SAME_SITE, path, reasons);
-                    }
-                }
-            }
-        }
-
-        fit.trace.add("STAGE", null, null, null, Tier.NEAREST, null, "STARTED", "同站点无可用放置；比较可达节点的路径时延和瓶颈带宽");
-        Comparator<Placement> nearest = Comparator
-                .comparingDouble((Placement p) -> p.getPath().getLatencyMs())
-                .thenComparing(Comparator.comparingLong((Placement p) -> p.getPath().getBandwidthMbps()).reversed())
-                .thenComparing(p -> p.getComputeNode().getNodeId())
-                .thenComparing(p -> String.valueOf(p.getComputeNode().getNodeName()));
-        Placement best = null;
-        List<Placement> full = new ArrayList<>();
-        for (Candidate candidate : usable) {
-            Map<Integer, NetworkPath> paths = fit.paths.get(candidate.node.getNodeId());
-            Placement local = null;
-            boolean reachable = false;
-            for (NodeManagement compute : computeNodes) {
-                NetworkPath path = paths.get(compute.getNodeId());
-                if (path == null) {
-                    fit.trace.add("CANDIDATE", candidate.replica.getReplicaId(), candidate.node, compute,
-                            Tier.NEAREST, null, "REJECTED", "逻辑网络拓扑中没有可用路径");
-                    continue;
-                }
-                reachable = true;
-                Placement option = new Placement(candidate.replica, candidate.node, compute, Tier.NEAREST, path, reasons, null);
-                if (!fit.accepts(candidate, compute, Tier.NEAREST, path, false)) {
-                    full.add(option);
-                    continue;
-                }
-                if (local == null || nearest.compare(option, local) < 0) local = option;
-            }
-            String nodeLabel = label(candidate.node, candidate.node.getNodeId());
-            if (!reachable) {
-                String site = candidate.node.getSiteCode() == null ? "node has no site_code"
-                        : "no available compute node in site '" + candidate.node.getSiteCode() + "'";
-                unreachable.add(nodeLabel + ": " + site + ", and no reachable compute node from " + nodeLabel);
-            } else if (local != null && (best == null || nearest.compare(local, best) < 0)) {
-                best = local;
-            }
-        }
-        // Only nodes that would have won without the resource check explain the choice.
-        for (Placement skipped : full) {
-            if (best == null || nearest.compare(skipped, best) < 0) fit.accepts(skipped.getComputeNode());
-        }
-        return best == null ? null : fit.placement(best.getReplica(), best.getReplicaNode(),
-                best.getComputeNode(), Tier.NEAREST, best.getPath(), reasons);
-    }
-
-    private boolean isCentral(NodeManagement node) {
-        return (!centralNodeName.isEmpty() && centralNodeName.equals(node.getNodeName()))
-                || (!centralNodeIp.isEmpty() && centralNodeIp.equals(node.getInternalIp()));
+    private static Tier tier(NodeManagement source, NodeManagement target) {
+        if (Objects.equals(source.getNodeId(), target.getNodeId())) return Tier.LOCAL;
+        return source.getSiteCode() != null && source.getSiteCode().equals(target.getSiteCode())
+                ? Tier.SAME_SITE : Tier.NEAREST;
     }
 
     private static String label(NodeManagement node, Integer nodeId) {
@@ -347,57 +201,6 @@ public class InPlacePlacementService {
     }
 
     private static String resourceKey(NodeManagement node) { return NodeResourceLedger.key(node); }
-
-    /** The resource check of one placement; remembers the better nodes it had to skip. */
-    private static final class Fit {
-        private final JobResourceDemand demand;
-        private final NodeResourceLedger ledger;
-        private final Set<String> shortages = new LinkedHashSet<>();
-        private final DecisionTrace trace;
-        private final Map<Integer, Map<Integer, NetworkPath>> paths = new LinkedHashMap<>();
-
-        Fit(JobResourceDemand demand, NodeResourceLedger ledger, DecisionTrace trace) {
-            this.demand = demand;
-            this.ledger = ledger;
-            this.trace = trace;
-        }
-
-        boolean fits(NodeManagement compute) {
-            return ledger == null || demand == null || ledger.fits(resourceKey(compute), demand);
-        }
-
-        /** Like {@link #fits}, but a node that does not fit is recorded as skipped. */
-        boolean accepts(NodeManagement compute) {
-            if (fits(compute)) return true;
-            shortages.add(ledger.shortage(resourceKey(compute), demand));
-            return false;
-        }
-
-        boolean accepts(Candidate source, NodeManagement compute, Tier tier, NetworkPath path,
-                        boolean rememberShortage) {
-            boolean fits = fits(compute);
-            String reason = !fits ? ledger.shortage(resourceKey(compute), demand)
-                    : ledger == null || demand == null || ledger.availableCpu(resourceKey(compute)) == null
-                    ? "没有完整的资源快照，按现有策略继续选择" : "CPU 和内存空闲资源满足请求";
-            trace.add("CANDIDATE", source.replica.getReplicaId(), source.node, compute, tier, path,
-                    fits ? "ELIGIBLE" : "REJECTED", reason);
-            if (!fits && rememberShortage) accepts(compute);
-            return fits;
-        }
-
-        void reserve(NodeManagement compute) {
-            if (ledger != null && demand != null) ledger.reserve(resourceKey(compute), demand);
-        }
-
-        String note() {
-            return shortages.isEmpty() ? null : String.join("；", shortages);
-        }
-
-        Placement placement(DatasetReplica replica, NodeManagement replicaNode, NodeManagement compute,
-                            Tier tier, NetworkPath path, List<String> reasons) {
-            return new Placement(replica, replicaNode, compute, tier, path, reasons, note());
-        }
-    }
 
     /** Captured during the actual traversal; preflight callers do not emit or persist it. */
     private static final class DecisionTrace {
@@ -479,7 +282,7 @@ public class InPlacePlacementService {
         public NodeManagement getReplicaNode() { return replicaNode; }
         public NodeManagement getComputeNode() { return computeNode; }
         public Tier getTier() { return tier; }
-        /** Network path for a NEAREST placement; null for LOCAL and SAME_SITE. */
+        /** Measured shortest path; local reads have a singleton zero-cost path. */
         public NetworkPath getPath() { return path; }
         /** Why replicas were not usable for placement; complete only when nothing was found. */
         public List<String> getRejectedReasons() { return rejectedReasons; }

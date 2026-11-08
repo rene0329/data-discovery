@@ -676,6 +676,7 @@ class K8sTaskOrchestratorServiceTest {
         paths.put(1, new NetworkTopologyService.NetworkPath(Arrays.asList(5, 2, 1), 12.0, 100L));
         paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(5, 2, 3), 8.0, 100L));
         when(topology.pathsFrom(5)).thenReturn(paths);
+        when(topology.pathsFromSources(anyCollection())).thenReturn(paths);
         registerDataset(datasets, availability, 10L, "test", 5);
         RuntimeImage image = RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true)
                 .resolvedDigest("sha256:image").commandJson("[\"python\"]")
@@ -746,6 +747,11 @@ class K8sTaskOrchestratorServiceTest {
         fromSz3.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(7, 9), 0.523, 4277L));
         fromSz3.put(2, new NetworkTopologyService.NetworkPath(Arrays.asList(7, 9, 2), 31.192, 114L));
         when(topology.pathsFrom(7)).thenReturn(fromSz3);
+        Map<Integer, NetworkTopologyService.NetworkPath> fromSz2 = new java.util.HashMap<>();
+        fromSz2.put(9, new NetworkTopologyService.NetworkPath(Arrays.asList(8, 9), 0.5, 4277L));
+        when(topology.pathsFrom(8)).thenReturn(fromSz2);
+        when(topology.pathsFromSources(eq(Collections.singleton(7)))).thenReturn(fromSz3);
+        when(topology.pathsFromSources(eq(Collections.singleton(8)))).thenReturn(fromSz2);
         registerDataset(datasets, availability, 6L, "yelp", 8);
         registerDataset(datasets, availability, 4L, "epinions", 7);
         RuntimeImage image = RuntimeImage.builder().runtimeImageId(7L).status("READY").enabled(true)

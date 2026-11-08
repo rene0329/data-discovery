@@ -349,6 +349,7 @@ class TaskV1ServiceTest {
         paths.put(7, new NetworkTopologyService.NetworkPath(Collections.singletonList(7), 0.0, Long.MAX_VALUE));
         paths.put(3, new NetworkTopologyService.NetworkPath(Arrays.asList(7, 3), 25.0, 100L));
         when(topology.pathsFrom(7)).thenReturn(paths);
+        when(topology.pathsFromSources(any())).thenReturn(paths);
         CreateTaskRequest request = request();
         request.setExecutionMode("COMPARISON");
 
@@ -380,7 +381,7 @@ class TaskV1ServiceTest {
         assertEquals(1, failed.size());
         assertEquals("IN_PLACE_DATASET", failed.get(0).getResourceType());
         assertEquals("IN_PLACE", failed.get(0).getExecutionMode());
-        assertTrue(failed.get(0).getMessage().contains("no reachable compute node from cluster-hz-1"),
+        assertTrue(failed.get(0).getMessage().contains("no reachable compute node with a measured path"),
                 failed.get(0).getMessage());
         assertTrue(result.getChecks().stream().anyMatch(check -> "CENTRAL_NODE".equals(check.getResourceType())
                 && check.isAvailable() && "CENTRALIZED".equals(check.getExecutionMode())));
@@ -391,12 +392,16 @@ class TaskV1ServiceTest {
     }
 
     @Test
-    void inPlacePreflightPrefersASameSiteComputeNodeWithoutACrossSiteNote() {
+    void inPlacePreflightSelectsAMeasuredSameSitePathWithoutACrossSiteNote() {
         NodeManagement central = storageReplicaFixture();
         NodeManagement hzCompute = NodeManagement.builder().nodeId(8).nodeName("cluster-hz-2")
                 .type("compute").siteCode("hz").build();
         when(nodeMapper.getComputeCapableNodes()).thenReturn(Arrays.asList(central, hzCompute));
         when(nodeAvailabilityService.isSchedulable(hzCompute)).thenReturn(true);
+        Map<Integer, NetworkTopologyService.NetworkPath> paths = new HashMap<>();
+        paths.put(8, new NetworkTopologyService.NetworkPath(Arrays.asList(7, 8), 1.0, 100L));
+        when(topology.pathsFrom(7)).thenReturn(paths);
+        when(topology.pathsFromSources(any())).thenReturn(paths);
         CreateTaskRequest request = request();
         request.setExecutionMode("IN_PLACE");
 

@@ -279,7 +279,7 @@ public class DurableTaskSchedulingService {
                 ?"使用外部方案明确指定的源副本与目标节点；检查节点资源，不要求逻辑拓扑测量路径"
                 :TaskV1Service.MODE_CENTRALIZED.equals(row.getExecutionMode())
                     ?"使用固定中心节点；优先中心节点已有副本，否则按可用副本原顺序选择；检查节点资源，不要求逻辑拓扑测量路径"
-                    :"沿用本地、同站点、跨站点、中心节点回退顺序；跨站点按延迟升序、瓶颈带宽降序；跳过资源不足候选");
+                    :"以所有可用副本为源执行多源最短路径搜索；按累计时延升序、同代价按节点编号升序，选择首个资源满足当前作业需求的节点");
         log.info("【调度选中】taskId={} datasetId={} mode={} details={}",
                 row.getTaskId(),row.getDatasetId(),row.getExecutionMode(),write(details));
         TaskExecutionEvent event=TaskExecutionEvent.builder().taskId(row.getTaskId()).datasetId(row.getDatasetId())

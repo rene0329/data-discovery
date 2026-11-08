@@ -59,7 +59,7 @@ class DatasetHeatPlacementTest {
     }
 
     @Test
-    void hotHzDatasetMovesOneHopTowardsMaster215NotAcrossTheNetwork() {
+    void hotHzDatasetMovesOneHopTowardsTheMinimumCostComputeNode() {
         dataset(7, "tiny-imagenet", 46.85, HZ_1);
 
         DatasetStoragePlan plan = service(30, 1).preview("heat");
@@ -70,8 +70,8 @@ class DatasetHeatPlacementTest {
         assertEquals(HZ_1, move.getSourceNodeId());
         assertEquals(MASTER_141, move.getTargetNodeId());
         DatasetStoragePlan.Placement row = plan.getPlacements().get(0);
-        assertEquals(MASTER_215, row.getConsumerNodeId());
-        assertEquals("温度 46.85 ≥ 30；就近计算节点 master-215；到计算节点时延 6.45 → 0.09 ms", row.getReason());
+        assertEquals(MASTER_40, row.getConsumerNodeId());
+        assertEquals("温度 46.85 ≥ 30；就近计算节点 master-40；到计算节点时延 6.44 → 0.08 ms", row.getReason());
         verifyNoInteractions(scheduling);
     }
 
@@ -90,14 +90,14 @@ class DatasetHeatPlacementTest {
     void neverMovesOntoAComputeStorageNode() {
         // sh data runs on cluster-sh-1; the only storage on that route is the source itself.
         dataset(5, "catdog", 46.85, SH_3);
-        // Core data runs on master-215 next to it; master-40 (compute-storage) is never a target.
+        // Core data runs on master-40 next to it; master-40 (compute-storage) is never a target.
         dataset(17, "fashion", 46.85, MASTER_141);
 
         DatasetStoragePlan plan = service(30, 1).preview("heat");
 
         assertTrue(plan.getAssignments().isEmpty());
         assertTrue(plan.getNotices().get(0).contains("cluster-sh-3 已是通往就近计算节点 cluster-sh-1"));
-        assertTrue(plan.getNotices().get(1).contains("master-141 已是通往就近计算节点 master-215"));
+        assertTrue(plan.getNotices().get(1).contains("master-141 已是通往就近计算节点 master-40"));
     }
 
     @Test
@@ -130,7 +130,7 @@ class DatasetHeatPlacementTest {
                 .thenReturn(replica(700L, 7L, MASTER_141, "AVAILABLE"));
         DatasetStoragePlan near = service.preview("heat");
         assertTrue(near.getAssignments().isEmpty());
-        assertTrue(near.getNotices().get(0).contains("master-141 上已有这个数据集更靠近计算节点 master-215 的副本"));
+        assertTrue(near.getNotices().get(0).contains("master-141 上已有这个数据集更靠近计算节点 master-40 的副本"));
     }
 
     @Test
@@ -207,6 +207,7 @@ class DatasetHeatPlacementTest {
                 }
             }
             when(topology.pathsFrom(source)).thenReturn(best);
+            when(topology.pathsFromSources(eq(Collections.singleton(source)))).thenReturn(best);
         }
     }
 

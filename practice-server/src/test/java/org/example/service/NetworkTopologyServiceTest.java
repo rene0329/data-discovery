@@ -194,6 +194,80 @@ class NetworkTopologyServiceTest {
         assertNull(topology.pathsFromLastMeasurements(4).get(6));
     }
 
+    @Test
+    void multiSourcePathsChooseTheLowestCostReplicaForEachTarget() {
+        java.util.Map<Integer, NetworkTopologyService.NetworkPath> paths = topology.pathsFromSources(Arrays.asList(4, 6));
+        assertEquals(Arrays.asList(4, 3, 2), paths.get(2).getNodeIds());
+        assertEquals(25.0, paths.get(2).getLatencyMs());
+        assertEquals(Arrays.asList(6, 12), paths.get(12).getNodeIds());
+        assertEquals(2.0, paths.get(12).getLatencyMs());
+        assertEquals(Arrays.asList(4), paths.get(4).getNodeIds());
+        assertEquals(Arrays.asList(6), paths.get(6).getNodeIds());
+    }
+
+    @Test
+    void multiSourcePathsRelaxAnEarlierLongRouteAndKeepItsPredecessors() {
+        metrics.get(1).setLatency(100.0);
+        java.util.Map<Integer, NetworkTopologyService.NetworkPath> paths = topology.pathsFromSources(Arrays.asList(1, 6));
+        assertEquals(Arrays.asList(1, 2, 3, 4), paths.get(4).getNodeIds());
+        assertEquals(30.0, paths.get(4).getLatencyMs());
+        assertEquals(50L, paths.get(4).getBandwidthMbps());
+    }
+
+    @Test
+    void multiSourcePathsExcludeFailedStaleAndUnavailableTransitNodes() {
+        metrics.get(4).setStatus("inactive");
+        java.util.Map<Integer, NetworkTopologyService.NetworkPath> paths = topology.pathsFromSources(Arrays.asList(4, 6));
+        assertEquals(Arrays.asList(6, 12), paths.get(12).getNodeIds());
+        assertEquals(Arrays.asList(4, 3), paths.get(3).getNodeIds());
+        metrics.get(3).setMeasurementTime(Timestamp.from(Instant.now().minusSeconds(1801)));
+        assertNull(topology.pathsFromSources(Arrays.asList(4, 6)).get(3));
+        nodes.get(2).setEnabled(false);
+        assertFalse(topology.pathsFromSources(Arrays.asList(3, 6)).containsKey(3));
+        assertTrue(topology.pathsFromSources(Arrays.asList(3, 999)).isEmpty());
+        assertTrue(topology.pathsFromSources(java.util.Collections.emptyList()).isEmpty());
+    }
+
+    @Test
+    void multiSourceZeroCostCyclesTerminateAndEqualCostsAreReproducible() {
+        metrics.get(0).setLatency(0.0);
+        metrics.get(1).setLatency(0.0);
+        metrics.get(2).setLatency(0.0);
+        java.util.Map<Integer, NetworkTopologyService.NetworkPath> forward = topology.pathsFromSources(Arrays.asList(1, 2));
+        java.util.Map<Integer, NetworkTopologyService.NetworkPath> reversed = topology.pathsFromSources(Arrays.asList(2, 1, 2));
+        assertEquals(Arrays.asList(1), forward.get(1).getNodeIds());
+        assertEquals(Arrays.asList(2), forward.get(2).getNodeIds());
+        assertEquals(Arrays.asList(1, 3), forward.get(3).getNodeIds());
+        assertEquals(forward.get(4).getNodeIds(), reversed.get(4).getNodeIds());
+        assertEquals(20.0, forward.get(4).getLatencyMs());
+    }
+
+    @Test
+    void placementAndResourceReservationsUseTheRealMultiSourceRoutes() {
+        when(nodeMapper.getComputeCapableNodes()).thenReturn(Arrays.asList(nodes.get(1), nodes.get(2), nodes.get(5)));
+        for (NodeManagement node : nodes) when(nodeMapper.getNodeById(node.getNodeId())).thenReturn(node);
+        DatasetReplicaAvailabilityService replicas = mock(DatasetReplicaAvailabilityService.class);
+        when(replicas.evaluate(any())).thenReturn(new ReplicaAvailability("AVAILABLE", true, null));
+        InPlacePlacementService placement = new InPlacePlacementService(nodeMapper, replicas,
+                new NodeAvailabilityService(300), topology, "master-40", "");
+        List<org.example.entity.DatasetReplica> inputs = Arrays.asList(
+                org.example.entity.DatasetReplica.builder().replicaId(1L).nodeId(4).build(),
+                org.example.entity.DatasetReplica.builder().replicaId(2L).nodeId(6).build());
+        NodeResourceLedger ledger = new NodeResourceLedger();
+        for (NodeManagement node : nodeMapper.getComputeCapableNodes()) ledger.put(node.getNodeName(), 3, 8);
+        JobResourceDemand demand = JobResourceDemand.of(3.0, 1.0);
+        InPlacePlacementService.Placement first = placement.place(inputs, nodeMapper.getComputeCapableNodes(), demand, ledger);
+        assertEquals("cluster-bj-1", first.getComputeNode().getNodeName());
+        assertEquals(2L, first.getReplica().getReplicaId());
+        InPlacePlacementService.Placement second = placement.place(inputs, nodeMapper.getComputeCapableNodes(), demand, ledger);
+        assertEquals("master-40", second.getComputeNode().getNodeName());
+        assertEquals(1L, second.getReplica().getReplicaId());
+        assertEquals(Arrays.asList(4, 3), second.getPath().getNodeIds());
+        assertEquals("master-215", placement.place(inputs, nodeMapper.getComputeCapableNodes(), demand, ledger)
+                .getComputeNode().getNodeName());
+        assertFalse(placement.place(inputs, nodeMapper.getComputeCapableNodes(), demand, ledger).isFound());
+    }
+
     private List<String> pairs(List<EdgeManagement> links) {
         return links.stream().map(edge -> edge.getSourceId() + "-" + edge.getTargetId()).collect(Collectors.toList());
     }

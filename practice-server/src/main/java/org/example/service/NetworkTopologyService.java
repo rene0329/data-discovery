@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -176,21 +177,28 @@ public class NetworkTopologyService {
      * topology display so an old high-bandwidth sample cannot overdrive a link.
      */
     public Map<Integer, NetworkPath> pathsFrom(Integer sourceId, long maxMeasurementAgeSeconds) {
-        return measuredPathsFrom(sourceId, maxMeasurementAgeSeconds, false);
+        return measuredPathsFrom(Collections.singletonList(sourceId), maxMeasurementAgeSeconds, false);
+    }
+
+    /** Multi-source Dijkstra: each route starts at the nearest usable data replica node. */
+    public Map<Integer, NetworkPath> pathsFromSources(Collection<Integer> sourceIds) {
+        return measuredPathsFrom(sourceIds, staleAfterSeconds, false);
     }
 
     /** Last complete successful measurements, for rate fallback only; never revives failed links. */
     public Map<Integer, NetworkPath> pathsFromLastMeasurements(Integer sourceId) {
-        return measuredPathsFrom(sourceId, 0L, true);
+        return measuredPathsFrom(Collections.singletonList(sourceId), 0L, true);
     }
 
-    private Map<Integer, NetworkPath> measuredPathsFrom(Integer sourceId, long maxMeasurementAgeSeconds,
+    private Map<Integer, NetworkPath> measuredPathsFrom(Collection<Integer> sourceIds, long maxMeasurementAgeSeconds,
                                                        boolean allowExpired) {
         Set<Integer> available = new HashSet<>();
         for (NodeManagement node : nodes.selectAllNodes()) {
             if (availability.isSchedulable(node)) available.add(node.getNodeId());
         }
-        if (!available.contains(sourceId)) return Collections.emptyMap();
+        List<Integer> sources = sourceIds == null ? Collections.emptyList() : sourceIds.stream()
+                .filter(available::contains).distinct().sorted().collect(java.util.stream.Collectors.toList());
+        if (sources.isEmpty()) return Collections.emptyMap();
         Map<Integer, List<EdgeManagement>> adjacency = new HashMap<>();
         Instant measurementCutoff = Instant.now().minusSeconds(Math.max(1L, maxMeasurementAgeSeconds));
         for (EdgeManagement edge : links()) {
@@ -204,12 +212,15 @@ public class NetworkTopologyService {
         }
         Comparator<NetworkPath> order = Comparator.comparingDouble(NetworkPath::getLatencyMs)
                 .thenComparingInt(path -> path.getNodeIds().size())
-                .thenComparing(path -> path.getNodeIds().get(path.getNodeIds().size() - 1));
+                .thenComparing(path -> path.getNodeIds().get(path.getNodeIds().size() - 1))
+                .thenComparing(path -> path.getNodeIds().get(0));
         PriorityQueue<NetworkPath> pending = new PriorityQueue<>(order);
         Map<Integer, NetworkPath> best = new HashMap<>();
-        NetworkPath start = new NetworkPath(Collections.singletonList(sourceId), 0.0, Long.MAX_VALUE);
-        best.put(sourceId, start);
-        pending.add(start);
+        for (Integer sourceId : sources) {
+            NetworkPath start = new NetworkPath(Collections.singletonList(sourceId), 0.0, Long.MAX_VALUE);
+            best.put(sourceId, start);
+            pending.add(start);
+        }
         while (!pending.isEmpty()) {
             NetworkPath path = pending.poll();
             int current = path.getNodeIds().get(path.getNodeIds().size() - 1);

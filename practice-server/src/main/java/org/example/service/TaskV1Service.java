@@ -316,10 +316,8 @@ public class TaskV1Service {
 
     private List<TaskPreflightCheck> inPlaceChecks(List<Long> datasetIds, List<NodeManagement> availableNodes,
                                                    ResourceRequirements overrides) {
-        // Distributed placement is decided by InPlacePlacementService, the same helper the
-        // orchestrator uses: the replica's own compute node, else a compute node in the
-        // replica's site, else the nearest reachable compute node in any site. Like the
-        // orchestrator, the datasets share one resource ledger in request order.
+        // Preflight uses the same multi-source minimum-latency candidate order as execution.
+        // It checks reachability only; durable admission checks and reserves current resources.
         List<TaskPreflightCheck> checks = new ArrayList<>();
         // Capacity may be temporarily exhausted; preflight validates topology, admission waits for resources.
         NodeResourceLedger ledger = null;
@@ -352,7 +350,7 @@ public class TaskV1Service {
         return crossSite == null ? resource : resource + "; " + crossSite;
     }
 
-    /** Informational note for a cross-site fallback; null when the run stays inside the replica's site. */
+    /** Informational note for a cross-site selection; null when the run stays inside the replica's site. */
     private static String crossSiteNote(InPlacePlacementService.Placement placement) {
         if (placement.getTier() != InPlacePlacementService.Tier.NEAREST) return null;
         return "cross-site: " + placement.getReplicaNode().getNodeName() + " -> "

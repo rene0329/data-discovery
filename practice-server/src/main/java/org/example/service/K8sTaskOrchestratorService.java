@@ -779,9 +779,7 @@ public class K8sTaskOrchestratorService {
                     .findFirst().orElseThrow(() -> new DurableTaskSchedulingService.JobFailed("已分配的源副本不存在"));
             targetNodeName = durableJob.getTargetNode();
         } else if (TaskV1Service.MODE_IN_PLACE.equals(executionMode)) {
-            // Same helper as TaskV1Service preflight: the replica's own compute node, else a
-            // compute node in the replica's site, else the nearest reachable compute node in
-            // any site (by network latency, then bandwidth).
+            // Same multi-source minimum-latency selection as preflight and durable admission.
             InPlacePlacementService.Placement placement = planned != null ? planned : inPlacePlacement.place(replicas);
             if (!placement.isFound()) {
                 throw new IllegalStateException("数据集没有可到达计算节点的可用副本: " + datasetId
@@ -794,7 +792,7 @@ public class K8sTaskOrchestratorService {
                 log.info("数据集 {} 原位执行：{} -> {}", datasetId, placementNote, targetNodeName);
             }
             if (placement.getTier() == InPlacePlacementService.Tier.NEAREST) {
-                log.info("数据集 {} 原位执行跨站点回退: {} -> {} ({} ms)", datasetId,
+                log.info("数据集 {} 原位执行跨站点选择: {} -> {} ({} ms)", datasetId,
                         placement.getReplicaNode().getNodeName(), targetNodeName,
                         placement.getPath().getLatencyMs());
             }
