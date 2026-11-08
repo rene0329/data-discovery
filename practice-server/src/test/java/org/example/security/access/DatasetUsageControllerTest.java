@@ -50,7 +50,7 @@ class DatasetUsageControllerTest {
         granted.setVersion("v2");
         granted.setStatus("ACTIVE");
         granted.setDomainIds(Arrays.asList(2L, 5L));
-        granted.setDomainNames(Arrays.asList("深圳域（B）", "中心域"));
+        granted.setDomainNames(Arrays.asList("深圳方舱", "中心方舱"));
         granted.setAccessible(true);
         granted.setBasis("GRANT");
         granted.setGrantId(100L);
@@ -73,8 +73,8 @@ class DatasetUsageControllerTest {
                 .andExpect(jsonPath("$.data.items[0].status").value("ACTIVE"))
                 .andExpect(jsonPath("$.data.items[0].domainIds[0]").value(2))
                 .andExpect(jsonPath("$.data.items[0].domainIds[1]").value(5))
-                .andExpect(jsonPath("$.data.items[0].domainNames[0]").value("深圳域（B）"))
-                .andExpect(jsonPath("$.data.items[0].domainNames[1]").value("中心域"))
+                .andExpect(jsonPath("$.data.items[0].domainNames[0]").value("深圳方舱"))
+                .andExpect(jsonPath("$.data.items[0].domainNames[1]").value("中心方舱"))
                 .andExpect(jsonPath("$.data.items[0].ownerDomainId").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].ownerDomainName").doesNotExist())
                 .andExpect(jsonPath("$.data.items[0].accessible").value(true))

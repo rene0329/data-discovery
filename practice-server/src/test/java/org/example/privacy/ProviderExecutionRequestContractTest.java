@@ -93,7 +93,7 @@ class ProviderExecutionRequestContractTest {
         source.setRole("RECEIVER");
         source.setOwnerDomainId(34L);
         source.setOwnerDomainCode("domain-a");
-        source.setOwnerDomainName("上海域（A）");
+        source.setOwnerDomainName("上海方舱");
         source.setDatasetId("34");
         source.setDatasetVersion("v1");
 

@@ -170,13 +170,13 @@ class AdminIdentityServiceTest {
     void updateDomainThatOmitsSiteCodeKeepsTheStoredSite() {
         when(mapper.findDomainById(2L)).thenReturn(domain(2L, "domain-b", "sz"));
         AuthDtos.DomainRequest rename = new AuthDtos.DomainRequest();
-        rename.setName("深圳域（B）");
+        rename.setName("深圳方舱");
 
         service.updateDomain(2L, rename);
 
         CollaborationDomain updated = updatedDomain();
         assertEquals("sz", updated.getSiteCode());
-        assertEquals("深圳域（B）", updated.getName());
+        assertEquals("深圳方舱", updated.getName());
         verify(mapper, never()).findDomainBySiteCode(anyString());
     }
 

@@ -46,8 +46,8 @@ class PrivacyParticipantDomainResolutionTest {
         resolver = new PrivacyJobSpecResolver(datasets, locations, new ObjectMapper());
         configureDataset(11L);
         configureDataset(22L);
-        locate(11L, domain(11L, 1L, "domain-a", "上海域（A）"));
-        locate(22L, domain(22L, 2L, "domain-b", "深圳域（B）"));
+        locate(11L, domain(11L, 1L, "domain-a", "上海方舱"));
+        locate(22L, domain(22L, 2L, "domain-b", "深圳方舱"));
     }
 
     @Test
@@ -59,11 +59,11 @@ class PrivacyParticipantDomainResolutionTest {
         assertEquals("A", a.getPartyId());
         assertEquals(Long.valueOf(1L), a.getOwnerDomainId());
         assertEquals("domain-a", a.getOwnerDomainCode());
-        assertEquals("上海域（A）", a.getOwnerDomainName());
+        assertEquals("上海方舱", a.getOwnerDomainName());
         ParticipantSpec b = resolved.getSpec().getParticipants().get(1);
         assertEquals("B", b.getPartyId());
         assertEquals(Long.valueOf(2L), b.getOwnerDomainId());
-        assertEquals("深圳域（B）", b.getOwnerDomainName());
+        assertEquals("深圳方舱", b.getOwnerDomainName());
         assertEquals(Long.valueOf(1L), resolved.getSnapshots().get(0).getOwnerDomainId());
         assertEquals(Long.valueOf(2L), resolved.getSnapshots().get(1).getOwnerDomainId());
         assertEquals(Collections.singletonList("A"), resolved.getSpec().getResultRecipients());
@@ -74,7 +74,7 @@ class PrivacyParticipantDomainResolutionTest {
 
     @Test
     void theDomainFollowsTheDatasetWhenItMoves() {
-        locate(11L, domain(11L, 3L, "domain-c", "北京域（C）"));
+        locate(11L, domain(11L, 3L, "domain-c", "北京方舱"));
 
         ParticipantSpec a = resolver.resolve(spec(), template(), initiator()).getSpec().getParticipants().get(0);
 
@@ -95,19 +95,19 @@ class PrivacyParticipantDomainResolutionTest {
 
     @Test
     void datasetLocatedInSeveralDomainsIsRejected() {
-        locate(22L, domain(22L, 2L, "domain-b", "深圳域（B）"), domain(22L, 3L, "domain-c", "北京域（C）"));
+        locate(22L, domain(22L, 2L, "domain-b", "深圳方舱"), domain(22L, 3L, "domain-c", "北京方舱"));
 
         RegistrationException error = assertThrows(RegistrationException.class,
                 () -> resolver.resolve(spec(), template(), initiator()));
 
         assertEquals("PARTICIPANT_DOMAIN_AMBIGUOUS", error.getErrorCode());
         assertEquals(HttpStatus.CONFLICT, error.getStatus());
-        assertTrue(error.getMessage().contains("深圳域（B）, 北京域（C）"), error.getMessage());
+        assertTrue(error.getMessage().contains("深圳方舱, 北京方舱"), error.getMessage());
     }
 
     @Test
     void twoInputsFromTheSameDomainAreRejected() {
-        locate(22L, domain(22L, 1L, "domain-a", "上海域（A）"));
+        locate(22L, domain(22L, 1L, "domain-a", "上海方舱"));
 
         RegistrationException error = assertThrows(RegistrationException.class,
                 () -> resolver.resolve(spec(), template(), initiator()));
@@ -117,7 +117,7 @@ class PrivacyParticipantDomainResolutionTest {
 
     @Test
     void preflightReportsAndCreateRejectsAnUnresolvableDomain() {
-        locate(22L, domain(22L, 2L, "domain-b", "深圳域（B）"), domain(22L, 3L, "domain-c", "北京域（C）"));
+        locate(22L, domain(22L, 2L, "domain-b", "深圳方舱"), domain(22L, 3L, "domain-c", "北京方舱"));
         PrivacyComputeMapper mapper = mock(PrivacyComputeMapper.class);
         PrivacyTemplateCatalog catalog = mock(PrivacyTemplateCatalog.class);
         PrivacyProviderRegistry providers = mock(PrivacyProviderRegistry.class);

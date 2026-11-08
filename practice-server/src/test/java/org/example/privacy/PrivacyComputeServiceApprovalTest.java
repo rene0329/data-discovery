@@ -83,8 +83,8 @@ class PrivacyComputeServiceApprovalTest {
         service = new PrivacyComputeService(mapper, catalog, providers, resolver, staging,
                 approvalSigner, json, executor);
 
-        participants = Arrays.asList(participant("A", DOMAIN_A, "domain-a", "上海域（A）"),
-                participant("B", DOMAIN_B, "domain-b", "深圳域（B）"));
+        participants = Arrays.asList(participant("A", DOMAIN_A, "domain-a", "上海方舱"),
+                participant("B", DOMAIN_B, "domain-b", "深圳方舱"));
         snapshots = Arrays.asList(snapshot("A", 101L), snapshot("B", 202L));
         approvals = new ArrayList<>();
         approvals.add(approval("A", DOMAIN_A, "APPROVED", 1L, "alice"));
@@ -219,7 +219,7 @@ class PrivacyComputeServiceApprovalTest {
     @Test
     void switchedAdministratorCanApproveAsEffectiveDomainUser() {
         AuthenticatedUser switchedOwner = new AuthenticatedUser(2L, "bob", "bob",
-                Collections.singleton("DATA_OWNER"), DOMAIN_B, "domain-b", "深圳域（B）",
+                Collections.singleton("DATA_OWNER"), DOMAIN_B, "domain-b", "深圳方舱",
                 true, 99L, "admin");
 
         service.approve("pcj-1", switchedOwner, new DecisionRequest());
@@ -264,7 +264,7 @@ class PrivacyComputeServiceApprovalTest {
         assertNull(pending.getApproverUsername());
         assertEquals(DOMAIN_B, pending.getOwnerDomainId());
         assertEquals("domain-b", pending.getOwnerDomainCode());
-        assertEquals("深圳域（B）", pending.getOwnerDomainName());
+        assertEquals("深圳方舱", pending.getOwnerDomainName());
     }
 
     @Test

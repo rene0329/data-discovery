@@ -44,13 +44,13 @@ class AdminIdentityControllerTest {
     @Test
     void domainsCarryTheirSiteCode() throws Exception {
         when(service.listDomains()).thenReturn(Arrays.asList(
-                domain(1L, "domain-a", "上海域（A）", "sh"), domain(6L, "domain-x", "X", null)));
+                domain(1L, "domain-a", "上海方舱", "sh"), domain(6L, "domain-x", "X", null)));
 
         mvc.perform(get("/api/v1/admin/domains"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].id").value(1))
                 .andExpect(jsonPath("$.data[0].code").value("domain-a"))
-                .andExpect(jsonPath("$.data[0].name").value("上海域（A）"))
+                .andExpect(jsonPath("$.data[0].name").value("上海方舱"))
                 .andExpect(jsonPath("$.data[0].siteCode").value("sh"))
                 .andExpect(jsonPath("$.data[0].enabled").value(true))
                 .andExpect(jsonPath("$.data[1].siteCode").value(nullValue()));
@@ -73,7 +73,7 @@ class AdminIdentityControllerTest {
 
     @Test
     void patchDistinguishesAnExplicitNullSiteFromAnAbsentOne() throws Exception {
-        when(service.updateDomain(eq(2L), any())).thenReturn(domain(2L, "domain-b", "深圳域（B）", "sz"));
+        when(service.updateDomain(eq(2L), any())).thenReturn(domain(2L, "domain-b", "深圳方舱", "sz"));
         ArgumentCaptor<AuthDtos.DomainRequest> body = ArgumentCaptor.forClass(AuthDtos.DomainRequest.class);
 
         mvc.perform(patch("/api/v1/admin/domains/2").contentType(MediaType.APPLICATION_JSON)

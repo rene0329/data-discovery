@@ -386,7 +386,7 @@ class DatasetRegistrationServiceTest {
     @Test
     void domainUserManagesADatasetLocatedInItsDomain() {
         activeDataset(42L);
-        located(42L, location(42L, 1L, "上海域（A）"));
+        located(42L, location(42L, 1L, "上海方舱"));
         login(SH_USER);
 
         service.disable(42L, "disable-own-domain");
@@ -397,7 +397,7 @@ class DatasetRegistrationServiceTest {
     @Test
     void domainUserOfAnotherDomainIsDenied() {
         activeDataset(42L);
-        located(42L, location(42L, 1L, "上海域（A）"));
+        located(42L, location(42L, 1L, "上海方舱"));
         login(SZ_USER);
 
         RegistrationException error = assertThrows(RegistrationException.class,
@@ -410,15 +410,15 @@ class DatasetRegistrationServiceTest {
     @Test
     void domainUserMayManageAgainOnceTheDatasetMovesIntoItsDomain() {
         activeDataset(42L);
-        located(42L, location(42L, 1L, "上海域（A）"));
+        located(42L, location(42L, 1L, "上海方舱"));
         login(SZ_USER);
         assertThrows(RegistrationException.class, () -> service.disable(42L, "before-move"));
 
         // A copy/move put a replica on a 深圳 node: the dataset is now (also) in SZ.
-        located(42L, location(42L, 1L, "上海域（A）"), location(42L, 2L, "深圳域（B）"));
+        located(42L, location(42L, 1L, "上海方舱"), location(42L, 2L, "深圳方舱"));
         service.disable(42L, "after-copy");
         // ...and after the source replica is gone it is SZ only; SH has lost the right.
-        located(42L, location(42L, 2L, "深圳域（B）"));
+        located(42L, location(42L, 2L, "深圳方舱"));
         service.disable(42L, "after-move");
         login(SH_USER);
         assertThrows(RegistrationException.class, () -> service.disable(42L, "sh-after-move"));
@@ -440,7 +440,7 @@ class DatasetRegistrationServiceTest {
     @Test
     void everyMutationEntryPointRequiresTheDatasetDomain() {
         activeDataset(42L);
-        located(42L, location(42L, 1L, "上海域（A）"));
+        located(42L, location(42L, 1L, "上海方舱"));
         UpdateDatasetRequest update = new UpdateDatasetRequest();
         update.setRowVersion(0);
         Map<String, Executable> mutations = new LinkedHashMap<>();
@@ -544,7 +544,7 @@ class DatasetRegistrationServiceTest {
         verify(mapper).insertDataset(inserted.capture());
         assertEquals("DRAFT", inserted.getValue().getStatus());
         assertEquals(Collections.singletonList(1L), view.getDomainIds());
-        assertEquals(Collections.singletonList("上海域（A）"), view.getDomainNames());
+        assertEquals(Collections.singletonList("上海方舱"), view.getDomainNames());
     }
 
     @Test
@@ -601,7 +601,7 @@ class DatasetRegistrationServiceTest {
         UploadDatasetRequest request = uploadRequest();
         NodeManagement storage = storageNode("sz");
         prepareUpload(storage);
-        located(44L, location(44L, 2L, "深圳域（B）"));
+        located(44L, location(44L, 2L, "深圳方舱"));
         MockMultipartFile file = new MockMultipartFile(
                 "file", "sales.npz", "application/octet-stream", new byte[]{1, 2, 3});
         login(SZ_USER);
@@ -625,13 +625,13 @@ class DatasetRegistrationServiceTest {
         when(mapper.listDatasets("", null)).thenReturn(Arrays.asList(first, second, nowhere));
         when(mapper.listReplicas(any())).thenReturn(Collections.emptyList());
         when(locations.findLocationDomains(Arrays.asList(5L, 6L, 7L))).thenReturn(Arrays.asList(
-                location(5L, 1L, "上海域（A）"), location(5L, 2L, "深圳域（B）"), location(6L, 2L, "深圳域（B）")));
+                location(5L, 1L, "上海方舱"), location(5L, 2L, "深圳方舱"), location(6L, 2L, "深圳方舱")));
 
         List<RegisteredDatasetView> views = service.listDatasets("", null);
 
         verify(locations, times(1)).findLocationDomains(any());
         assertEquals(Arrays.asList(1L, 2L), views.get(0).getDomainIds());
-        assertEquals(Arrays.asList("上海域（A）", "深圳域（B）"), views.get(0).getDomainNames());
+        assertEquals(Arrays.asList("上海方舱", "深圳方舱"), views.get(0).getDomainNames());
         assertEquals(Collections.singletonList(2L), views.get(1).getDomainIds());
         assertEquals(Collections.emptyList(), views.get(2).getDomainIds());
         assertEquals(Collections.emptyList(), views.get(2).getDomainNames());
@@ -640,13 +640,13 @@ class DatasetRegistrationServiceTest {
     @Test
     void datasetViewJsonHasDomainsAndNoHolderFields() throws Exception {
         activeDataset(42L);
-        located(42L, location(42L, 2L, "深圳域（B）"));
+        located(42L, location(42L, 2L, "深圳方舱"));
 
         ObjectMapper wire = new org.example.json.JacksonObjectMapper();
         String json = wire.writeValueAsString(service.getDataset(42L));
 
         assertTrue(json.contains("\"domainIds\":[2]"), json);
-        assertTrue(json.contains("\"domainNames\":[\"深圳域（B）\"]"), json);
+        assertTrue(json.contains("\"domainNames\":[\"深圳方舱\"]"), json);
         for (String holder : new String[]{"ownerUserId", "ownerUsername", "ownerDisplayName",
                 "ownerDomainId", "ownerDomainCode", "ownerDomainName"}) {
             assertTrue(!json.contains(holder), holder + " in " + json);
@@ -721,7 +721,7 @@ class DatasetRegistrationServiceTest {
         when(mapper.findDatasetById(44L)).thenReturn(RegisteredDataset.builder()
                 .datasetId(44L).datasetCode("sales").name("sales").datasetVersion("1.0").status("DRAFT").build());
         when(mapper.listReplicas(44L)).thenReturn(Collections.emptyList());
-        located(44L, location(44L, 1L, "上海域（A）"));
+        located(44L, location(44L, 1L, "上海方舱"));
     }
 
     private NodeManagement storageNode(String siteCode) {
