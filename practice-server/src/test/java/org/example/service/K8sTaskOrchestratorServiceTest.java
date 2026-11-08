@@ -154,6 +154,11 @@ class K8sTaskOrchestratorServiceTest {
         }
         List<String> computeOutput = appender.list.stream().map(event -> event.getFormattedMessage())
                 .filter(line -> line.contains("【计算输出】")).collect(Collectors.toList());
+        List<String> timingLogs = appender.list.stream().map(event -> event.getFormattedMessage())
+                .collect(Collectors.toList());
+        assertTrue(timingLogs.stream().anyMatch(line -> line.contains("计算耗时=2000毫秒")));
+        assertTrue(timingLogs.stream().anyMatch(line ->
+                line.contains("数据准备阶段耗时=1000毫秒 计算阶段耗时=2000毫秒")));
         assertEquals(2, computeOutput.size());
         assertTrue(computeOutput.get(0).contains("数据集=test.npz"));
         assertTrue(computeOutput.get(0).contains("模型=bpr"));
