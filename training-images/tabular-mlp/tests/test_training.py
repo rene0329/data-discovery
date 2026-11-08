@@ -47,6 +47,7 @@ class ReaderTest(unittest.TestCase):
     def test_positive_options_and_explicit_epoch_override(self):
         with patch.dict('os.environ', {'N_EPOCHS':'1'}):
             self.assertEqual(train.arguments(['--epochs','10']).epochs,10)
+        self.assertEqual(train.arguments([]).max_samples,500000)
         for field in ['--epochs','--batch-size','--threads','--max-samples']:
             with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):train.arguments([field,'0'])
 

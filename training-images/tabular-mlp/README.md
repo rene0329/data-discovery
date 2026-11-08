@@ -2,7 +2,7 @@
 
 用于系统计算任务和训练日志展示。使用 CPU PyTorch 2.2.2，网络为 28 → 128 → 64 → 1，ReLU 激活，Adam 优化器，BCEWithLogitsLoss 损失函数。
 
-默认执行精简演示：按文件顺序读取前 5,000 条样本、训练 10 轮，跳过模型评估。支持标签加 28 个特征的无表头 CSV，也支持 gzip 文件，不完整解压文件。读取达到样本上限后停止，不声称扫描了全部 1,100 万条样本或验证了 gzip 文件尾部。全文件完整性由系统已有的数据副本校验流程负责。
+默认执行精简演示：按文件顺序读取前 500,000 条样本、训练 10 轮，跳过模型评估。支持标签加 28 个特征的无表头 CSV，也支持 gzip 文件，不完整解压文件。读取达到样本上限后停止，不声称扫描了全部 1,100 万条样本或验证了 gzip 文件尾部。全文件完整性由系统已有的数据副本校验流程负责。
 
 日志包括数据文件大小、本次读取数量、标准化和初始化耗时、每轮 loss、训练准确率及耗时、参数更新确认和任务完成信息。训练准确率仅来自所选训练样本，不代表测试集效果。结果写入 `$OUTPUT_DIR/metrics.log` 和 `summary.json`，不保存大模型检查点。
 
@@ -28,7 +28,7 @@ PUSH=1 training-images/tabular-mlp/build.sh
 - taskType: `classification`
 - modelType: `mlp`
 - command: `["python", "/app/train.py"]`
-- argsTemplate: `["--epochs", "10", "--max-samples", "5000", "--batch-size", "256", "--threads", "2"]`
+- argsTemplate: `["--epochs", "10", "--max-samples", "500000", "--batch-size", "256", "--threads", "2"]`
 - dataPathTemplate: `/data/tabular/{dataset}`
 - defaultResources: CPU 2、内存 2 GiB、GPU 0
 

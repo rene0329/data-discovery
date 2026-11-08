@@ -8,4 +8,4 @@ COPY app/train.py /app/train.py
 COPY tests /tests
 RUN python -m unittest discover -s /tests -v
 ENTRYPOINT ["python", "/app/train.py"]
-CMD ["--epochs", "10", "--max-samples", "5000"]
+CMD ["--epochs", "10", "--max-samples", "500000"]

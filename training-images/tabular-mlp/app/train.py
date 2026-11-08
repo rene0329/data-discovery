@@ -26,7 +26,7 @@ def arguments(argv=None):
     parser.add_argument('--data-path', default=os.getenv('DATA_PATH', '/data/tabular/higgs.csv.gz'))
     # Explicit runtime args take precedence over the backend-wide N_EPOCHS setting.
     parser.add_argument('--epochs', type=positive, default=os.getenv('N_EPOCHS', '10'))
-    parser.add_argument('--max-samples', type=positive, default='5000')
+    parser.add_argument('--max-samples', type=positive, default='500000')
     parser.add_argument('--batch-size', type=positive, default='256')
     parser.add_argument('--threads', type=positive, default='2')
     parser.add_argument('--seed', type=int, default=42)
